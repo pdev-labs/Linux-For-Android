@@ -366,8 +366,8 @@ install_linux() {
     proot-distro install "$DISTRO"
     
     ROOTFS="$PREFIX/var/lib/proot-distro/installed-rootfs/$DISTRO"
-    mkdir -p "$ROOTFS/opt"
-    SETUP_SCRIPT="$ROOTFS/opt/gui_setup.sh"
+    mkdir -p "$PREFIX/tmp"
+    SETUP_SCRIPT="$PREFIX/tmp/gui_setup_$$.sh"
     
     # Configure package manager mapping
     case "$DISTRO" in
@@ -591,7 +591,7 @@ EOF
     fi
     
     echo "[*] Executing setup inside $DISTRO (this will take a while)..."
-    proot-distro login "$DISTRO" -- bash /opt/gui_setup.sh
+    proot-distro login "$DISTRO" --shared-tmp -- bash /tmp/gui_setup_$$.sh
     
     echo "[*] Setting up Home-Screen Widget Integration..."
     mkdir -p ~/.shortcuts
