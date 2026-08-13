@@ -520,7 +520,7 @@ EOF
 echo " -> Creating standard 'user' account with sudo privileges..."
 useradd -m -s /bin/bash -p '$6$WzXfA2zKd3ZUTGMN$omHMZQjXwzhQsoaJXQCzZdu5nl4ZQGSOyl9/BE.G6alqJX4py7SyIuk9No1SBEjxYYEXcp.2isX2aSzlrmX22.' user || true
 usermod -p '$6$WzXfA2zKd3ZUTGMN$omHMZQjXwzhQsoaJXQCzZdu5nl4ZQGSOyl9/BE.G6alqJX4py7SyIuk9No1SBEjxYYEXcp.2isX2aSzlrmX22.' user || true
-echo "user ALL=(ALL) ALL" >> /etc/sudoers
+echo "user ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
 echo "root ALL=(ALL) ALL" >> /etc/sudoers
 
 echo " -> Linking Android Internal Storage..."
