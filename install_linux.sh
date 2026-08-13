@@ -520,7 +520,7 @@ EOF
 echo " -> Creating standard 'user' account with sudo privileges..."
 useradd -m -s /bin/bash user || true
 echo "user:ubuntu" | chpasswd
-echo "user ALL=(ALL) ALL" >> /etc/sudoers
+echo "user ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
 echo "root ALL=(ALL) ALL" >> /etc/sudoers
 
 echo " -> Linking Android Internal Storage..."
