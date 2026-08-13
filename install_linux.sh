@@ -486,11 +486,7 @@ install_linux() {
     echo "RESOLUTION=\"$RESOLUTION\"" >> "$ROOTFS/etc/termux-linux-manager.conf"
     echo "UPDATE_CMD=\"$UPDATE_CMD\"" >> "$ROOTFS/etc/termux-linux-manager.conf"
     
-    if [ "$DE" != "none" ]; then
-        echo "[*] Setting up Universal Wallpaper..."
-        mkdir -p "$ROOTFS/usr/share/backgrounds"
-        wget -qO "$ROOTFS/usr/share/backgrounds/default.jpg" "https://upload.wikimedia.org/wikipedia/commons/thumb/c/c5/Ubuntu_10.04_LTS_default_wallpaper.jpg/1280px-Ubuntu_10.04_LTS_default_wallpaper.jpg" || true
-    fi
+    # (Removed broken universal wallpaper download)
     
     cat << EOF > "$SETUP_SCRIPT"
 #!/bin/bash
@@ -571,7 +567,6 @@ cat << 'STARTUP' > /home/user/.vnc/xstartup
 #!/bin/sh
 export PULSE_SERVER=127.0.0.1
 startxfce4 &
-(sleep 5 && xfconf-query -c xfce4-desktop -p /backdrop/screen0/monitor0/workspace0/last-image -s /usr/share/backgrounds/default.jpg || true) &
 STARTUP
 EOF
         elif [ "$DE" == "lxde" ]; then
@@ -580,7 +575,6 @@ cat << 'STARTUP' > /home/user/.vnc/xstartup
 #!/bin/sh
 export PULSE_SERVER=127.0.0.1
 startlxde &
-(sleep 5 && pcmanfm --set-wallpaper /usr/share/backgrounds/default.jpg || true) &
 STARTUP
 EOF
         fi
@@ -644,9 +638,9 @@ if [ "$SERVER" == "x11" ]; then
     sleep 2
     echo "Starting $DISTRO as 'user'..."
     if [ "$DE" == "xfce4" ]; then
-        nohup proot-distro login $DISTRO --user user --shared-tmp -- bash -c "export PULSE_SERVER=127.0.0.1; export DISPLAY=:1; export GALLIUM_DRIVER=virpipe; export MESA_GL_VERSION_OVERRIDE=4.0; (sleep 5 && xfconf-query -c xfce4-desktop -p /backdrop/screen0/monitor0/workspace0/last-image -s /usr/share/backgrounds/default.jpg || true) & startxfce4" >/dev/null 2>&1 &
+        nohup proot-distro login $DISTRO --user user --shared-tmp -- bash -c "export PULSE_SERVER=127.0.0.1; export DISPLAY=:1; export GALLIUM_DRIVER=virpipe; export MESA_GL_VERSION_OVERRIDE=4.0; startxfce4" >/dev/null 2>&1 &
     elif [ "$DE" == "lxde" ]; then
-        nohup proot-distro login $DISTRO --user user --shared-tmp -- bash -c "export PULSE_SERVER=127.0.0.1; export DISPLAY=:1; export GALLIUM_DRIVER=virpipe; export MESA_GL_VERSION_OVERRIDE=4.0; (sleep 5 && pcmanfm --set-wallpaper /usr/share/backgrounds/default.jpg || true) & startlxde" >/dev/null 2>&1 &
+        nohup proot-distro login $DISTRO --user user --shared-tmp -- bash -c "export PULSE_SERVER=127.0.0.1; export DISPLAY=:1; export GALLIUM_DRIVER=virpipe; export MESA_GL_VERSION_OVERRIDE=4.0; startlxde" >/dev/null 2>&1 &
     fi
 elif [ "$SERVER" == "vnc" ]; then
     echo "Starting VNC Server..."
