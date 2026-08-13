@@ -89,20 +89,38 @@ To safely kill the desktop, display servers, and audio systems, type:
 stop-linux
 ```
 
-## 🛠️ Troubleshooting (Phantom Process Killer)
+## 🛠️ Comprehensive Troubleshooting Guide
 
-Starting in Android 12, the Android OS aggressively limits the number of child processes an app can run in the background. Because a full Linux desktop environment requires many concurrent processes, Android may suddenly kill Termux while you are using Linux.
+This section covers common issues, warnings, and how to resolve them:
 
-**Symptom:** Termux abruptly closes while you are working. When you reopen it, you see `[Process completed (signal 9) - press Enter]`.
+### 1. The "Phantom Process Killer" (Termux randomly crashes)
+Starting in Android 12, Android limits background child processes. Since a Linux desktop requires many processes, Android may suddenly kill Termux (`[Process completed (signal 9)]`).
+**Fix (Android 14+):**
+1. Open Android **Settings** > **About phone** > tap **Build number** 7 times.
+2. Go to **Settings** > **System** > **Developer options**.
+3. Toggle **Disable child process restrictions** to **ON** and restart Termux.
+*(For Android 12/13, search online for "Termux ADB disable phantom process" to apply the fix via a PC).*
 
-### How to Fix (Android 14+ / recent 13)
-1. Open your Android **Settings** > **About phone**.
-2. Tap the **Build number** 7 times to enable Developer Options.
-3. Go back to the main **Settings** menu > **System** > **Developer options**.
-4. Scroll down and toggle **Disable child process restrictions** to **ON**.
-5. Restart Termux.
+### 2. Sudo doesn't ask for a password (NOPASSWD)
+By default, this script configures `sudo` to execute without a password. 
+**Why?** The underlying `proot` environment lacks the true kernel capabilities (like `audit` and `selinux`) that the PAM authentication system requires. If a password prompt is forced, PAM will incorrectly reject all passwords (even correct ones!). Thus, `NOPASSWD` is the only stable configuration for `proot`.
 
-*(Note: For older Android 12/12L devices without this toggle, you will need to run an ADB command from a PC to disable the Phantom Process Killer. Search for "Termux ADB disable phantom process" for guides specific to your device).*
+### 3. Scary `apt` errors during installation
+While installing packages, you might see red errors like:
+- `Failed to scan devices: Permission denied`
+- `Failed to write database /usr/lib/udev/hwdb.bin`
+- `Failed to send reload request`
+**Fix:** Ignore them! These are completely normal. Linux packages try to communicate with physical hardware or the `systemd` init process during installation. Since you are safely contained on Android without direct hardware/init access, these post-installation hooks fail safely without affecting your desktop.
+
+### 4. "Cannot establish any listening sockets - Make sure an X server isn't already running"
+**Symptom:** You type `start-linux` but it immediately fails with this error.
+**Fix:** The Termux:X11 display server is stuck running in the background from a previous session. Simply run `stop-linux` in your terminal to easily clean up the ghost processes, then run `start-linux` again.
+
+### 5. Termux:X11 app stays open after running `stop-linux`
+**Fix:** This is normal! `stop-linux` safely shuts down the background Linux servers, but it cannot forcefully close the Android App window itself due to Android security sandboxing. Simply swipe the Termux:X11 app away in your Android "Recent Apps" menu.
+
+### 6. Installation seems frozen at "Setting up elementary-xfce-icon-theme..."
+**Fix:** Be patient! This specific package contains tens of thousands of tiny icon files. Because `proot` must translate every single file operation via your phone's CPU, unpacking thousands of files takes significantly longer than on a native PC (sometimes 10 to 20 minutes on mid-range phones). Keep Termux open and let it finish!
 
 ## 🤝 Contributing
 
