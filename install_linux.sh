@@ -690,7 +690,7 @@ killall virgl_test_server_android 2>/dev/null || true
 
 if [ "$SERVER" == "x11" ]; then
     echo "Stopping Termux:X11..."
-    killall termux-x11 2>/dev/null || true
+    pkill -f termux-x11 2>/dev/null || true
 elif [ "$SERVER" == "vnc" ]; then
     echo "Stopping VNC Server..."
     proot-distro login $DISTRO --user user --shared-tmp -- bash -c "vncserver -kill :1" 2>/dev/null || true
