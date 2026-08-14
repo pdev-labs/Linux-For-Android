@@ -363,7 +363,7 @@ install_linux() {
     fi
     
     echo "[*] Installing $DISTRO..."
-    if proot-distro install --help | grep -q "IMAGE:TAG"; then
+    if proot-distro install --help 2>&1 | grep -iqE "(IMAGE:TAG|Docker image|registry)"; then
         case "$DISTRO" in
             ubuntu) IMAGE="ubuntu:24.04" ;;
             debian) IMAGE="debian:stable" ;;
@@ -372,7 +372,8 @@ install_linux() {
             opensuse) IMAGE="opensuse/tumbleweed:latest" ;;
             void) IMAGE="ghcr.io/void-linux/void-musl:latest" ;;
             archlinux)
-                if [ "$(uname -m)" == "aarch64" ]; then
+                ARCH=$(uname -m)
+                if [[ "$ARCH" == *"aarch64"* || "$ARCH" == *"arm64"* || "$ARCH" == *"armv8"* ]]; then
                     IMAGE="danhunsaker/archlinuxarm:latest"
                 else
                     IMAGE="archlinux/archlinux:latest"
