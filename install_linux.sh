@@ -363,7 +363,21 @@ install_linux() {
     fi
     
     echo "[*] Installing $DISTRO..."
-    proot-distro install "$DISTRO"
+    if proot-distro install --help | grep -q "IMAGE:TAG"; then
+        case "$DISTRO" in
+            ubuntu) IMAGE="ubuntu:24.04" ;;
+            debian) IMAGE="debian:stable" ;;
+            kali) IMAGE="kalilinux/kali-rolling:latest" ;;
+            fedora) IMAGE="fedora:latest" ;;
+            opensuse) IMAGE="opensuse/tumbleweed:latest" ;;
+            void) IMAGE="ghcr.io/void-linux/void-musl:latest" ;;
+            archlinux) IMAGE="archlinux/archlinux:latest" ;;
+            *) IMAGE="$DISTRO" ;;
+        esac
+        proot-distro install -n "$DISTRO" "$IMAGE"
+    else
+        proot-distro install "$DISTRO"
+    fi
     
     ROOTFS="$PREFIX/var/lib/proot-distro/installed-rootfs/$DISTRO"
     mkdir -p "$PREFIX/tmp"
