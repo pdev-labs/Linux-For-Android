@@ -371,7 +371,13 @@ install_linux() {
             fedora) IMAGE="fedora:latest" ;;
             opensuse) IMAGE="opensuse/tumbleweed:latest" ;;
             void) IMAGE="ghcr.io/void-linux/void-musl:latest" ;;
-            archlinux) IMAGE="archlinux/archlinux:latest" ;;
+            archlinux)
+                if [ "$(uname -m)" == "aarch64" ]; then
+                    IMAGE="danhunsaker/archlinuxarm:latest"
+                else
+                    IMAGE="archlinux/archlinux:latest"
+                fi
+                ;;
             *) IMAGE="$DISTRO" ;;
         esac
         proot-distro install -n "$DISTRO" "$IMAGE"
