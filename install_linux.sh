@@ -415,7 +415,7 @@ install_linux() {
             ;;
 
         archlinux)
-            UPDATE_CMD="pacman -Syu --noconfirm"
+            UPDATE_CMD="pacman-key --init && pacman-key --populate archlinux archlinuxarm 2>/dev/null || true && pacman -Syu --noconfirm"
             INSTALL_CMD="pacman -S --noconfirm"
             XFCE_PKG="xfce4 xfce4-goodies dbus"
             LXDE_PKG="lxde dbus"
