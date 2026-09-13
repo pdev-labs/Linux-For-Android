@@ -312,10 +312,10 @@ install_linux() {
     echo "Choose Desktop Environment:"
     echo "1) XFCE4 (Recommended, Lightweight GUI)"
     echo "2) LXDE (Very Lightweight GUI)"
-    echo "3) GNOME (Heavy GUI)"
+    echo "3) MATE (Classic GNOME, Stable)"
     echo "4) None (CLI only)"
     read -p "Select DE [1-4]: " DE_CHOICE
-    if [ "$DE_CHOICE" == "1" ]; then DE="xfce4"; elif [ "$DE_CHOICE" == "2" ]; then DE="lxde"; elif [ "$DE_CHOICE" == "3" ]; then DE="gnome"; else DE="none"; fi
+    if [ "$DE_CHOICE" == "1" ]; then DE="xfce4"; elif [ "$DE_CHOICE" == "2" ]; then DE="lxde"; elif [ "$DE_CHOICE" == "3" ]; then DE="mate"; else DE="none"; fi
     
     if [ "$DE" != "none" ]; then
         echo ""
@@ -384,8 +384,8 @@ install_linux() {
     echo ""
     read -p "Enter a custom name for this installation (Leave blank for auto-generation): " INSTANCE_NAME
     if [ -z "$INSTANCE_NAME" ]; then
-        if [ -d "$PREFIX/var/lib/proot-distro/installed-rootfs/$DISTRO" ]; then
-            INSTANCE_NAME="${DISTRO}-$(date +%s)"
+        if [ -d "$PREFIX/var/lib/proot-distro/installed-rootfs/$DISTRO" ] || [ -f "$PREFIX/etc/proot-distro/$DISTRO.sh" ]; then
+            INSTANCE_NAME="${DISTRO}-$(date +%M%S)"
         else
             INSTANCE_NAME="$DISTRO"
         fi
@@ -448,7 +448,7 @@ install_linux() {
             INSTALL_CMD="apt-get install -y"
             XFCE_PKG="xfce4 xfce4-goodies dbus-x11"
             LXDE_PKG="lxde dbus-x11"
-            GNOME_PKG="gnome-core dbus-x11"
+            MATE_PKG="mate-desktop-environment dbus-x11"
             VNC_PKG="tigervnc-standalone-server expect"
             SUDO_PKG="sudo"
             SELECTED_PKGS=""
@@ -472,7 +472,7 @@ install_linux() {
             INSTALL_CMD="pacman -S --noconfirm"
             XFCE_PKG="xfce4 xfce4-goodies dbus"
             LXDE_PKG="lxde dbus"
-            GNOME_PKG="gnome dbus"
+            MATE_PKG="mate dbus"
             VNC_PKG="tigervnc expect"
             SUDO_PKG="sudo"
             SELECTED_PKGS=""
@@ -495,7 +495,7 @@ install_linux() {
             INSTALL_CMD="dnf install -y"
             XFCE_PKG="xfce4-session xfce4-panel xfdesktop xfwm4 dbus-x11"
             LXDE_PKG="lxde-common lxsession dbus-x11"
-            GNOME_PKG="gnome-shell dbus-x11"
+            MATE_PKG="mate-desktop dbus-x11"
             VNC_PKG="tigervnc-server expect"
             SUDO_PKG="sudo"
             SELECTED_PKGS=""
@@ -518,7 +518,7 @@ install_linux() {
             INSTALL_CMD="zypper install -y"
             XFCE_PKG="patterns-xfce-xfce dbus-1-x11"
             LXDE_PKG="patterns-lxde-lxde dbus-1-x11"
-            GNOME_PKG="patterns-gnome-gnome_basic dbus-1-x11"
+            MATE_PKG="patterns-mate-mate dbus-1-x11"
             VNC_PKG="tigervnc expect"
             SUDO_PKG="sudo"
             SELECTED_PKGS=""
@@ -541,7 +541,7 @@ install_linux() {
             INSTALL_CMD="xbps-install -y"
             XFCE_PKG="xfce4 dbus"
             LXDE_PKG="lxde dbus"
-            GNOME_PKG="gnome-core dbus"
+            MATE_PKG="mate dbus"
             VNC_PKG="tigervnc expect"
             SUDO_PKG="sudo"
             SELECTED_PKGS=""
@@ -581,7 +581,7 @@ EOF
     APT_PKGS="$SUDO_PKG"
     if [ "$DE" == "xfce4" ]; then APT_PKGS="$APT_PKGS $XFCE_PKG"; fi
     if [ "$DE" == "lxde" ]; then APT_PKGS="$APT_PKGS $LXDE_PKG"; fi
-    if [ "$DE" == "gnome" ]; then APT_PKGS="$APT_PKGS $GNOME_PKG"; fi
+    if [ "$DE" == "mate" ]; then APT_PKGS="$APT_PKGS $MATE_PKG"; fi
     if [ "$SERVER" == "vnc" ]; then APT_PKGS="$APT_PKGS $VNC_PKG"; fi
     APT_PKGS=$(echo "$APT_PKGS" | xargs)
     
@@ -693,14 +693,12 @@ export PULSE_SERVER=127.0.0.1
 startlxde &
 STARTUP
 EOF
-        elif [ "$DE" == "gnome" ]; then
+        elif [ "$DE" == "mate" ]; then
             cat << 'EOF' >> "$SETUP_SCRIPT"
 cat << 'STARTUP' > /home/user/.vnc/xstartup
 #!/bin/sh
 export PULSE_SERVER=127.0.0.1
-export XDG_CURRENT_DESKTOP=GNOME
-export XDG_SESSION_TYPE=x11
-dbus-launch --exit-with-session gnome-session &
+dbus-launch --exit-with-session mate-session &
 STARTUP
 EOF
         fi
@@ -767,8 +765,8 @@ if [ "$SERVER" == "x11" ]; then
         nohup proot-distro login $DISTRO --user user --shared-tmp -- bash -c "export PULSE_SERVER=127.0.0.1; export DISPLAY=:1; export GALLIUM_DRIVER=virpipe; export MESA_GL_VERSION_OVERRIDE=4.0; startxfce4" >/dev/null 2>&1 &
     elif [ "$DE" == "lxde" ]; then
         nohup proot-distro login $DISTRO --user user --shared-tmp -- bash -c "export PULSE_SERVER=127.0.0.1; export DISPLAY=:1; export GALLIUM_DRIVER=virpipe; export MESA_GL_VERSION_OVERRIDE=4.0; startlxde" >/dev/null 2>&1 &
-    elif [ "$DE" == "gnome" ]; then
-        nohup proot-distro login $DISTRO --user user --shared-tmp -- bash -c "export PULSE_SERVER=127.0.0.1; export DISPLAY=:1; export GALLIUM_DRIVER=virpipe; export MESA_GL_VERSION_OVERRIDE=4.0; export XDG_CURRENT_DESKTOP=GNOME; export XDG_SESSION_TYPE=x11; dbus-launch --exit-with-session gnome-session" >/dev/null 2>&1 &
+    elif [ "$DE" == "mate" ]; then
+        nohup proot-distro login $DISTRO --user user --shared-tmp -- bash -c "export PULSE_SERVER=127.0.0.1; export DISPLAY=:1; export GALLIUM_DRIVER=virpipe; export MESA_GL_VERSION_OVERRIDE=4.0; dbus-launch --exit-with-session mate-session" >/dev/null 2>&1 &
     fi
 elif [ "$SERVER" == "vnc" ]; then
     echo "Starting VNC Server..."
