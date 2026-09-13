@@ -698,7 +698,9 @@ EOF
 cat << 'STARTUP' > /home/user/.vnc/xstartup
 #!/bin/sh
 export PULSE_SERVER=127.0.0.1
-gnome-session &
+export XDG_CURRENT_DESKTOP=GNOME
+export XDG_SESSION_TYPE=x11
+dbus-launch --exit-with-session gnome-session &
 STARTUP
 EOF
         fi
@@ -766,7 +768,7 @@ if [ "$SERVER" == "x11" ]; then
     elif [ "$DE" == "lxde" ]; then
         nohup proot-distro login $DISTRO --user user --shared-tmp -- bash -c "export PULSE_SERVER=127.0.0.1; export DISPLAY=:1; export GALLIUM_DRIVER=virpipe; export MESA_GL_VERSION_OVERRIDE=4.0; startlxde" >/dev/null 2>&1 &
     elif [ "$DE" == "gnome" ]; then
-        nohup proot-distro login $DISTRO --user user --shared-tmp -- bash -c "export PULSE_SERVER=127.0.0.1; export DISPLAY=:1; export GALLIUM_DRIVER=virpipe; export MESA_GL_VERSION_OVERRIDE=4.0; gnome-session" >/dev/null 2>&1 &
+        nohup proot-distro login $DISTRO --user user --shared-tmp -- bash -c "export PULSE_SERVER=127.0.0.1; export DISPLAY=:1; export GALLIUM_DRIVER=virpipe; export MESA_GL_VERSION_OVERRIDE=4.0; export XDG_CURRENT_DESKTOP=GNOME; export XDG_SESSION_TYPE=x11; dbus-launch --exit-with-session gnome-session" >/dev/null 2>&1 &
     fi
 elif [ "$SERVER" == "vnc" ]; then
     echo "Starting VNC Server..."
