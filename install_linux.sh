@@ -44,7 +44,7 @@ show_menu() {
     esac
 }
 
-get_distro_choice() {
+select_os_flavor() {
     echo ""
     echo "Choose Linux Distribution:"
     echo "1) Ubuntu (apt)"
@@ -65,6 +65,38 @@ get_distro_choice() {
         7) DISTRO="archlinux";;
         *) echo "Invalid choice"; exit 1 ;;
     esac
+}
+
+select_installed_instance() {
+    INSTANCE_NAME=""
+    DISTROS=($(ls $PREFIX/var/lib/proot-distro/installed-rootfs/ 2>/dev/null))
+    if [ ${#DISTROS[@]} -eq 0 ]; then
+        echo "No distributions installed."
+        read -p "Press Enter to return to menu..."
+        show_menu
+    elif [ ${#DISTROS[@]} -eq 1 ]; then
+        INSTANCE_NAME=${DISTROS[0]}
+    else
+        echo "Multiple distributions found. Select one:"
+        for i in "${!DISTROS[@]}"; do
+            echo "$((i+1))) ${DISTROS[$i]}"
+        done
+        read -p "Select an instance [1-${#DISTROS[@]}]: " choice
+        if [[ ! "$choice" =~ ^[0-9]+$ ]] || [ "$choice" -lt 1 ] || [ "$choice" -gt "${#DISTROS[@]}" ]; then
+            echo "Invalid selection."
+            read -p "Press Enter to return to menu..."
+            show_menu
+            return
+        fi
+        idx=$((choice-1))
+        INSTANCE_NAME=${DISTROS[$idx]}
+    fi
+    if [ -n "$INSTANCE_NAME" ]; then
+        CONF_FILE="$PREFIX/var/lib/proot-distro/installed-rootfs/$INSTANCE_NAME/etc/termux-linux-manager.conf"
+        if [ -f "$CONF_FILE" ]; then
+            source "$CONF_FILE"
+        fi
+    fi
 }
 
 system_dashboard() {
@@ -98,18 +130,13 @@ audio_fixer() {
 }
 
 update_linux() {
-    get_distro_choice
-    CONF_FILE="$PREFIX/var/lib/proot-distro/installed-rootfs/$DISTRO/etc/termux-linux-manager.conf"
-    if [ ! -f "$CONF_FILE" ]; then
-        echo "Error: Distro not installed or missing configuration file."
-    else
-        source "$CONF_FILE"
-        echo "[*] Updating $DISTRO..."
-        proot-distro login "$DISTRO" --user root -- bash -c "export DEBIAN_FRONTEND=noninteractive; $UPDATE_CMD"
-        echo "========================================="
-        echo "Update complete!"
-        echo "========================================="
-    fi
+    select_installed_instance
+    if [ -z "$INSTANCE_NAME" ]; then return; fi
+    echo "[*] Updating $INSTANCE_NAME..."
+    proot-distro login "$INSTANCE_NAME" --user root -- bash -c "export DEBIAN_FRONTEND=noninteractive; $UPDATE_CMD"
+    echo "========================================="
+    echo "Update complete!"
+    echo "========================================="
     read -p "Press Enter to continue..."
     show_menu
 }
@@ -134,23 +161,25 @@ start_ssh() {
 }
 
 backup_linux() {
-    get_distro_choice
-    echo "[*] Backing up $DISTRO (Internal)..."
-    proot-distro backup "$DISTRO" --output ~/${DISTRO}-backup.tar.gz
-    echo "Backup saved to ~/${DISTRO}-backup.tar.gz"
+    select_installed_instance
+    if [ -z "$INSTANCE_NAME" ]; then return; fi
+    echo "[*] Backing up $INSTANCE_NAME (Internal)..."
+    proot-distro backup "$INSTANCE_NAME" --output ~/${INSTANCE_NAME}-backup.tar.gz
+    echo "Backup saved to ~/${INSTANCE_NAME}-backup.tar.gz"
     read -p "Press Enter to continue..."
     show_menu
 }
 
 restore_linux() {
-    get_distro_choice
-    if [ ! -f ~/${DISTRO}-backup.tar.gz ]; then
-        echo "Error: No internal backup found at ~/${DISTRO}-backup.tar.gz"
+    select_installed_instance
+    if [ -z "$INSTANCE_NAME" ]; then return; fi
+    if [ ! -f ~/${INSTANCE_NAME}-backup.tar.gz ]; then
+        echo "Error: No internal backup found at ~/${INSTANCE_NAME}-backup.tar.gz"
     else
-        echo "[*] Restoring $DISTRO..."
+        echo "[*] Restoring $INSTANCE_NAME..."
         read -p "Are you sure? This overwrites current data [y/N]: " CONFIRM
         if [[ "$CONFIRM" =~ ^[Yy]$ ]]; then
-            proot-distro restore "$DISTRO" --input ~/${DISTRO}-backup.tar.gz
+            proot-distro restore "$INSTANCE_NAME" --input ~/${INSTANCE_NAME}-backup.tar.gz
             echo "Restore complete!"
         fi
     fi
@@ -159,16 +188,17 @@ restore_linux() {
 }
 
 export_distro() {
-    get_distro_choice
+    select_installed_instance
+    if [ -z "$INSTANCE_NAME" ]; then return; fi
     echo "[*] Requesting Android Storage Permission..."
     termux-setup-storage || true
     sleep 2
     mkdir -p ~/storage/downloads/
-    echo "[*] Exporting $DISTRO to Android Downloads folder (This may take a while)..."
-    proot-distro backup "$DISTRO" --output ~/storage/downloads/${DISTRO}-shared.tar.gz
+    echo "[*] Exporting $INSTANCE_NAME to Android Downloads folder (This may take a while)..."
+    proot-distro backup "$INSTANCE_NAME" --output ~/storage/downloads/${INSTANCE_NAME}-shared.tar.gz
     echo "========================================="
     echo "Export Complete!"
-    echo "File saved to: Downloads/${DISTRO}-shared.tar.gz"
+    echo "File saved to: Downloads/${INSTANCE_NAME}-shared.tar.gz"
     echo "You can now share this file with your friends via Google Drive or USB!"
     echo "========================================="
     read -p "Press Enter to continue..."
@@ -176,21 +206,22 @@ export_distro() {
 }
 
 import_distro() {
-    get_distro_choice
     echo "[*] Requesting Android Storage Permission..."
     termux-setup-storage || true
     sleep 2
-    if [ ! -f ~/storage/downloads/${DISTRO}-shared.tar.gz ]; then
+    read -p "Enter filename from Downloads folder to import (e.g. ubuntu-shared.tar.gz): " IMPORT_FILE
+    if [ ! -f ~/storage/downloads/$IMPORT_FILE ]; then
         echo "========================================="
-        echo "Error: No shared file found!"
-        echo "Make sure your friend's file is named exactly '${DISTRO}-shared.tar.gz'"
+        echo "Error: File not found!"
+        echo "Make sure your friend's file is named exactly '$IMPORT_FILE'"
         echo "and is placed inside your phone's 'Downloads' folder."
         echo "========================================="
     else
-        echo "[*] Importing $DISTRO from Downloads..."
-        read -p "Are you sure? This will completely overwrite any current $DISTRO installation [y/N]: " CONFIRM
+        read -p "Enter new instance name for this import (e.g. my-ubuntu): " INSTANCE_NAME
+        echo "[*] Importing $INSTANCE_NAME from Downloads..."
+        read -p "Are you sure? This will completely overwrite any current $INSTANCE_NAME installation [y/N]: " CONFIRM
         if [[ "$CONFIRM" =~ ^[Yy]$ ]]; then
-            proot-distro restore "$DISTRO" --input ~/storage/downloads/${DISTRO}-shared.tar.gz
+            proot-distro restore "$INSTANCE_NAME" --input ~/storage/downloads/$IMPORT_FILE
             echo "========================================="
             echo "Import complete! You can now use start-linux to boot your friend's setup."
             echo "========================================="
@@ -201,7 +232,8 @@ import_distro() {
 }
 
 optimize_browser() {
-    get_distro_choice
+    select_installed_instance
+    if [ -z "$INSTANCE_NAME" ]; then return; fi
     echo ""
     echo "Browser Optimization Menu:"
     echo "1) Enable Hardware Acceleration (VirGL - Smooth YouTube)"
@@ -210,7 +242,7 @@ optimize_browser() {
     
     if [ "$OPT_CHOICE" == "1" ]; then
         echo "[*] Optimizing Chromium for Hardware Accelerated Video Decoding..."
-        proot-distro login "$DISTRO" -- bash -c '
+        proot-distro login "$INSTANCE_NAME" -- bash -c '
 cat << EOF > /usr/local/bin/chromium
 #!/bin/bash
 /usr/bin/chromium --ignore-gpu-blocklist --enable-gpu-rasterization --enable-zero-copy --use-gl=egl "\$@" 2>/dev/null
@@ -228,7 +260,7 @@ chmod +x /usr/local/bin/chromium-browser
         echo "========================================="
     elif [ "$OPT_CHOICE" == "2" ]; then
         echo "[*] Removing Hardware Acceleration Overrides..."
-        proot-distro login "$DISTRO" -- bash -c '
+        proot-distro login "$INSTANCE_NAME" -- bash -c '
 rm -f /usr/local/bin/chromium
 rm -f /usr/local/bin/chromium-browser
 '
@@ -243,12 +275,13 @@ rm -f /usr/local/bin/chromium-browser
 }
 
 uninstall_linux() {
-    get_distro_choice
-    read -p "Are you sure you want to uninstall $DISTRO? [y/N]: " CONFIRM
+    select_installed_instance
+    if [ -z "$INSTANCE_NAME" ]; then return; fi
+    read -p "Are you sure you want to uninstall $INSTANCE_NAME? [y/N]: " CONFIRM
     if [[ "$CONFIRM" =~ ^[Yy]$ ]]; then
-        echo "[*] Uninstalling $DISTRO..."
-        proot-distro remove "$DISTRO" || true
-        echo "$DISTRO has been removed."
+        echo "[*] Uninstalling $INSTANCE_NAME..."
+        proot-distro remove "$INSTANCE_NAME" || true
+        echo "$INSTANCE_NAME has been removed."
     fi
     read -p "Press Enter to continue..."
     show_menu
@@ -346,8 +379,18 @@ install_linux() {
     done
     
     echo ""
+    read -p "Enter a custom name for this installation (Leave blank for auto-generation): " INSTANCE_NAME
+    if [ -z "$INSTANCE_NAME" ]; then
+        if [ -d "$PREFIX/var/lib/proot-distro/installed-rootfs/$DISTRO" ]; then
+            INSTANCE_NAME="${DISTRO}-$(date +%s)"
+        else
+            INSTANCE_NAME="$DISTRO"
+        fi
+    fi
+    
+    echo ""
     echo "========================================="
-    echo "Beginning Installation..."
+    echo "Beginning Installation of $INSTANCE_NAME..."
     echo "========================================="
 
     echo "[*] Requesting Android Storage Permission..."
@@ -365,7 +408,7 @@ install_linux() {
         pkg install termux-x11-nightly -y
     fi
     
-    echo "[*] Installing $DISTRO..."
+    echo "[*] Installing $DISTRO (as $INSTANCE_NAME)..."
     if proot-distro install --help 2>&1 | grep -iqE "(IMAGE:TAG|Docker image|registry)"; then
         case "$DISTRO" in
             ubuntu) IMAGE="ubuntu:24.04" ;;
@@ -384,12 +427,12 @@ install_linux() {
                 ;;
             *) IMAGE="$DISTRO" ;;
         esac
-        proot-distro install -n "$DISTRO" "$IMAGE"
+        proot-distro install --name "$INSTANCE_NAME" "$IMAGE"
     else
-        proot-distro install "$DISTRO"
+        proot-distro install --override-alias "$INSTANCE_NAME" "$DISTRO" 2>/dev/null || proot-distro install "$DISTRO"
     fi
     
-    ROOTFS="$PREFIX/var/lib/proot-distro/installed-rootfs/$DISTRO"
+    ROOTFS="$PREFIX/var/lib/proot-distro/installed-rootfs/$INSTANCE_NAME"
     mkdir -p "$PREFIX/tmp"
     SETUP_SCRIPT="$PREFIX/tmp/gui_setup_$$.sh"
     
@@ -515,7 +558,8 @@ install_linux() {
 
     # Save the configuration for dynamic boot!
     mkdir -p "$ROOTFS/etc"
-    echo "DE=\"$DE\"" > "$ROOTFS/etc/termux-linux-manager.conf"
+    echo "DISTRO=\"$DISTRO\"" > "$ROOTFS/etc/termux-linux-manager.conf"
+    echo "DE=\"$DE\"" >> "$ROOTFS/etc/termux-linux-manager.conf"
     echo "SERVER=\"$SERVER\"" >> "$ROOTFS/etc/termux-linux-manager.conf"
     echo "RESOLUTION=\"$RESOLUTION\"" >> "$ROOTFS/etc/termux-linux-manager.conf"
     echo "UPDATE_CMD=\"$UPDATE_CMD\"" >> "$ROOTFS/etc/termux-linux-manager.conf"
@@ -541,6 +585,38 @@ EOF
 echo " -> Installing core packages ($APT_PKGS)..."
 $INSTALL_CMD $APT_PKGS
 EOF
+    fi
+
+    if [ "$INSTALL_VSCODE" == "1" ]; then
+        cat << 'EOF' >> "$SETUP_SCRIPT"
+echo " -> Configuring VS Code Repository..."
+EOF
+        case "$DISTRO" in
+            ubuntu|debian|kali)
+                cat << 'EOF' >> "$SETUP_SCRIPT"
+apt-get install -y wget gpg apt-transport-https ca-certificates
+mkdir -p /etc/apt/keyrings
+wget -qO- https://packages.microsoft.com/keys/microsoft.asc | gpg --dearmor > packages.microsoft.gpg
+install -D -o root -g root -m 644 packages.microsoft.gpg /etc/apt/keyrings/packages.microsoft.gpg
+echo "deb [arch=amd64,arm64,armhf signed-by=/etc/apt/keyrings/packages.microsoft.gpg] https://packages.microsoft.com/repos/code stable main" > /etc/apt/sources.list.d/vscode.list
+rm -f packages.microsoft.gpg
+apt-get update -y
+EOF
+                ;;
+            fedora)
+                cat << 'EOF' >> "$SETUP_SCRIPT"
+rpm --import https://packages.microsoft.com/keys/microsoft.asc
+echo -e "[code]\nname=Visual Studio Code\nbaseurl=https://packages.microsoft.com/yumrepos/vscode\nenabled=1\ngpgcheck=1\ngpgkey=https://packages.microsoft.com/keys/microsoft.asc" > /etc/yum.repos.d/vscode.repo
+EOF
+                ;;
+            opensuse)
+                cat << 'EOF' >> "$SETUP_SCRIPT"
+rpm --import https://packages.microsoft.com/keys/microsoft.asc
+echo -e "[code]\nname=Visual Studio Code\nbaseurl=https://packages.microsoft.com/yumrepos/vscode\nenabled=1\ntype=rpm-md\ngpgcheck=1\ngpgkey=https://packages.microsoft.com/keys/microsoft.asc" > /etc/zypp/repos.d/vscode.repo
+zypper refresh
+EOF
+                ;;
+        esac
     fi
 
     # Install optional applications safely
@@ -627,8 +703,8 @@ chown -R user:user /home/user/.vnc
 EOF
     fi
     
-    echo "[*] Executing setup inside $DISTRO (this will take a while)..."
-    proot-distro login "$DISTRO" --shared-tmp -- bash /tmp/gui_setup_$$.sh
+    echo "[*] Executing setup inside $INSTANCE_NAME (this will take a while)..."
+    proot-distro login "$INSTANCE_NAME" --shared-tmp -- bash /tmp/gui_setup_$$.sh
     
     echo "[*] Setting up Home-Screen Widget Integration..."
     mkdir -p ~/.shortcuts
