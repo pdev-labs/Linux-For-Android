@@ -298,8 +298,7 @@ install_linux() {
     echo "in your Android Developer Options for a stable desktop experience."
     echo "========================================="
     echo ""
-    
-    get_distro_choice
+    select_os_flavor
     
     DE="none"
     SERVER="none"
