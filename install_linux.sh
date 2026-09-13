@@ -190,9 +190,11 @@ restore_linux() {
 export_distro() {
     select_installed_instance
     if [ -z "$INSTANCE_NAME" ]; then return; fi
-    echo "[*] Requesting Android Storage Permission..."
-    termux-setup-storage || true
-    sleep 2
+    if [ ! -d ~/storage ]; then
+        echo "[*] Requesting Android Storage Permission..."
+        termux-setup-storage || true
+        sleep 2
+    fi
     mkdir -p ~/storage/downloads/
     echo "[*] Exporting $INSTANCE_NAME to Android Downloads folder (This may take a while)..."
     proot-distro backup "$INSTANCE_NAME" --output ~/storage/downloads/${INSTANCE_NAME}-shared.tar.gz
@@ -206,9 +208,11 @@ export_distro() {
 }
 
 import_distro() {
-    echo "[*] Requesting Android Storage Permission..."
-    termux-setup-storage || true
-    sleep 2
+    if [ ! -d ~/storage ]; then
+        echo "[*] Requesting Android Storage Permission..."
+        termux-setup-storage || true
+        sleep 2
+    fi
     read -p "Enter filename from Downloads folder to import (e.g. ubuntu-shared.tar.gz): " IMPORT_FILE
     if [ ! -f ~/storage/downloads/$IMPORT_FILE ]; then
         echo "========================================="
@@ -392,9 +396,11 @@ install_linux() {
     echo "Beginning Installation of $INSTANCE_NAME..."
     echo "========================================="
 
-    echo "[*] Requesting Android Storage Permission..."
-    termux-setup-storage || true
-    sleep 2
+    if [ ! -d ~/storage ]; then
+        echo "[*] Requesting Android Storage Permission..."
+        termux-setup-storage || true
+        sleep 2
+    fi
     
     echo "[*] Updating Termux packages..."
     pkg update -y && pkg upgrade -y
