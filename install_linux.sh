@@ -276,9 +276,10 @@ install_linux() {
     echo "Choose Desktop Environment:"
     echo "1) XFCE4 (Recommended, Lightweight GUI)"
     echo "2) LXDE (Very Lightweight GUI)"
-    echo "3) None (CLI only)"
-    read -p "Select DE [1-3]: " DE_CHOICE
-    if [ "$DE_CHOICE" == "1" ]; then DE="xfce4"; elif [ "$DE_CHOICE" == "2" ]; then DE="lxde"; else DE="none"; fi
+    echo "3) GNOME (Heavy GUI)"
+    echo "4) None (CLI only)"
+    read -p "Select DE [1-4]: " DE_CHOICE
+    if [ "$DE_CHOICE" == "1" ]; then DE="xfce4"; elif [ "$DE_CHOICE" == "2" ]; then DE="lxde"; elif [ "$DE_CHOICE" == "3" ]; then DE="gnome"; else DE="none"; fi
     
     if [ "$DE" != "none" ]; then
         echo ""
@@ -307,6 +308,7 @@ install_linux() {
     echo "Development Tools:"
     echo "  1) Python       2) Git         3) Node.js"
     echo "  4) curl         5) wget        6) Google Antigravity IDE"
+    echo " 14) VS Code"
     echo "Web Browsers:"
     echo "  7) Firefox      8) Chromium"
     echo "Office Suite:"
@@ -322,7 +324,7 @@ install_linux() {
     INSTALL_PYTHON=0; INSTALL_GIT=0; INSTALL_NODEJS=0; INSTALL_CURL=0; INSTALL_WGET=0; INSTALL_IDE=0
     INSTALL_FIREFOX=0; INSTALL_CHROMIUM=0
     INSTALL_LIBREOFFICE=0; INSTALL_VLC=0; INSTALL_GIMP=0
-    INSTALL_HTOP=0; INSTALL_NEOFETCH=0
+    INSTALL_HTOP=0; INSTALL_NEOFETCH=0; INSTALL_VSCODE=0
 
     for choice in $APP_CHOICES; do
         case $choice in
@@ -339,6 +341,7 @@ install_linux() {
             11) INSTALL_GIMP=1 ;;
             12) INSTALL_HTOP=1 ;;
             13) INSTALL_NEOFETCH=1 ;;
+            14) INSTALL_VSCODE=1 ;;
         esac
     done
     
@@ -397,6 +400,7 @@ install_linux() {
             INSTALL_CMD="apt-get install -y"
             XFCE_PKG="xfce4 xfce4-goodies dbus-x11"
             LXDE_PKG="lxde dbus-x11"
+            GNOME_PKG="gnome-core dbus-x11"
             VNC_PKG="tigervnc-standalone-server expect"
             SUDO_PKG="sudo"
             SELECTED_PKGS=""
@@ -412,6 +416,7 @@ install_linux() {
             if [ "$INSTALL_GIMP" == "1" ]; then SELECTED_PKGS="$SELECTED_PKGS gimp"; fi
             if [ "$INSTALL_HTOP" == "1" ]; then SELECTED_PKGS="$SELECTED_PKGS htop"; fi
             if [ "$INSTALL_NEOFETCH" == "1" ]; then SELECTED_PKGS="$SELECTED_PKGS neofetch"; fi
+            if [ "$INSTALL_VSCODE" == "1" ]; then SELECTED_PKGS="$SELECTED_PKGS code"; fi
             ;;
 
         archlinux)
@@ -419,6 +424,7 @@ install_linux() {
             INSTALL_CMD="pacman -S --noconfirm"
             XFCE_PKG="xfce4 xfce4-goodies dbus"
             LXDE_PKG="lxde dbus"
+            GNOME_PKG="gnome dbus"
             VNC_PKG="tigervnc expect"
             SUDO_PKG="sudo"
             SELECTED_PKGS=""
@@ -434,12 +440,14 @@ install_linux() {
             if [ "$INSTALL_GIMP" == "1" ]; then SELECTED_PKGS="$SELECTED_PKGS gimp"; fi
             if [ "$INSTALL_HTOP" == "1" ]; then SELECTED_PKGS="$SELECTED_PKGS htop"; fi
             if [ "$INSTALL_NEOFETCH" == "1" ]; then SELECTED_PKGS="$SELECTED_PKGS neofetch"; fi
+            if [ "$INSTALL_VSCODE" == "1" ]; then SELECTED_PKGS="$SELECTED_PKGS code"; fi
             ;;
         fedora)
             UPDATE_CMD="dnf update -y"
             INSTALL_CMD="dnf install -y"
             XFCE_PKG="xfce4-session xfce4-panel xfdesktop xfwm4 dbus-x11"
             LXDE_PKG="lxde-common lxsession dbus-x11"
+            GNOME_PKG="gnome-shell dbus-x11"
             VNC_PKG="tigervnc-server expect"
             SUDO_PKG="sudo"
             SELECTED_PKGS=""
@@ -455,12 +463,14 @@ install_linux() {
             if [ "$INSTALL_GIMP" == "1" ]; then SELECTED_PKGS="$SELECTED_PKGS gimp"; fi
             if [ "$INSTALL_HTOP" == "1" ]; then SELECTED_PKGS="$SELECTED_PKGS htop"; fi
             if [ "$INSTALL_NEOFETCH" == "1" ]; then SELECTED_PKGS="$SELECTED_PKGS neofetch"; fi
+            if [ "$INSTALL_VSCODE" == "1" ]; then SELECTED_PKGS="$SELECTED_PKGS code"; fi
             ;;
         opensuse)
             UPDATE_CMD="zypper refresh && zypper update -y"
             INSTALL_CMD="zypper install -y"
             XFCE_PKG="patterns-xfce-xfce dbus-1-x11"
             LXDE_PKG="patterns-lxde-lxde dbus-1-x11"
+            GNOME_PKG="patterns-gnome-gnome_basic dbus-1-x11"
             VNC_PKG="tigervnc expect"
             SUDO_PKG="sudo"
             SELECTED_PKGS=""
@@ -476,12 +486,14 @@ install_linux() {
             if [ "$INSTALL_GIMP" == "1" ]; then SELECTED_PKGS="$SELECTED_PKGS gimp"; fi
             if [ "$INSTALL_HTOP" == "1" ]; then SELECTED_PKGS="$SELECTED_PKGS htop"; fi
             if [ "$INSTALL_NEOFETCH" == "1" ]; then SELECTED_PKGS="$SELECTED_PKGS neofetch"; fi
+            if [ "$INSTALL_VSCODE" == "1" ]; then SELECTED_PKGS="$SELECTED_PKGS code"; fi
             ;;
         void)
             UPDATE_CMD="xbps-install -Syu"
             INSTALL_CMD="xbps-install -y"
             XFCE_PKG="xfce4 dbus"
             LXDE_PKG="lxde dbus"
+            GNOME_PKG="gnome-core dbus"
             VNC_PKG="tigervnc expect"
             SUDO_PKG="sudo"
             SELECTED_PKGS=""
@@ -497,6 +509,7 @@ install_linux() {
             if [ "$INSTALL_GIMP" == "1" ]; then SELECTED_PKGS="$SELECTED_PKGS gimp"; fi
             if [ "$INSTALL_HTOP" == "1" ]; then SELECTED_PKGS="$SELECTED_PKGS htop"; fi
             if [ "$INSTALL_NEOFETCH" == "1" ]; then SELECTED_PKGS="$SELECTED_PKGS neofetch"; fi
+            if [ "$INSTALL_VSCODE" == "1" ]; then SELECTED_PKGS="$SELECTED_PKGS vscode"; fi
             ;;
     esac
 
@@ -519,6 +532,7 @@ EOF
     APT_PKGS="$SUDO_PKG"
     if [ "$DE" == "xfce4" ]; then APT_PKGS="$APT_PKGS $XFCE_PKG"; fi
     if [ "$DE" == "lxde" ]; then APT_PKGS="$APT_PKGS $LXDE_PKG"; fi
+    if [ "$DE" == "gnome" ]; then APT_PKGS="$APT_PKGS $GNOME_PKG"; fi
     if [ "$SERVER" == "vnc" ]; then APT_PKGS="$APT_PKGS $VNC_PKG"; fi
     APT_PKGS=$(echo "$APT_PKGS" | xargs)
     
@@ -598,6 +612,14 @@ export PULSE_SERVER=127.0.0.1
 startlxde &
 STARTUP
 EOF
+        elif [ "$DE" == "gnome" ]; then
+            cat << 'EOF' >> "$SETUP_SCRIPT"
+cat << 'STARTUP' > /home/user/.vnc/xstartup
+#!/bin/sh
+export PULSE_SERVER=127.0.0.1
+gnome-session &
+STARTUP
+EOF
         fi
         cat << 'EOF' >> "$SETUP_SCRIPT"
 chmod +x /home/user/.vnc/xstartup
@@ -662,6 +684,8 @@ if [ "$SERVER" == "x11" ]; then
         nohup proot-distro login $DISTRO --user user --shared-tmp -- bash -c "export PULSE_SERVER=127.0.0.1; export DISPLAY=:1; export GALLIUM_DRIVER=virpipe; export MESA_GL_VERSION_OVERRIDE=4.0; startxfce4" >/dev/null 2>&1 &
     elif [ "$DE" == "lxde" ]; then
         nohup proot-distro login $DISTRO --user user --shared-tmp -- bash -c "export PULSE_SERVER=127.0.0.1; export DISPLAY=:1; export GALLIUM_DRIVER=virpipe; export MESA_GL_VERSION_OVERRIDE=4.0; startlxde" >/dev/null 2>&1 &
+    elif [ "$DE" == "gnome" ]; then
+        nohup proot-distro login $DISTRO --user user --shared-tmp -- bash -c "export PULSE_SERVER=127.0.0.1; export DISPLAY=:1; export GALLIUM_DRIVER=virpipe; export MESA_GL_VERSION_OVERRIDE=4.0; gnome-session" >/dev/null 2>&1 &
     fi
 elif [ "$SERVER" == "vnc" ]; then
     echo "Starting VNC Server..."
