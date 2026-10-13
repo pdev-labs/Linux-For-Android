@@ -955,6 +955,20 @@ install_linux() {
     cat << EOF > "$SETUP_SCRIPT"
 #!/bin/bash
 export DEBIAN_FRONTEND=noninteractive
+EOF
+
+    # Legacy Debian installs bullseye, whose -security suite is EOL and
+    # pruned from deb.debian.org (pool 404s despite a live Release file).
+    # Point it at archive.debian.org before the first update.
+    if [ "$IS_LEGACY" = "1" ] && [ "$DISTRO" = "debian" ]; then
+        cat << 'EOF' >> "$SETUP_SCRIPT"
+echo " -> Pointing bullseye-security at archive.debian.org (EOL suite)..."
+sed -i 's|^deb http://deb.debian.org/debian-security bullseye-security |deb http://archive.debian.org/debian-security bullseye-security/updates |' /etc/apt/sources.list || true
+echo 'Acquire::Check-Valid-Until "false";' > /etc/apt/apt.conf.d/99-no-check-valid-until
+EOF
+    fi
+
+    cat << EOF >> "$SETUP_SCRIPT"
 echo " -> Updating repositories..."
 $UPDATE_CMD
 EOF
