@@ -1168,6 +1168,33 @@ if ! proot --help 2>&1 | grep -q "sysvipc"; then
     fi
 fi
 
+# GUI installs can boot the full desktop or drop straight to a shell.
+# CLI-only installs go directly to a root terminal.
+MODE="desktop"
+if [ "$SERVER" == "x11" ] || [ "$SERVER" == "vnc" ]; then
+    echo ""
+    echo "Desktop available: $DE via $SERVER."
+    echo "1) Start full desktop (default)"
+    echo "2) Root terminal only (no display/audio servers)"
+    echo "3) User terminal only (no display/audio servers)"
+    read -p "Select [1-3]: " MODE_CHOICE
+    if [ "$MODE_CHOICE" == "2" ]; then MODE="root"
+    elif [ "$MODE_CHOICE" == "3" ]; then MODE="user"
+    fi
+else
+    MODE="root"
+fi
+
+if [ "$MODE" == "root" ]; then
+    echo "Opening root terminal in $DISTRO (sudo does not work inside proot, and is not needed)..."
+    proot-distro login $NO_SYSVIPC $DISTRO --shared-tmp
+    exit 0
+elif [ "$MODE" == "user" ]; then
+    echo "Opening user terminal in $DISTRO (no display/audio servers)..."
+    proot-distro login $NO_SYSVIPC $DISTRO --user user --shared-tmp
+    exit 0
+fi
+
 echo "Starting PulseAudio..."
 if command -v pulseaudio >/dev/null 2>&1; then
     pulseaudio --start --load="module-native-protocol-tcp auth-ip-acl=127.0.0.1 auth-anonymous=1" --exit-idle-time=-1 2>/dev/null || echo "[!] PulseAudio not available on this device, continuing without audio."
@@ -1203,9 +1230,6 @@ elif [ "$SERVER" == "vnc" ]; then
     echo "Starting VNC Server..."
     if [ -z "$RESOLUTION" ]; then RESOLUTION="1280x720"; fi
     proot-distro login $NO_SYSVIPC $DISTRO --user user --shared-tmp -- bash -c "export PULSE_SERVER=127.0.0.1; export GALLIUM_DRIVER=virpipe; export MESA_GL_VERSION_OVERRIDE=4.0; vncserver -geometry $RESOLUTION :1"
-else
-    echo "Starting $DISTRO CLI as 'root' (admin: sudo does not work inside proot, and is not needed)..."
-    proot-distro login $NO_SYSVIPC $DISTRO --shared-tmp
 fi
 EOF
     chmod +x $PREFIX/bin/start-linux
@@ -1267,7 +1291,57 @@ elif [ "$SERVER" == "vnc" ]; then
 fi
 EOF
     chmod +x $PREFIX/bin/stop-linux
-    
+
+    cat << 'EOF' > $PREFIX/bin/terminal-linux
+#!/bin/bash
+# Open a terminal inside a distro WITHOUT starting any display/audio
+# servers. For GUI installs this is the "just give me a shell" shortcut.
+DISTROS=($(ls $PREFIX/var/lib/proot-distro/installed-rootfs/ 2>/dev/null))
+if [ ${#DISTROS[@]} -eq 0 ]; then
+    echo "No distributions installed. Please run install_linux.sh first."
+    exit 1
+elif [ ${#DISTROS[@]} -eq 1 ]; then
+    DISTRO=${DISTROS[0]}
+else
+    echo "Multiple distributions found. Open a terminal in which one?"
+    for i in "${!DISTROS[@]}"; do
+        echo "$((i+1))) ${DISTROS[$i]}"
+    done
+    read -p "Select a distro [1-${#DISTROS[@]}]: " choice
+    if [[ ! "$choice" =~ ^[0-9]+$ ]] || [ "$choice" -lt 1 ] || [ "$choice" -gt "${#DISTROS[@]}" ]; then
+        echo "Invalid selection."
+        exit 1
+    fi
+    idx=$((choice-1))
+    DISTRO=${DISTROS[$idx]}
+fi
+
+NO_SYSVIPC=""
+if ! proot --help 2>&1 | grep -q "sysvipc"; then
+    if [ -f "$PREFIX/bin/proot-distro" ] && grep -q "no-sysvipc" "$PREFIX/bin/proot-distro" 2>/dev/null; then
+        NO_SYSVIPC="--no-sysvipc"
+    fi
+fi
+
+echo ""
+echo "1) Root terminal (admin - sudo does not work inside proot, and is not needed)"
+echo "2) User terminal ('user' account)"
+read -p "Select [1-2, default 1]: " TERM_CHOICE
+if [ "$TERM_CHOICE" == "2" ]; then
+    echo "Opening user terminal in $DISTRO..."
+    proot-distro login $NO_SYSVIPC $DISTRO --user user --shared-tmp
+else
+    echo "Opening root terminal in $DISTRO..."
+    proot-distro login $NO_SYSVIPC $DISTRO --shared-tmp
+fi
+EOF
+    chmod +x $PREFIX/bin/terminal-linux
+    cat << 'EOF' > ~/.shortcuts/Terminal-Linux
+#!/bin/bash
+terminal-linux
+EOF
+    chmod +x ~/.shortcuts/Terminal-Linux 2>/dev/null || true
+
     echo ""
     echo "========================================="
     echo "Installation complete!"
@@ -1275,7 +1349,7 @@ EOF
     echo "(apk add / apt install ...). sudo does NOT work inside proot on"
     echo "Android (NO_NEW_PRIVS) and is not needed - you own every file."
     echo "GUI sessions run as 'user' (VNC password: ubuntu)."
-    echo "Use commands: start-linux / stop-linux"
+    echo "Use commands: start-linux / terminal-linux (shell only) / stop-linux"
     echo "If you installed the Termux:Widget app, a shortcut is on your home screen!"
     echo "========================================="
     read -p "Press Enter to return to menu..."

@@ -125,6 +125,17 @@ Once installed, you never need to run the setup script again. Just type this any
 start-linux
 ```
 *(If you installed multiple OSs, it will automatically pop up a menu asking which one you want to boot!)*
+If the install has a GUI, `start-linux` asks what you want: full desktop,
+**root terminal only**, or **user terminal only** (no display/audio servers
+started in terminal modes). CLI-only installs boot straight to root.
+
+### Quick terminal without servers
+```bash
+terminal-linux
+```
+Opens a shell in a distro without touching PulseAudio, VirGL, or the
+display server, then lets you pick the **root** or **user** terminal.
+Handy for quick admin work and as a Termux:Widget shortcut (auto-created).
 
 ### Default Credentials & Privileges
 - **GUI sessions run as:** `user` (VNC password: `ubuntu`)
