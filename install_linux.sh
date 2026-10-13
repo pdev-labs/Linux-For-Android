@@ -991,6 +991,10 @@ if [ -d /data/data/com.termux/files/home/storage ]; then
     ln -sf /data/data/com.termux/files/home/storage/* /home/user/storage/
 fi
 chown -R user:user /home/user/storage
+mkdir -p /root/storage
+if [ -d /data/data/com.termux/files/home/storage ]; then
+    ln -sf /data/data/com.termux/files/home/storage/* /root/storage/
+fi
 EOF
     
     if [ "$INSTALL_IDE" == "1" ]; then
@@ -1151,8 +1155,8 @@ elif [ "$SERVER" == "vnc" ]; then
     if [ -z "$RESOLUTION" ]; then RESOLUTION="1280x720"; fi
     proot-distro login $NO_SYSVIPC $DISTRO --user user --shared-tmp -- bash -c "export PULSE_SERVER=127.0.0.1; export GALLIUM_DRIVER=virpipe; export MESA_GL_VERSION_OVERRIDE=4.0; vncserver -geometry $RESOLUTION :1"
 else
-    echo "Starting $DISTRO CLI as 'user'..."
-    proot-distro login $NO_SYSVIPC $DISTRO --user user --shared-tmp
+    echo "Starting $DISTRO CLI as 'root' (admin: sudo does not work inside proot, and is not needed)..."
+    proot-distro login $NO_SYSVIPC $DISTRO --shared-tmp
 fi
 EOF
     chmod +x $PREFIX/bin/start-linux
@@ -1218,8 +1222,10 @@ EOF
     echo ""
     echo "========================================="
     echo "Installation complete!"
-    echo "You are now running as a standard user."
-    echo "Password for sudo is: ubuntu"
+    echo "CLI (start-linux) runs as guest root: install packages directly"
+    echo "(apk add / apt install ...). sudo does NOT work inside proot on"
+    echo "Android (NO_NEW_PRIVS) and is not needed - you own every file."
+    echo "GUI sessions run as 'user' (VNC password: ubuntu)."
     echo "Use commands: start-linux / stop-linux"
     echo "If you installed the Termux:Widget app, a shortcut is on your home screen!"
     echo "========================================="

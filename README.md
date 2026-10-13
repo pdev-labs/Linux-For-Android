@@ -86,9 +86,15 @@ start-linux
 ```
 *(If you installed multiple OSs, it will automatically pop up a menu asking which one you want to boot!)*
 
-### Default Credentials
-- **Username:** `user`
-- **Password (Sudo / VNC):** `ubuntu`
+### Default Credentials & Privileges
+- **GUI sessions run as:** `user` (VNC password: `ubuntu`)
+- **CLI (`start-linux`) runs as guest root** — install packages directly
+  (`apk add` on Alpine, `apt install` on Debian/Ubuntu, …). Never use `sudo`.
+- **Why no sudo?** Android app processes carry the `NO_NEW_PRIVS` flag and
+  proot cannot grant real root, so `sudo`/`su` can never work inside proot
+  on any device. You already own every file, so elevation is unnecessary.
+  (On Alpine the manager is `apk`, not `apt` — bare `apt` would resolve to
+  Termux's host copy and fail to link.)
 
 ### Stopping your Linux Desktop
 To safely kill the desktop, display servers, and audio systems, type:
@@ -108,9 +114,13 @@ Starting in Android 12, Android limits background child processes. Since a Linux
 3. Toggle **Disable child process restrictions** to **ON** and restart Termux.
 *(For Android 12/13, search online for "Termux ADB disable phantom process" to apply the fix via a PC).*
 
-### 2. Sudo doesn't ask for a password (NOPASSWD)
-By default, this script configures `sudo` to execute without a password. 
-**Why?** The underlying `proot` environment lacks the true kernel capabilities (like `audit` and `selinux`) that the PAM authentication system requires. If a password prompt is forced, PAM will incorrectly reject all passwords (even correct ones!). Thus, `NOPASSWD` is the only stable configuration for `proot`.
+### 2. `sudo` / `su` fail inside the distro ("no new privileges", wrong ownership)
+**Fix:** Don't use them — they can never work inside proot on Android. App
+processes inherit the kernel `NO_NEW_PRIVS` flag (irreversible), and proot's
+uid mapping makes `sudo.conf` appear wrongly owned. You own every file in
+the guest, so run admin commands directly as the CLI root shell
+(`apk add`, `apt install`, …). The `user` account exists for GUI sessions,
+which don't need elevation. `su` fails for the same reason.
 
 ### 3. Scary `apt` errors during installation
 While installing packages, you might see red errors like:
