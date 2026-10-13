@@ -53,7 +53,10 @@ print_device_info() {
         echo "   VNC (software rendering) will be used automatically."
         echo " - 'proot-distro' package may be missing. The script will"
         echo "   try to install it from source (pure bash + proot)."
-        echo " - Recommended distros for 32-bit ARM: Ubuntu, Debian, Kali."
+        echo " - STRONGLY recommended: Alpine Linux (musl, option 8)."
+        echo "   glibc distros (Ubuntu/Debian/Fedora/...) fail on the"
+        echo "   3.10 kernel at the first guest command (verified)."
+        echo "   32-bit ARM note: Alpine/Ubuntu/Debian/Kali have arm builds;"
         echo "   Fedora / openSUSE / Void / Arch may lack 32-bit images."
         echo "----------------------------------------------------------------"
     fi
@@ -200,6 +203,19 @@ ensure_dependencies() {
     set -e
 }
 
+# login flags for proot-distro: v4 login passes --sysvipc by default,
+# but the frozen Android 5 proot (5.1.x) has no such option, so EVERY
+# login dies with "unknown option '--sysvipc'". Opt out when needed.
+# Detection is file-based (no execution), safe on modern builds too:
+# v5+ pkg builds keep working untouched.
+pd_login_flags() {
+    if command -v proot >/dev/null 2>&1 && ! proot --help 2>&1 | grep -q "sysvipc"; then
+        if [ -f "$PREFIX/bin/proot-distro" ] && grep -q "no-sysvipc" "$PREFIX/bin/proot-distro" 2>/dev/null; then
+            echo "--no-sysvipc"
+        fi
+    fi
+}
+
 require_proot_distro() {
     if command -v proot-distro >/dev/null 2>&1; then
         return 0
@@ -260,7 +276,8 @@ select_os_flavor() {
     echo "5) OpenSUSE (zypper)"
     echo "6) Void Linux (xbps)"
     echo "7) Arch Linux (pacman) [May be unstable on ARM64]"
-    read -p "Select Distro [1-7]: " DIST_CHOICE
+    echo "8) Alpine Linux (apk, musl - BEST for Android 5/6, tiny & fast)"
+    read -p "Select Distro [1-8]: " DIST_CHOICE
     case $DIST_CHOICE in
         1) DISTRO="ubuntu";;
         2) DISTRO="debian";;
@@ -269,6 +286,7 @@ select_os_flavor() {
         5) DISTRO="opensuse";;
         6) DISTRO="void";;
         7) DISTRO="archlinux";;
+        8) DISTRO="alpine";;
         *) echo "Invalid choice"; exit 1 ;;
     esac
 }
@@ -351,7 +369,7 @@ update_linux() {
     select_installed_instance
     if [ -z "$INSTANCE_NAME" ]; then return; fi
     echo "[*] Updating $INSTANCE_NAME..."
-    proot-distro login "$INSTANCE_NAME" --user root -- bash -c "export DEBIAN_FRONTEND=noninteractive; $UPDATE_CMD"
+    proot-distro login $(pd_login_flags) "$INSTANCE_NAME" --user root -- bash -c "export DEBIAN_FRONTEND=noninteractive; $UPDATE_CMD"
     echo "========================================="
     echo "Update complete!"
     echo "========================================="
@@ -477,7 +495,7 @@ optimize_browser() {
     
     if [ "$OPT_CHOICE" == "1" ]; then
         echo "[*] Optimizing Chromium for Hardware Accelerated Video Decoding..."
-        proot-distro login "$INSTANCE_NAME" -- bash -c '
+        proot-distro login $(pd_login_flags) "$INSTANCE_NAME" -- bash -c '
 cat << EOF > /usr/local/bin/chromium
 #!/bin/bash
 /usr/bin/chromium --ignore-gpu-blocklist --enable-gpu-rasterization --enable-zero-copy --use-gl=egl "\$@" 2>/dev/null
@@ -495,7 +513,7 @@ chmod +x /usr/local/bin/chromium-browser
         echo "========================================="
     elif [ "$OPT_CHOICE" == "2" ]; then
         echo "[*] Removing Hardware Acceleration Overrides..."
-        proot-distro login "$INSTANCE_NAME" -- bash -c '
+        proot-distro login $(pd_login_flags) "$INSTANCE_NAME" -- bash -c '
 rm -f /usr/local/bin/chromium
 rm -f /usr/local/bin/chromium-browser
 '
@@ -542,7 +560,28 @@ install_linux() {
         case "$DISTRO" in
             fedora|opensuse|void|archlinux)
                 echo "[!] Warning: $DISTRO may not provide 32-bit ARM (armv7) images."
-                echo "    If install fails, retry with Ubuntu, Debian or Kali."
+                echo "    If install fails, retry with Alpine, Ubuntu, Debian or Kali."
+                ;;
+        esac
+    fi
+    # Legacy Android 5/6 runs kernel 3.10: modern glibc (>= 2.36 in
+    # Debian bookworm / Ubuntu mantic / Fedora 39 / ...) dies at the
+    # first guest command (verified live). Alpine (musl) is proven OK.
+    if [ "$IS_LEGACY" = "1" ]; then
+        case "$DISTRO" in
+            alpine) ;;
+            kali)
+                echo "ERROR: Kali has no plugin in legacy proot-distro (Android 5/6)."
+                echo "Please re-run and choose Alpine (recommended), Ubuntu or Debian."
+                read -p "Press Enter to return to menu..."
+                show_menu
+                return
+                ;;
+            *)
+                echo "[!] Warning: $DISTRO uses modern glibc which fails on the"
+                echo "    Android 5/6 (3.10) kernel at the first guest command."
+                echo "    Alpine Linux (option 8) is verified working here."
+                read -p "Press Enter to continue anyway, or Ctrl+C to abort and pick Alpine..." dummy || true
                 ;;
         esac
     fi
@@ -559,6 +598,12 @@ install_linux() {
     echo "4) None (CLI only)"
     read -p "Select DE [1-4]: " DE_CHOICE
     if [ "$DE_CHOICE" == "1" ]; then DE="xfce4"; elif [ "$DE_CHOICE" == "2" ]; then DE="lxde"; elif [ "$DE_CHOICE" == "3" ]; then DE="mate"; else DE="none"; fi
+    # Alpine repos ship no LXDE meta-package (and no startlxde). Fall back
+    # to XFCE4 rather than installing a desktop that cannot start.
+    if [ "$DISTRO" == "alpine" ] && [ "$DE" == "lxde" ]; then
+        echo "[*] LXDE is not packaged for Alpine -> using XFCE4 instead."
+        DE="xfce4"
+    fi
     
     if [ "$DE" != "none" ]; then
         # Legacy Android (5/6, SDK < 24): Termux:X11 needs Android 8+.
@@ -658,16 +703,6 @@ install_linux() {
     if [ "$SERVER" == "x11" ]; then NEED_X11=1; fi
     ensure_dependencies "$NEED_X11"
     
-    # Legacy shell-era proot-distro (v4.2.0 plugins) ships no Kali plugin.
-    # Fail fast with guidance instead of "unknown distribution 'kali'".
-    if [ "$IS_LEGACY" = "1" ] && [ "$DISTRO" = "kali" ]; then
-        echo "ERROR: Kali has no plugin in legacy proot-distro (Android 5/6)."
-        echo "Please re-run and choose Ubuntu, Debian or Arch instead."
-        read -p "Press Enter to return to menu..."
-        show_menu
-        return
-    fi
-
     echo "[*] Installing $DISTRO (as $INSTANCE_NAME)..."
     verify_proot_distro_plugin "$DISTRO" || {
         read -p "Press Enter to return to menu..."
@@ -819,6 +854,34 @@ install_linux() {
             if [ "$INSTALL_NEOFETCH" == "1" ]; then SELECTED_PKGS="$SELECTED_PKGS neofetch"; fi
             if [ "$INSTALL_VSCODE" == "1" ]; then SELECTED_PKGS="$SELECTED_PKGS vscode"; fi
             ;;
+        alpine)
+            # Alpine (musl) - verified working on Android 5/6 kernel 3.10.
+            # Package names verified against edge/aarch64 APKINDEX.
+            # NOTE: no LXDE meta / startlxde (remapped to xfce4 above),
+            # no neofetch (use fastfetch), no VS Code build (skipped).
+            UPDATE_CMD="apk update && apk upgrade"
+            INSTALL_CMD="apk add"
+            XFCE_PKG="xfce4 xfce4-terminal dbus"
+            LXDE_PKG="xfce4 xfce4-terminal dbus"
+            MATE_PKG="mate-desktop mate-session-manager marco mate-settings-daemon dbus"
+            VNC_PKG="tigervnc expect"
+            # shadow=useradd, bash=guest login shell (Alpine base lacks both)
+            SUDO_PKG="sudo shadow bash"
+            SELECTED_PKGS=""
+            if [ "$INSTALL_PYTHON" == "1" ]; then SELECTED_PKGS="$SELECTED_PKGS python3"; fi
+            if [ "$INSTALL_GIT" == "1" ]; then SELECTED_PKGS="$SELECTED_PKGS git"; fi
+            if [ "$INSTALL_NODEJS" == "1" ]; then SELECTED_PKGS="$SELECTED_PKGS nodejs"; fi
+            if [ "$INSTALL_CURL" == "1" ]; then SELECTED_PKGS="$SELECTED_PKGS curl"; fi
+            if [ "$INSTALL_WGET" == "1" ]; then SELECTED_PKGS="$SELECTED_PKGS wget"; fi
+            if [ "$INSTALL_FIREFOX" == "1" ]; then SELECTED_PKGS="$SELECTED_PKGS firefox"; fi
+            if [ "$INSTALL_CHROMIUM" == "1" ]; then SELECTED_PKGS="$SELECTED_PKGS chromium"; fi
+            if [ "$INSTALL_LIBREOFFICE" == "1" ]; then SELECTED_PKGS="$SELECTED_PKGS libreoffice"; fi
+            if [ "$INSTALL_VLC" == "1" ]; then SELECTED_PKGS="$SELECTED_PKGS vlc"; fi
+            if [ "$INSTALL_GIMP" == "1" ]; then SELECTED_PKGS="$SELECTED_PKGS gimp"; fi
+            if [ "$INSTALL_HTOP" == "1" ]; then SELECTED_PKGS="$SELECTED_PKGS htop"; fi
+            if [ "$INSTALL_NEOFETCH" == "1" ]; then SELECTED_PKGS="$SELECTED_PKGS fastfetch"; fi
+            if [ "$INSTALL_VSCODE" == "1" ]; then echo "[!] VS Code has no Alpine build, skipping."; fi
+            ;;
     esac
 
     # Save the configuration for dynamic boot!
@@ -969,7 +1032,13 @@ EOF
     fi
     
     echo "[*] Executing setup inside $INSTANCE_NAME (this will take a while)..."
-    proot-distro login "$INSTANCE_NAME" --shared-tmp -- bash /tmp/gui_setup_$$.sh
+    # Alpine base ships busybox sh only: pre-install bash/sudo/shadow via sh
+    # first, otherwise the 'bash /tmp/...' setup invocation cannot start.
+    if [ "$DISTRO" == "alpine" ]; then
+        echo "[*] Bootstrapping Alpine base tools (bash, sudo, shadow)..."
+        proot-distro login $(pd_login_flags) "$INSTANCE_NAME" -- sh -c "apk update && apk add bash sudo shadow"
+    fi
+    proot-distro login $(pd_login_flags) "$INSTANCE_NAME" --shared-tmp -- bash /tmp/gui_setup_$$.sh
     
     echo "[*] Setting up Home-Screen Widget Integration..."
     mkdir -p ~/.shortcuts
@@ -1010,6 +1079,15 @@ else
     SERVER="none"
 fi
 
+# Old proot (frozen Android 5 repos) has no --sysvipc, but proot-distro
+# login passes it by default -> opt out when the combination requires it.
+NO_SYSVIPC=""
+if ! proot --help 2>&1 | grep -q "sysvipc"; then
+    if [ -f "$PREFIX/bin/proot-distro" ] && grep -q "no-sysvipc" "$PREFIX/bin/proot-distro" 2>/dev/null; then
+        NO_SYSVIPC="--no-sysvipc"
+    fi
+fi
+
 echo "Starting PulseAudio..."
 if command -v pulseaudio >/dev/null 2>&1; then
     pulseaudio --start --load="module-native-protocol-tcp auth-ip-acl=127.0.0.1 auth-anonymous=1" --exit-idle-time=-1 2>/dev/null || echo "[!] PulseAudio not available on this device, continuing without audio."
@@ -1035,19 +1113,19 @@ if [ "$SERVER" == "x11" ]; then
     sleep 2
     echo "Starting $DISTRO as 'user'..."
     if [ "$DE" == "xfce4" ]; then
-        nohup proot-distro login $DISTRO --user user --shared-tmp -- bash -c "export PULSE_SERVER=127.0.0.1; export DISPLAY=:1; export GALLIUM_DRIVER=virpipe; export MESA_GL_VERSION_OVERRIDE=4.0; startxfce4" >/dev/null 2>&1 &
+        nohup proot-distro login $NO_SYSVIPC $DISTRO --user user --shared-tmp -- bash -c "export PULSE_SERVER=127.0.0.1; export DISPLAY=:1; export GALLIUM_DRIVER=virpipe; export MESA_GL_VERSION_OVERRIDE=4.0; startxfce4" >/dev/null 2>&1 &
     elif [ "$DE" == "lxde" ]; then
-        nohup proot-distro login $DISTRO --user user --shared-tmp -- bash -c "export PULSE_SERVER=127.0.0.1; export DISPLAY=:1; export GALLIUM_DRIVER=virpipe; export MESA_GL_VERSION_OVERRIDE=4.0; startlxde" >/dev/null 2>&1 &
+        nohup proot-distro login $NO_SYSVIPC $DISTRO --user user --shared-tmp -- bash -c "export PULSE_SERVER=127.0.0.1; export DISPLAY=:1; export GALLIUM_DRIVER=virpipe; export MESA_GL_VERSION_OVERRIDE=4.0; startlxde" >/dev/null 2>&1 &
     elif [ "$DE" == "mate" ]; then
-        nohup proot-distro login $DISTRO --user user --shared-tmp -- bash -c "export PULSE_SERVER=127.0.0.1; export DISPLAY=:1; export GALLIUM_DRIVER=virpipe; export MESA_GL_VERSION_OVERRIDE=4.0; dbus-launch --exit-with-session mate-session" >/dev/null 2>&1 &
+        nohup proot-distro login $NO_SYSVIPC $DISTRO --user user --shared-tmp -- bash -c "export PULSE_SERVER=127.0.0.1; export DISPLAY=:1; export GALLIUM_DRIVER=virpipe; export MESA_GL_VERSION_OVERRIDE=4.0; dbus-launch --exit-with-session mate-session" >/dev/null 2>&1 &
     fi
 elif [ "$SERVER" == "vnc" ]; then
     echo "Starting VNC Server..."
     if [ -z "$RESOLUTION" ]; then RESOLUTION="1280x720"; fi
-    proot-distro login $DISTRO --user user --shared-tmp -- bash -c "export PULSE_SERVER=127.0.0.1; export GALLIUM_DRIVER=virpipe; export MESA_GL_VERSION_OVERRIDE=4.0; vncserver -geometry $RESOLUTION :1"
+    proot-distro login $NO_SYSVIPC $DISTRO --user user --shared-tmp -- bash -c "export PULSE_SERVER=127.0.0.1; export GALLIUM_DRIVER=virpipe; export MESA_GL_VERSION_OVERRIDE=4.0; vncserver -geometry $RESOLUTION :1"
 else
     echo "Starting $DISTRO CLI as 'user'..."
-    proot-distro login $DISTRO --user user --shared-tmp
+    proot-distro login $NO_SYSVIPC $DISTRO --user user --shared-tmp
 fi
 EOF
     chmod +x $PREFIX/bin/start-linux
@@ -1081,6 +1159,13 @@ else
     SERVER="none"
 fi
 
+NO_SYSVIPC=""
+if ! proot --help 2>&1 | grep -q "sysvipc"; then
+    if [ -f "$PREFIX/bin/proot-distro" ] && grep -q "no-sysvipc" "$PREFIX/bin/proot-distro" 2>/dev/null; then
+        NO_SYSVIPC="--no-sysvipc"
+    fi
+fi
+
 echo "Stopping PulseAudio..."
 if command -v pulseaudio >/dev/null 2>&1; then
     pulseaudio -k 2>/dev/null || true
@@ -1096,7 +1181,7 @@ if [ "$SERVER" == "x11" ]; then
     pkill -f termux-x11 2>/dev/null || true
 elif [ "$SERVER" == "vnc" ]; then
     echo "Stopping VNC Server..."
-    proot-distro login $DISTRO --user user --shared-tmp -- bash -c "vncserver -kill :1" 2>/dev/null || true
+    proot-distro login $NO_SYSVIPC $DISTRO --user user --shared-tmp -- bash -c "vncserver -kill :1" 2>/dev/null || true
 fi
 EOF
     chmod +x $PREFIX/bin/stop-linux
