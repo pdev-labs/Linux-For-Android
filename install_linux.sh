@@ -1072,26 +1072,44 @@ usage() {
 ask_password() {
     _prompt="${SUDO_PROMPT:-[sudo] password for ${USER:-user}: }"
     # Prefer /dev/tty so piped stdin is never swallowed as a password.
-    # Probe usability with a real redirect in a subshell: -r/-w tests lie
-    # on systems without a controlling terminal, and a bare failed
+    # Probe usability with a real redirect in a subshell: bare -r/-w tests
+    # lie on systems without a controlling terminal, and a bare failed
     # redirect prints noise outside 2>/dev/null.
     if ( printf '%s' "$_prompt" > /dev/tty ) 2>/dev/null; then
-        if IFS= read -rs _pw </dev/tty 2>/dev/null; then
-            printf '\n' > /dev/tty 2>/dev/null
-            return 0
-        fi
-        # /dev/tty accepted the prompt but would not yield input;
-        # fall through to the stdin check below instead of burning retries.
-    fi
-    if [ -t 0 ]; then
+        _in=/dev/tty
+    elif [ -t 0 ]; then
         printf '%s' "$_prompt" >&2
-        IFS= read -rs _pw || return 1
-        printf '\n' >&2
-        return 0
+        _in=stdin
     else
         echo "sudo: no tty present, cannot ask for password" >&2
         return 1
     fi
+    # Silent input via stty, not 'read -s': -s is a bashism that dash
+    # (Debian /bin/sh) rejects with 'Illegal option'. stty ships with
+    # coreutils and busybox alike.
+    if command -v stty >/dev/null 2>&1; then
+        if [ "$_in" = stdin ]; then
+            _old="$(stty -g 2>/dev/null)"
+            stty -echo 2>/dev/null
+            IFS= read -r _pw
+            _rc=$?
+            if [ -n "$_old" ]; then stty "$_old" 2>/dev/null; else stty echo 2>/dev/null; fi
+            printf '\n' >&2
+        else
+            _old="$(stty -g < /dev/tty 2>/dev/null)"
+            stty -echo < /dev/tty 2>/dev/null
+            IFS= read -r _pw < /dev/tty
+            _rc=$?
+            if [ -n "$_old" ]; then stty "$_old" < /dev/tty 2>/dev/null; else stty echo < /dev/tty 2>/dev/null; fi
+            printf '\n' > /dev/tty 2>/dev/null
+        fi
+    else
+        # Last resort: password echoes. Better than nothing.
+        if [ "$_in" = stdin ]; then IFS= read -r _pw || return 1
+        else IFS= read -r _pw < /dev/tty || return 1; fi
+        _rc=0
+    fi
+    return $_rc
 }
 
 SUDO_TARGET="root"
