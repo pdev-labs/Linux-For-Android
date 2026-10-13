@@ -1182,7 +1182,12 @@ if [ "$SERVER" == "x11" ] || [ "$SERVER" == "vnc" ]; then
     elif [ "$MODE_CHOICE" == "3" ]; then MODE="user"
     fi
 else
-    MODE="root"
+    echo ""
+    echo "No desktop installed (CLI only)."
+    echo "1) Root terminal (default, admin)"
+    echo "2) User terminal ('user' account)"
+    read -p "Select [1-2]: " MODE_CHOICE
+    if [ "$MODE_CHOICE" == "2" ]; then MODE="user"; else MODE="root"; fi
 fi
 
 if [ "$MODE" == "root" ]; then
@@ -1345,7 +1350,8 @@ EOF
     echo ""
     echo "========================================="
     echo "Installation complete!"
-    echo "CLI (start-linux) runs as guest root: install packages directly"
+    echo "start-linux / terminal-linux ask each boot: root terminal"
+    echo "(default, full admin) or user terminal. Install packages directly"
     echo "(apk add / apt install ...). sudo does NOT work inside proot on"
     echo "Android (NO_NEW_PRIVS) and is not needed - you own every file."
     echo "GUI sessions run as 'user' (VNC password: ubuntu)."

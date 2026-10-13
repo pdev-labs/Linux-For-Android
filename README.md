@@ -106,8 +106,14 @@ This configuration was tested end-to-end on Android 5.1.1 (kernel 3.10, aarch64)
   ~35 MB, Debian ~150 MB plus package cache).
 
 ### 4. Day-to-day notes
-- CLI logs in as guest **root**: `apk add` (Alpine) / `apt install` (Debian)
-  directly — never `sudo`/`su` (impossible inside proot, see below).
+- `start-linux` / `terminal-linux` always ask: **root** or **user** terminal.
+  Root is the default; pick user when you want the restricted-feeling shell.
+- Install packages directly (`apk add` / `apt install`) — never `sudo`/`su`.
+  From EITHER terminal you CAN: install/remove packages, edit any file,
+  configure services. You CANNOT anywhere in proot: `sudo`/`su` or user
+  switching (kernel `NO_NEW_PRIVS` flag — setuid can never work), `ping` /
+  raw sockets, `mount`. The user shell is not restricted: it owns every
+  file, so elevation is simply unnecessary.
 - On Debian bullseye the installer already points `bullseye-security` at
   `archive.debian.org` (the suite is EOL and pruned from the main mirror).
 - `fastfetch` does not exist in bullseye — use `neofetch`.
@@ -127,7 +133,8 @@ start-linux
 *(If you installed multiple OSs, it will automatically pop up a menu asking which one you want to boot!)*
 If the install has a GUI, `start-linux` asks what you want: full desktop,
 **root terminal only**, or **user terminal only** (no display/audio servers
-started in terminal modes). CLI-only installs boot straight to root.
+started in terminal modes). CLI-only installs ask root vs user terminal.
+Terminal choices default to root when you just press Enter (script-safe).
 
 ### Quick terminal without servers
 ```bash
@@ -139,7 +146,8 @@ Handy for quick admin work and as a Termux:Widget shortcut (auto-created).
 
 ### Default Credentials & Privileges
 - **GUI sessions run as:** `user` (VNC password: `ubuntu`)
-- **CLI (`start-linux`) runs as guest root** — install packages directly
+- **`start-linux` / `terminal-linux` ask every time:** **root** terminal
+  (default, full admin) or **user** terminal. Install packages directly
   (`apk add` on Alpine, `apt install` on Debian/Ubuntu, …). Never use `sudo`.
 - **Why no sudo?** Android app processes carry the `NO_NEW_PRIVS` flag and
   proot cannot grant real root, so `sudo`/`su` can never work inside proot
