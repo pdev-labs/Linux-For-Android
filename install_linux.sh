@@ -803,7 +803,7 @@ install_linux() {
             LXDE_PKG="lxde dbus-x11"
             MATE_PKG="mate-desktop-environment dbus-x11"
             VNC_PKG="tigervnc-standalone-server expect"
-            SUDO_PKG="sudo"
+            SUDO_PKG=""
             SELECTED_PKGS=""
             if [ "$INSTALL_PYTHON" == "1" ]; then SELECTED_PKGS="$SELECTED_PKGS python3"; fi
             if [ "$INSTALL_GIT" == "1" ]; then SELECTED_PKGS="$SELECTED_PKGS git"; fi
@@ -827,7 +827,7 @@ install_linux() {
             LXDE_PKG="lxde dbus"
             MATE_PKG="mate dbus"
             VNC_PKG="tigervnc expect"
-            SUDO_PKG="sudo"
+            SUDO_PKG=""
             SELECTED_PKGS=""
             if [ "$INSTALL_PYTHON" == "1" ]; then SELECTED_PKGS="$SELECTED_PKGS python"; fi
             if [ "$INSTALL_GIT" == "1" ]; then SELECTED_PKGS="$SELECTED_PKGS git"; fi
@@ -850,7 +850,7 @@ install_linux() {
             LXDE_PKG="lxde-common lxsession dbus-x11"
             MATE_PKG="mate-desktop dbus-x11"
             VNC_PKG="tigervnc-server expect"
-            SUDO_PKG="sudo"
+            SUDO_PKG=""
             SELECTED_PKGS=""
             if [ "$INSTALL_PYTHON" == "1" ]; then SELECTED_PKGS="$SELECTED_PKGS python3"; fi
             if [ "$INSTALL_GIT" == "1" ]; then SELECTED_PKGS="$SELECTED_PKGS git"; fi
@@ -873,7 +873,7 @@ install_linux() {
             LXDE_PKG="patterns-lxde-lxde dbus-1-x11"
             MATE_PKG="patterns-mate-mate dbus-1-x11"
             VNC_PKG="tigervnc expect"
-            SUDO_PKG="sudo"
+            SUDO_PKG=""
             SELECTED_PKGS=""
             if [ "$INSTALL_PYTHON" == "1" ]; then SELECTED_PKGS="$SELECTED_PKGS python3"; fi
             if [ "$INSTALL_GIT" == "1" ]; then SELECTED_PKGS="$SELECTED_PKGS git"; fi
@@ -896,7 +896,7 @@ install_linux() {
             LXDE_PKG="lxde dbus"
             MATE_PKG="mate dbus"
             VNC_PKG="tigervnc expect"
-            SUDO_PKG="sudo"
+            SUDO_PKG=""
             SELECTED_PKGS=""
             if [ "$INSTALL_PYTHON" == "1" ]; then SELECTED_PKGS="$SELECTED_PKGS python3"; fi
             if [ "$INSTALL_GIT" == "1" ]; then SELECTED_PKGS="$SELECTED_PKGS git"; fi
@@ -923,8 +923,11 @@ install_linux() {
             LXDE_PKG="xfce4 xfce4-terminal dbus"
             MATE_PKG="mate-desktop mate-session-manager marco mate-settings-daemon dbus"
             VNC_PKG="tigervnc expect"
-            # shadow=useradd, bash=guest login shell (Alpine base lacks both)
-            SUDO_PKG="sudo shadow bash"
+            # shadow=useradd, bash=guest login shell (Alpine base lacks both).
+            # No real sudo package: setuid elevation is impossible inside
+            # proot (Android NO_NEW_PRIVS); setup installs a ritual-only
+            # sudo shim instead (see below).
+            SUDO_PKG="shadow bash"
             SELECTED_PKGS=""
             if [ "$INSTALL_PYTHON" == "1" ]; then SELECTED_PKGS="$SELECTED_PKGS python3"; fi
             if [ "$INSTALL_GIT" == "1" ]; then SELECTED_PKGS="$SELECTED_PKGS git"; fi
@@ -1028,7 +1031,7 @@ EOF
     fi
     
     cat << 'EOF' >> "$SETUP_SCRIPT"
-echo " -> Creating standard 'user' account with sudo privileges..."
+echo " -> Creating standard 'user' account (plus ritual-only sudo shim)..."
 useradd -m -s /bin/bash -p '$6$WzXfA2zKd3ZUTGMN$omHMZQjXwzhQsoaJXQCzZdu5nl4ZQGSOyl9/BE.G6alqJX4py7SyIuk9No1SBEjxYYEXcp.2isX2aSzlrmX22.' user || true
 usermod -p '$6$WzXfA2zKd3ZUTGMN$omHMZQjXwzhQsoaJXQCzZdu5nl4ZQGSOyl9/BE.G6alqJX4py7SyIuk9No1SBEjxYYEXcp.2isX2aSzlrmX22.' user || true
 echo "user ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
@@ -1044,6 +1047,125 @@ mkdir -p /root/storage
 if [ -d /data/data/com.termux/files/home/storage ]; then
     ln -sf /data/data/com.termux/files/home/storage/* /root/storage/
 fi
+
+echo " -> Installing ritual-only sudo shim (/usr/local/bin/sudo)..."
+cat << 'SUDO' > /usr/local/bin/sudo
+#!/bin/sh
+# placebo-sudo for proot-on-Android (installed by Linux-for-Android manager).
+#
+# Real privilege elevation is IMPOSSIBLE inside proot on Android: app
+# processes carry the irreversible kernel NO_NEW_PRIVS flag, so setuid
+# binaries (real sudo/su) can never elevate - on any device. Nested
+# re-execution from inside the guest is blocked too (host binaries cannot
+# link under the outer proot session). It is also UNNECESSARY here: every
+# guest file is already owned by you.
+#
+# So this shim only performs the familiar password ritual (it accepts the
+# install-time user password), then runs your command unchanged and passes
+# through its exit status.
+SUDO_SHIM_PASSWORD="ubuntu"
+
+usage() {
+    echo "usage: sudo [-u user] [-i|-s] [-E] [-H] [-n] [-v] [-k] [-p prompt] [command [args...]]" >&2
+}
+
+ask_password() {
+    _prompt="${SUDO_PROMPT:-[sudo] password for ${USER:-user}: }"
+    # Prefer /dev/tty so piped stdin is never swallowed as a password.
+    # Probe usability with a real redirect in a subshell: -r/-w tests lie
+    # on systems without a controlling terminal, and a bare failed
+    # redirect prints noise outside 2>/dev/null.
+    if ( printf '%s' "$_prompt" > /dev/tty ) 2>/dev/null; then
+        if IFS= read -rs _pw </dev/tty 2>/dev/null; then
+            printf '\n' > /dev/tty 2>/dev/null
+            return 0
+        fi
+        # /dev/tty accepted the prompt but would not yield input;
+        # fall through to the stdin check below instead of burning retries.
+    fi
+    if [ -t 0 ]; then
+        printf '%s' "$_prompt" >&2
+        IFS= read -rs _pw || return 1
+        printf '\n' >&2
+        return 0
+    else
+        echo "sudo: no tty present, cannot ask for password" >&2
+        return 1
+    fi
+}
+
+SUDO_TARGET="root"
+RUN_SHELL=0
+NONINTERACTIVE=0
+KEEP_ENV=0
+CUSTOM_PROMPT=""
+VALIDATE_ONLY=0
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --) shift; break ;;
+        -u) SUDO_TARGET="$2"; shift 2 ;;
+        -u*) SUDO_TARGET="${1#-u}"; shift ;;
+        -i|-s) RUN_SHELL=1; shift ;;
+        -E) KEEP_ENV=1; shift ;;
+        -H) shift ;;
+        -A) shift ;;
+        -n) NONINTERACTIVE=1; shift ;;
+        -v) VALIDATE_ONLY=1; shift ;;
+        -k|-K) exit 0 ;;
+        -p) CUSTOM_PROMPT="$2"; shift 2 ;;
+        -p*) CUSTOM_PROMPT="${1#-p}"; shift ;;
+        -V|--version) echo "placebo-sudo 1.0 (proot-on-Android, ritual only)"; exit 0 ;;
+        -h|--help) usage; exit 0 ;;
+        -*) echo "sudo: unknown option: $1" >&2; usage; exit 1 ;;
+        *) break ;;
+    esac
+done
+[ -n "$CUSTOM_PROMPT" ] && SUDO_PROMPT="$CUSTOM_PROMPT"
+
+_self="$(id -un 2>/dev/null)"
+if [ -n "$SUDO_TARGET" ] && [ "$SUDO_TARGET" != "root" ] && [ "$SUDO_TARGET" != "$_self" ]; then
+    echo "sudo: cannot switch to user '$SUDO_TARGET' inside proot (setuid is blocked by Android NO_NEW_PRIVS)" >&2
+    exit 1
+fi
+
+if [ "$NONINTERACTIVE" -eq 1 ]; then
+    echo "sudo: a password is required" >&2
+    exit 1
+fi
+
+tries=0
+authed=0
+while [ "$tries" -lt 3 ]; do
+    if ! ask_password; then authed=-1; break; fi
+    if [ "$_pw" = "$SUDO_SHIM_PASSWORD" ]; then authed=1; break; fi
+    tries=$((tries + 1))
+    [ "$tries" -lt 3 ] && echo "Sorry, try again." >&2
+done
+unset _pw
+if [ "$authed" -eq 1 ]; then
+    :
+elif [ "$authed" = "-1" ]; then
+    # ask_password already explained the problem (e.g. no tty); stay quiet.
+    exit 1
+else
+    echo "sudo: 3 incorrect password attempts" >&2
+    exit 1
+fi
+
+export SUDO_USER="${USER:-$_self}"
+export SUDO_COMMAND="$*"
+
+if [ "$VALIDATE_ONLY" -eq 1 ]; then exit 0; fi
+if [ "$RUN_SHELL" -eq 1 ] || [ $# -eq 0 ]; then
+    if [ $# -eq 0 ] && [ "$RUN_SHELL" -eq 0 ]; then usage; exit 1; fi
+    if [ "$KEEP_ENV" -ne 1 ]; then HOME=/root; export HOME; fi
+    exec "${SHELL:-/bin/sh}"
+fi
+if [ "$KEEP_ENV" -ne 1 ]; then HOME=/root; export HOME; fi
+exec "$@"
+SUDO
+chmod +x /usr/local/bin/sudo
 EOF
     
     if [ "$INSTALL_IDE" == "1" ]; then

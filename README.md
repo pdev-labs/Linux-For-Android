@@ -148,7 +148,11 @@ Handy for quick admin work and as a Termux:Widget shortcut (auto-created).
 - **GUI sessions run as:** `user` (VNC password: `ubuntu`)
 - **`start-linux` / `terminal-linux` ask every time:** **root** terminal
   (default, full admin) or **user** terminal. Install packages directly
-  (`apk add` on Alpine, `apt install` on Debian/Ubuntu, …). Never use `sudo`.
+  (`apk add` on Alpine, `apt install` on Debian/Ubuntu, …).
+- **`sudo` is a ritual-only shim** (`/usr/local/bin/sudo`, password `ubuntu`):
+  it asks for the password, then runs your command unchanged. Real setuid
+  elevation is impossible inside proot (see below) — and unnecessary, since
+  you already own every file.
 - **Why no sudo?** Android app processes carry the `NO_NEW_PRIVS` flag and
   proot cannot grant real root, so `sudo`/`su` can never work inside proot
   on any device. You already own every file, so elevation is unnecessary.
@@ -174,12 +178,18 @@ Starting in Android 12, Android limits background child processes. Since a Linux
 *(For Android 12/13, search online for "Termux ADB disable phantom process" to apply the fix via a PC).*
 
 ### 2. `sudo` / `su` fail inside the distro ("no new privileges", wrong ownership)
-**Fix:** Don't use them — they can never work inside proot on Android. App
-processes inherit the kernel `NO_NEW_PRIVS` flag (irreversible), and proot's
-uid mapping makes `sudo.conf` appear wrongly owned. You own every file in
-the guest, so run admin commands directly as the CLI root shell
-(`apk add`, `apt install`, …). The `user` account exists for GUI sessions,
-which don't need elevation. `su` fails for the same reason.
+The real binaries can never work here, so every install now ships a
+**ritual-only `sudo` shim** instead (no real `sudo` package is installed):
+- `sudo <cmd>` asks for the install-time password (`ubuntu`, 3 tries like
+  the real thing) and then runs the command with your current identity,
+  passing through its exit status. Flags `-i`/`-s` (shell), `-u` (only
+  yourself/root), `-v`, `-n`, `-p`, `-E` behave sanely; switching to any
+  other account is refused with an explanation.
+- **Why?** Android app processes carry the `NO_NEW_PRIVS` flag and proot
+  cannot grant real root, so `sudo`/`su` can never elevate inside proot on
+  any device (verified: even nested re-execution fails, since no host
+  binary can link under the outer session). You already own every file, so
+  elevation is unnecessary — the shim exists so muscle memory keeps working.
 
 ### 3. Scary `apt` errors during installation
 While installing packages, you might see red errors like:
