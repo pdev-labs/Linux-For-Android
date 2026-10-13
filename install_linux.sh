@@ -1072,12 +1072,16 @@ else
 fi
 
 CONF_FILE="$PREFIX/var/lib/proot-distro/installed-rootfs/$DISTRO/etc/termux-linux-manager.conf"
+INSTANCE_NAME="$DISTRO"
 if [ -f "$CONF_FILE" ]; then
     source "$CONF_FILE"
 else
     DE="none"
     SERVER="none"
 fi
+# The conf stores the BASE distro name in $DISTRO; restore the instance
+# (directory) name or every login targets a non-installed alias.
+DISTRO="$INSTANCE_NAME"
 
 # Old proot (frozen Android 5 repos) has no --sysvipc, but proot-distro
 # login passes it by default -> opt out when the combination requires it.
@@ -1153,11 +1157,13 @@ else
 fi
 
 CONF_FILE="$PREFIX/var/lib/proot-distro/installed-rootfs/$DISTRO/etc/termux-linux-manager.conf"
+INSTANCE_NAME="$DISTRO"
 if [ -f "$CONF_FILE" ]; then
     source "$CONF_FILE"
 else
     SERVER="none"
 fi
+DISTRO="$INSTANCE_NAME"
 
 NO_SYSVIPC=""
 if ! proot --help 2>&1 | grep -q "sysvipc"; then
