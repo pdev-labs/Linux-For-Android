@@ -215,7 +215,7 @@ require_proot_distro() {
 }
 
 show_menu() {
-    clear
+    clear 2>/dev/null || true
     echo "========================================="
     echo "        Linux for Termux Manager         "
     echo "========================================="
@@ -306,7 +306,7 @@ select_installed_instance() {
 }
 
 system_dashboard() {
-    clear
+    clear 2>/dev/null || true
     echo "========================================="
     echo "         SYSTEM DASHBOARD                "
     echo "========================================="
@@ -371,8 +371,8 @@ start_ssh() {
         return
     fi
     sshd 2>/dev/null || true
-    IP=$(ifconfig 2>/dev/null | grep -E 'inet .*broadcast' | awk '{print $2}' | head -n 1)
-    if [ -z "$IP" ]; then IP=$(ifconfig 2>/dev/null | grep 'inet ' | grep -v '127.0.0.1' | awk '{print $2}' | head -n 1); fi
+    IP=$(ifconfig 2>/dev/null | grep -E 'inet .*broadcast' | awk '{print $2}' | head -n 1 || true)
+    if [ -z "$IP" ]; then IP=$(ifconfig 2>/dev/null | grep 'inet ' | grep -v '127.0.0.1' | awk '{print $2}' | head -n 1 || true); fi
     if [ -z "$IP" ]; then IP="YOUR_PHONE_IP"; fi
     echo "========================================="
     echo "SSH Server is running!"
