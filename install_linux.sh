@@ -216,6 +216,13 @@ pd_login_flags() {
     fi
 }
 
+# v4 shell builds (legacy fallback) vs v5 Python builds have different
+# backup/restore CLI: v4 'restore' takes a tarball PATH and restores the
+# embedded instance name; only v5 understands '--input <file>' + rename.
+pd_is_v4() {
+    [ -f "$PREFIX/bin/proot-distro" ] && grep -q "DISTRO_PLUGINS_DIR" "$PREFIX/bin/proot-distro" 2>/dev/null
+}
+
 require_proot_distro() {
     if command -v proot-distro >/dev/null 2>&1; then
         return 0
@@ -425,7 +432,12 @@ restore_linux() {
         echo "[*] Restoring $INSTANCE_NAME..."
         read -p "Are you sure? This overwrites current data [y/N]: " CONFIRM
         if [[ "$CONFIRM" =~ ^[Yy]$ ]]; then
-            proot-distro restore "$INSTANCE_NAME" --input ~/${INSTANCE_NAME}-backup.tar.gz
+            if pd_is_v4; then
+                echo "[*] (v4 build: restores the instance name stored in the backup)"
+                proot-distro restore ~/${INSTANCE_NAME}-backup.tar.gz
+            else
+                proot-distro restore "$INSTANCE_NAME" --input ~/${INSTANCE_NAME}-backup.tar.gz
+            fi
             echo "Restore complete!"
         fi
     fi
@@ -469,14 +481,25 @@ import_distro() {
         echo "and is placed inside your phone's 'Downloads' folder."
         echo "========================================="
     else
-        read -p "Enter new instance name for this import (e.g. my-ubuntu): " INSTANCE_NAME
-        echo "[*] Importing $INSTANCE_NAME from Downloads..."
-        read -p "Are you sure? This will completely overwrite any current $INSTANCE_NAME installation [y/N]: " CONFIRM
-        if [[ "$CONFIRM" =~ ^[Yy]$ ]]; then
-            proot-distro restore "$INSTANCE_NAME" --input ~/storage/downloads/$IMPORT_FILE
-            echo "========================================="
-            echo "Import complete! You can now use start-linux to boot your friend's setup."
-            echo "========================================="
+        if pd_is_v4; then
+            echo "[*] (v4 build: imports under the instance name stored in the file)"
+            read -p "Are you sure? This overwrites that instance [y/N]: " CONFIRM
+            if [[ "$CONFIRM" =~ ^[Yy]$ ]]; then
+                proot-distro restore ~/storage/downloads/$IMPORT_FILE
+                echo "========================================="
+                echo "Import complete! You can now use start-linux to boot it."
+                echo "========================================="
+            fi
+        else
+            read -p "Enter new instance name for this import (e.g. my-ubuntu): " INSTANCE_NAME
+            echo "[*] Importing $INSTANCE_NAME from Downloads..."
+            read -p "Are you sure? This will completely overwrite any current $INSTANCE_NAME installation [y/N]: " CONFIRM
+            if [[ "$CONFIRM" =~ ^[Yy]$ ]]; then
+                proot-distro restore "$INSTANCE_NAME" --input ~/storage/downloads/$IMPORT_FILE
+                echo "========================================="
+                echo "Import complete! You can now use start-linux to boot your friend's setup."
+                echo "========================================="
+            fi
         fi
     fi
     read -p "Press Enter to continue..."
