@@ -8,6 +8,165 @@ if [ -z "$PREFIX" ]; then
     exit 1
 fi
 
+# ============================================================
+# Universal Android compatibility layer (Android 5 -> 15)
+# Oppo A37fw (Android 5.1.1, SDK 22, 32-bit ARM) has a frozen
+# Termux repo where 'proot-distro' / 'virglrenderer-android'
+# do not exist as packages. Detect legacy devices and fall
+# back gracefully instead of aborting (set -e).
+# ============================================================
+detect_environment() {
+    ANDROID_SDK=0
+    if command -v getprop >/dev/null 2>&1; then
+        ANDROID_SDK=$(getprop ro.build.version.sdk 2>/dev/null || echo 0)
+    fi
+    # Strip anything non-numeric (some ROMs return extra text)
+    ANDROID_SDK=$(echo "$ANDROID_SDK" | tr -cd '0-9')
+    if [ -z "$ANDROID_SDK" ]; then ANDROID_SDK=0; fi
+
+    ARCH=$(uname -m 2>/dev/null || echo unknown)
+
+    IS_LEGACY=0
+    # Termux current builds require Android 7+ (SDK 24).
+    # Anything below that uses archived repos with missing packages.
+    if [ "$ANDROID_SDK" -gt 0 ] && [ "$ANDROID_SDK" -lt 24 ]; then
+        IS_LEGACY=1
+    fi
+    # Non-Android shells (PC debugging) report SDK 0 -> treat as modern
+    # so script syntax can still be tested.
+
+    IS_32BIT_ARM=0
+    case "$ARCH" in
+        armv7*|armv6*|armhf|arm)
+            IS_32BIT_ARM=1
+            ;;
+    esac
+}
+
+print_device_info() {
+    detect_environment
+    echo "[*] Device detected: arch=$ARCH | android_sdk=$ANDROID_SDK | legacy=$IS_LEGACY"
+    if [ "$IS_LEGACY" = "1" ]; then
+        echo "----------------------------------------------------------------"
+        echo " LEGACY MODE: Android 5/6 detected (SDK $ANDROID_SDK)."
+        echo " - Termux:X11 and VirGL GPU acceleration are NOT available."
+        echo "   VNC (software rendering) will be used automatically."
+        echo " - 'proot-distro' package may be missing. The script will"
+        echo "   try to install it from source (pure bash + proot)."
+        echo " - Recommended distros for 32-bit ARM: Ubuntu, Debian, Kali."
+        echo "   Fedora / openSUSE / Void / Arch may lack 32-bit images."
+        echo "----------------------------------------------------------------"
+    fi
+}
+
+# Install proot-distro from GitHub when 'pkg install proot-distro'
+# fails (typical on Android 5.1.1 archived repos).
+# proot-distro is just a bash script + distro plugins, so this
+# works anywhere 'proot + wget + tar' exist.
+install_proot_distro_from_source() {
+    echo "[*] 'proot-distro' package not found. Trying source install (legacy fallback)..."
+    # set +e: every step here is best-effort, we check manually
+    set +e
+    pkg install -y proot wget tar git 2>/dev/null || pkg install proot wget tar git -y 2>/dev/null || true
+    if ! command -v proot >/dev/null 2>&1; then
+        echo "ERROR: 'proot' itself could not be installed."
+        echo "Your Termux repo seems unreachable. Try:"
+        echo "  1) Use F-Droid Termux 0.118 (last build with Android 5 support)"
+        echo "  2) Run 'termux-change-repo' and pick a working mirror"
+        echo "  3) Then re-run this script."
+        set -e
+        return 1
+    fi
+    SRC_DIR="$PREFIX/share/proot-distro-legacy"
+    rm -rf "$SRC_DIR"
+    if command -v git >/dev/null 2>&1; then
+        git clone --depth 1 https://github.com/termux/proot-distro "$SRC_DIR" 2>/dev/null
+    fi
+    # Fallback if git missing/failed: fetch tarball via wget
+    if [ ! -f "$SRC_DIR/proot-distro.sh" ]; then
+        mkdir -p "$SRC_DIR"
+        wget -qO- https://github.com/termux/proot-distro/archive/refs/heads/master.tar.gz 2>/dev/null | tar -xz -C "$PREFIX/tmp" 2>/dev/null
+        cp -r "$PREFIX/tmp"/proot-distro-master/* "$SRC_DIR"/ 2>/dev/null || true
+    fi
+    if [ -f "$SRC_DIR/proot-distro.sh" ]; then
+        mkdir -p "$PREFIX/bin"
+        cp "$SRC_DIR/proot-distro.sh" "$PREFIX/bin/proot-distro"
+        chmod +x "$PREFIX/bin/proot-distro"
+        mkdir -p "$PREFIX/etc/proot-distro"
+        cp -r "$SRC_DIR"/distro-plugins/*.sh "$PREFIX/etc/proot-distro/" 2>/dev/null || true
+        mkdir -p "$PREFIX/var/lib/proot-distro/installed-rootfs"
+        mkdir -p "$PREFIX/var/lib/proot-distro/dl-cache"
+        echo "[*] proot-distro installed from source to $PREFIX/bin/proot-distro"
+        hash -r 2>/dev/null || true
+        set -e
+        return 0
+    else
+        echo "ERROR: Could not fetch proot-distro sources (no network?)."
+        set -e
+        return 1
+    fi
+}
+
+# Resilient dependency installer. Never aborts the whole script
+# on one missing optional package (old behavior with 'set -e' did).
+ensure_dependencies() {
+    NEED_X11="$1"  # "1" if user chose Termux:X11, else "0"
+    set +e  # do NOT exit on single pkg failure here
+    echo "[*] Updating Termux packages (best effort)..."
+    pkg update -y 2>/dev/null || true
+    # NOTE: 'pkg upgrade' on EOL Android 5 repos can break things;
+    # run it but never abort on failure.
+    pkg upgrade -y 2>/dev/null || true
+
+    echo "[*] Installing core dependencies (proot, wget, pulseaudio)..."
+    pkg install -y proot wget pulseaudio 2>/dev/null || true
+    # 'proot-distro' may not exist on SDK 22 repos -> source fallback
+    if ! command -v proot-distro >/dev/null 2>&1; then
+        pkg install -y proot-distro 2>/dev/null || true
+    fi
+    if ! command -v proot-distro >/dev/null 2>&1; then
+        install_proot_distro_from_source || {
+            echo "FATAL: proot-distro unavailable. Cannot continue."
+            set -e
+            exit 1
+        }
+    fi
+
+    # virglrenderer-android = optional GPU accel, Android 7+ only.
+    # Missing on Android 5 -> silently skip, VNC will be used.
+    if [ "$IS_LEGACY" != "1" ]; then
+        echo "[*] Installing VirGL (optional, for GPU acceleration)..."
+        pkg install -y virglrenderer-android 2>/dev/null || echo "[!] virglrenderer-android unavailable, continuing without GPU acceleration."
+    else
+        echo "[*] Skipping virglrenderer-android (not available on Android 5/6)."
+    fi
+
+    if [ "$NEED_X11" = "1" ]; then
+        if [ "$IS_LEGACY" = "1" ]; then
+            echo "[!] Termux:X11 requires Android 8+. Cannot install on this device."
+        else
+            echo "[*] Installing Termux:X11 backend..."
+            pkg install -y x11-repo 2>/dev/null || true
+            pkg install -y termux-x11-nightly 2>/dev/null || echo "[!] termux-x11-nightly install failed. Use VNC instead."
+        fi
+    fi
+    set -e
+}
+
+require_proot_distro() {
+    if command -v proot-distro >/dev/null 2>&1; then
+        return 0
+    fi
+    echo "[!] proot-distro not found. Attempting legacy source install..."
+    if install_proot_distro_from_source; then
+        return 0
+    fi
+    echo "ERROR: proot-distro is required for this operation."
+    read -p "Press Enter to return to menu..."
+    show_menu
+    return 1
+}
+
 show_menu() {
     clear
     echo "========================================="
@@ -120,6 +279,17 @@ system_dashboard() {
 }
 
 audio_fixer() {
+    if ! command -v pulseaudio >/dev/null 2>&1; then
+        echo "[*] pulseaudio not found, trying to install..."
+        pkg install -y pulseaudio 2>/dev/null || true
+    fi
+    if ! command -v pulseaudio >/dev/null 2>&1; then
+        echo "ERROR: pulseaudio unavailable on this Termux repo (common on Android 5)."
+        echo "Audio inside Linux will be silent, but the desktop itself still works."
+        read -p "Press Enter to continue..."
+        show_menu
+        return
+    fi
     echo "[*] Restarting PulseAudio and clearing sockets..."
     pulseaudio -k 2>/dev/null || true
     rm -rf /data/data/com.termux/files/usr/tmp/pulse-* 2>/dev/null || true
@@ -130,6 +300,7 @@ audio_fixer() {
 }
 
 update_linux() {
+    require_proot_distro || return
     select_installed_instance
     if [ -z "$INSTANCE_NAME" ]; then return; fi
     echo "[*] Updating $INSTANCE_NAME..."
@@ -143,8 +314,16 @@ update_linux() {
 
 start_ssh() {
     echo "[*] Starting Termux SSH Server..."
-    pkg install openssh -y
-    sshd
+    if ! command -v sshd >/dev/null 2>&1; then
+        pkg install -y openssh 2>/dev/null || pkg install openssh -y || true
+    fi
+    if ! command -v sshd >/dev/null 2>&1; then
+        echo "ERROR: openssh unavailable on this repo."
+        read -p "Press Enter to continue..."
+        show_menu
+        return
+    fi
+    sshd 2>/dev/null || true
     IP=$(ifconfig 2>/dev/null | grep -E 'inet .*broadcast' | awk '{print $2}' | head -n 1)
     if [ -z "$IP" ]; then IP=$(ifconfig 2>/dev/null | grep 'inet ' | grep -v '127.0.0.1' | awk '{print $2}' | head -n 1); fi
     if [ -z "$IP" ]; then IP="YOUR_PHONE_IP"; fi
@@ -161,6 +340,7 @@ start_ssh() {
 }
 
 backup_linux() {
+    require_proot_distro || return
     select_installed_instance
     if [ -z "$INSTANCE_NAME" ]; then return; fi
     echo "[*] Backing up $INSTANCE_NAME (Internal)..."
@@ -171,6 +351,7 @@ backup_linux() {
 }
 
 restore_linux() {
+    require_proot_distro || return
     select_installed_instance
     if [ -z "$INSTANCE_NAME" ]; then return; fi
     if [ ! -f ~/${INSTANCE_NAME}-backup.tar.gz ]; then
@@ -188,6 +369,7 @@ restore_linux() {
 }
 
 export_distro() {
+    require_proot_distro || return
     select_installed_instance
     if [ -z "$INSTANCE_NAME" ]; then return; fi
     if [ ! -d ~/storage ]; then
@@ -208,6 +390,7 @@ export_distro() {
 }
 
 import_distro() {
+    require_proot_distro || return
     if [ ! -d ~/storage ]; then
         echo "[*] Requesting Android Storage Permission..."
         termux-setup-storage || true
@@ -236,6 +419,7 @@ import_distro() {
 }
 
 optimize_browser() {
+    require_proot_distro || return
     select_installed_instance
     if [ -z "$INSTANCE_NAME" ]; then return; fi
     echo ""
@@ -279,6 +463,7 @@ rm -f /usr/local/bin/chromium-browser
 }
 
 uninstall_linux() {
+    require_proot_distro || return
     select_installed_instance
     if [ -z "$INSTANCE_NAME" ]; then return; fi
     read -p "Are you sure you want to uninstall $INSTANCE_NAME? [y/N]: " CONFIRM
@@ -302,7 +487,18 @@ install_linux() {
     echo "in your Android Developer Options for a stable desktop experience."
     echo "========================================="
     echo ""
+    print_device_info
+    echo ""
     select_os_flavor
+    # 32-bit ARM warning (Oppo A37fw and similar): some images lack armv7 builds
+    if [ "$IS_32BIT_ARM" = "1" ]; then
+        case "$DISTRO" in
+            fedora|opensuse|void|archlinux)
+                echo "[!] Warning: $DISTRO may not provide 32-bit ARM (armv7) images."
+                echo "    If install fails, retry with Ubuntu, Debian or Kali."
+                ;;
+        esac
+    fi
     
     DE="none"
     SERVER="none"
@@ -318,12 +514,20 @@ install_linux() {
     if [ "$DE_CHOICE" == "1" ]; then DE="xfce4"; elif [ "$DE_CHOICE" == "2" ]; then DE="lxde"; elif [ "$DE_CHOICE" == "3" ]; then DE="mate"; else DE="none"; fi
     
     if [ "$DE" != "none" ]; then
-        echo ""
-        echo "Choose Display Server:"
-        echo "1) Termux:X11 (Hardware Acceleration, Faster)"
-        echo "2) VNC (Software Rendering, Slower)"
-        read -p "Select Server [1-2]: " SRV_CHOICE
-        if [ "$SRV_CHOICE" == "1" ]; then SERVER="x11"; else SERVER="vnc"; fi
+        # Legacy Android (5/6, SDK < 24): Termux:X11 needs Android 8+.
+        # Force VNC so install never dead-ends on Oppo A37fw-class devices.
+        if [ "$IS_LEGACY" = "1" ]; then
+            echo ""
+            echo "[*] Legacy Android detected: Termux:X11 unavailable -> using VNC."
+            SERVER="vnc"
+        else
+            echo ""
+            echo "Choose Display Server:"
+            echo "1) Termux:X11 (Hardware Acceleration, Faster)"
+            echo "2) VNC (Software Rendering, Slower)"
+            read -p "Select Server [1-2]: " SRV_CHOICE
+            if [ "$SRV_CHOICE" == "1" ]; then SERVER="x11"; else SERVER="vnc"; fi
+        fi
         
         if [ "$SERVER" == "vnc" ]; then
             echo ""
@@ -402,16 +606,10 @@ install_linux() {
         sleep 2
     fi
     
-    echo "[*] Updating Termux packages..."
-    pkg update -y && pkg upgrade -y
-    
-    echo "[*] Installing dependencies..."
-    pkg install proot-distro pulseaudio wget virglrenderer-android -y
-    
-    if [ "$SERVER" == "x11" ]; then
-        pkg install x11-repo -y
-        pkg install termux-x11-nightly -y
-    fi
+    echo "[*] Installing dependencies (universal mode, tolerates old Termux repos)..."
+    NEED_X11=0
+    if [ "$SERVER" == "x11" ]; then NEED_X11=1; fi
+    ensure_dependencies "$NEED_X11"
     
     echo "[*] Installing $DISTRO (as $INSTANCE_NAME)..."
     if proot-distro install --help 2>&1 | grep -iqE "(IMAGE:TAG|Docker image|registry)"; then
@@ -423,8 +621,8 @@ install_linux() {
             opensuse) IMAGE="opensuse/tumbleweed:latest" ;;
             void) IMAGE="ghcr.io/void-linux/void-musl:latest" ;;
             archlinux)
-                ARCH=$(uname -m)
-                if [[ "$ARCH" == *"aarch64"* || "$ARCH" == *"arm64"* || "$ARCH" == *"armv8"* ]]; then
+                CPU_ARCH=$(uname -m)
+                if [[ "$CPU_ARCH" == *"aarch64"* || "$CPU_ARCH" == *"arm64"* || "$CPU_ARCH" == *"armv8"* ]]; then
                     IMAGE="danhunsaker/archlinuxarm:latest"
                 else
                     IMAGE="archlinux/archlinux:latest"
@@ -751,12 +949,25 @@ else
 fi
 
 echo "Starting PulseAudio..."
-pulseaudio --start --load="module-native-protocol-tcp auth-ip-acl=127.0.0.1 auth-anonymous=1" --exit-idle-time=-1
+if command -v pulseaudio >/dev/null 2>&1; then
+    pulseaudio --start --load="module-native-protocol-tcp auth-ip-acl=127.0.0.1 auth-anonymous=1" --exit-idle-time=-1 2>/dev/null || echo "[!] PulseAudio not available on this device, continuing without audio."
+else
+    echo "[!] pulseaudio not installed, skipping audio (legacy device OK)."
+fi
 
 echo "Starting VirGL Server..."
-virgl_test_server_android &
+if command -v virgl_test_server_android >/dev/null 2>&1; then
+    virgl_test_server_android &
+else
+    echo "[!] virgl_test_server_android not found, continuing with software rendering (expected on Android 5/6)."
+fi
 
 if [ "$SERVER" == "x11" ]; then
+    if ! command -v termux-x11 >/dev/null 2>&1; then
+        echo "ERROR: Termux:X11 backend requested but 'termux-x11' not installed."
+        echo "This backend requires Android 8+. Re-install with VNC instead."
+        exit 1
+    fi
     echo "Starting Termux:X11..."
     termux-x11 :1 &
     sleep 2
@@ -809,10 +1020,14 @@ else
 fi
 
 echo "Stopping PulseAudio..."
-pulseaudio -k 2>/dev/null || true
+if command -v pulseaudio >/dev/null 2>&1; then
+    pulseaudio -k 2>/dev/null || true
+fi
 
 echo "Stopping VirGL Server..."
-killall virgl_test_server_android 2>/dev/null || true
+if command -v virgl_test_server_android >/dev/null 2>&1; then
+    killall virgl_test_server_android 2>/dev/null || pkill -f virgl_test_server 2>/dev/null || true
+fi
 
 if [ "$SERVER" == "x11" ]; then
     echo "Stopping Termux:X11..."
@@ -835,5 +1050,8 @@ EOF
     read -p "Press Enter to return to menu..."
     show_menu
 }
+
+# Initialise device profile once so IS_LEGACY / ARCH are set for menu ops
+detect_environment
 
 show_menu
