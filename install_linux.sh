@@ -223,6 +223,21 @@ pd_is_v4() {
     [ -f "$PREFIX/bin/proot-distro" ] && grep -q "DISTRO_PLUGINS_DIR" "$PREFIX/bin/proot-distro" 2>/dev/null
 }
 
+# Legacy devices need the bullseye plug-in (shipped in ./plugins), which
+# neither the frozen pkg build nor a clean v4.2.0 source install provides.
+deploy_legacy_plugins() {
+    [ "$IS_LEGACY" = "1" ] || return 0
+    SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+    if [ -f "$SCRIPT_DIR/plugins/bullseye.sh" ]; then
+        mkdir -p "$PREFIX/etc/proot-distro"
+        cp "$SCRIPT_DIR/plugins/bullseye.sh" "$PREFIX/etc/proot-distro/bullseye.sh"
+        chmod 600 "$PREFIX/etc/proot-distro/bullseye.sh" 2>/dev/null || true
+    else
+        echo "[!] Warning: plugins/bullseye.sh not found next to the script;"
+        echo "    legacy Debian installs will fail. Re-clone the repository."
+    fi
+}
+
 require_proot_distro() {
     if command -v proot-distro >/dev/null 2>&1; then
         return 0
@@ -589,13 +604,20 @@ install_linux() {
     fi
     # Legacy Android 5/6 runs kernel 3.10: modern glibc (>= 2.36 in
     # Debian bookworm / Ubuntu mantic / Fedora 39 / ...) dies at the
-    # first guest command (verified live). Alpine (musl) is proven OK.
+    # first guest command (verified live). Debian auto-switches to the
+    # bullseye plug-in (glibc 2.31, verified); Alpine (musl) is proven OK.
+    PD_ALIAS="$DISTRO"
     if [ "$IS_LEGACY" = "1" ]; then
         case "$DISTRO" in
             alpine) ;;
+            debian)
+                PD_ALIAS="bullseye"
+                echo "[*] Legacy Android: Debian bookworm cannot run on the 3.10 kernel;"
+                echo "    installing Debian bullseye (oldstable) instead - same apt experience."
+                ;;
             kali)
                 echo "ERROR: Kali has no plugin in legacy proot-distro (Android 5/6)."
-                echo "Please re-run and choose Alpine (recommended), Ubuntu or Debian."
+                echo "Please re-run and choose Debian (bullseye) or Alpine instead."
                 read -p "Press Enter to return to menu..."
                 show_menu
                 return
@@ -603,8 +625,8 @@ install_linux() {
             *)
                 echo "[!] Warning: $DISTRO uses modern glibc which fails on the"
                 echo "    Android 5/6 (3.10) kernel at the first guest command."
-                echo "    Alpine Linux (option 8) is verified working here."
-                read -p "Press Enter to continue anyway, or Ctrl+C to abort and pick Alpine..." dummy || true
+                echo "    Debian (auto-switches to bullseye) or Alpine (option 8) work here."
+                read -p "Press Enter to continue anyway, or Ctrl+C to abort and pick another..." dummy || true
                 ;;
         esac
     fi
@@ -725,9 +747,22 @@ install_linux() {
     NEED_X11=0
     if [ "$SERVER" == "x11" ]; then NEED_X11=1; fi
     ensure_dependencies "$NEED_X11"
-    
+    deploy_legacy_plugins
+    # Stale pre-v4 pkg builds lack --override-alias, so custom instance
+    # names silently install under the wrong name. Upgrade those to v4.2.0.
+    if [ "$IS_LEGACY" = "1" ] && ! proot-distro install --help 2>&1 | grep -q "override-alias"; then
+        echo "[!] proot-distro predates --override-alias; upgrading to v4.2.0..."
+        install_proot_distro_from_source || {
+            echo "FATAL: proot-distro upgrade failed. Cannot continue."
+            read -p "Press Enter to return to menu..."
+            show_menu
+            return
+        }
+        deploy_legacy_plugins
+    fi
+
     echo "[*] Installing $DISTRO (as $INSTANCE_NAME)..."
-    verify_proot_distro_plugin "$DISTRO" || {
+    verify_proot_distro_plugin "$PD_ALIAS" || {
         read -p "Press Enter to return to menu..."
         show_menu
         return
@@ -752,7 +787,7 @@ install_linux() {
         esac
         proot-distro install --name "$INSTANCE_NAME" "$IMAGE"
     else
-        proot-distro install --override-alias "$INSTANCE_NAME" "$DISTRO" 2>/dev/null || proot-distro install "$DISTRO"
+        proot-distro install --override-alias "$INSTANCE_NAME" "$PD_ALIAS" 2>/dev/null || proot-distro install "$PD_ALIAS"
     fi
     
     ROOTFS="$PREFIX/var/lib/proot-distro/installed-rootfs/$INSTANCE_NAME"
