@@ -124,26 +124,28 @@ install_proot_distro_from_source() {
 # just show 'proot-distro list' and stop.
 verify_proot_distro_plugin() {
     WANT="$1"
+    # NOTE: proot-distro prints EVERYTHING (including 'list' results)
+    # to stderr via msg(), so capture 2>&1 here, not 2>/dev/null.
     set +e
-    if command -v proot-distro >/dev/null 2>&1 && proot-distro list 2>/dev/null | grep -qw "$WANT"; then
+    if command -v proot-distro >/dev/null 2>&1 && proot-distro list 2>&1 | grep -qw "$WANT"; then
         set -e
         return 0
     fi
     if [ "$IS_LEGACY" != "1" ]; then
         echo "ERROR: your proot-distro knows no '$WANT' distribution."
         echo "Available distributions:"
-        proot-distro list 2>/dev/null || true
+        proot-distro list 2>&1 || true
         set -e
         return 1
     fi
     echo "[!] proot-distro has no '$WANT' plugin (stale pre-$PD_LEGACY_TAG pkg build?). Repairing from $PD_LEGACY_TAG sources..."
     install_proot_distro_from_source || { set -e; return 1; }
-    if proot-distro list 2>/dev/null | grep -qw "$WANT"; then
+    if proot-distro list 2>&1 | grep -qw "$WANT"; then
         set -e
         return 0
     fi
     echo "ERROR: '$WANT' still unknown after repair. Supported names:"
-    proot-distro list 2>/dev/null || true
+    proot-distro list 2>&1 || true
     set -e
     return 1
 }
@@ -159,8 +161,12 @@ ensure_dependencies() {
     # run it but never abort on failure.
     pkg upgrade -y 2>/dev/null || true
 
-    echo "[*] Installing core dependencies (proot, wget, pulseaudio)..."
-    pkg install -y proot wget pulseaudio 2>/dev/null || true
+    echo "[*] Installing core dependencies (proot, wget, curl, pulseaudio)..."
+    # NOTE: v4.2.0 proot-distro downloads rootfs with 'curl' (not wget)
+    # and needs coreutils/findutils/gawk tools, so install them explicitly:
+    # a bare Termux bootstrap on old Android may miss some.
+    pkg install -y proot wget curl pulseaudio 2>/dev/null || true
+    pkg install -y coreutils findutils gawk 2>/dev/null || true
     # 'proot-distro' may not exist on SDK 22 repos -> source fallback
     if ! command -v proot-distro >/dev/null 2>&1; then
         pkg install -y proot-distro 2>/dev/null || true
