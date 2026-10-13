@@ -109,8 +109,12 @@ This configuration was tested end-to-end on Android 5.1.1 (kernel 3.10, aarch64)
 - `start-linux` / `terminal-linux` always ask: **root** or **user** terminal.
   Root is the default; pick user when you want the restricted-feeling shell.
 - Install packages directly (`apk add` / `apt install`) — never `sudo`/`su`.
-  From EITHER terminal you CAN: install/remove packages, edit any file,
-  configure services. You CANNOT anywhere in proot: `sudo`/`su` or user
+  From EITHER terminal you CAN: edit any file, configure services, and on
+  Alpine also install packages (`apk` has no uid check). On apt distros
+  (Debian/Ubuntu/Kali) installs need the ROOT terminal: `dpkg` refuses to
+  run unless uid is 0, and the user shell runs as your normal uid. (The
+  launchers warn you when you pick a user terminal there.)
+  You CANNOT anywhere in proot: `sudo`/`su` or user
   switching (kernel `NO_NEW_PRIVS` flag — setuid can never work), `ping` /
   raw sockets, `mount`. The user shell is not restricted: it owns every
   file, so elevation is simply unnecessary.

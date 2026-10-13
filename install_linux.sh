@@ -1336,6 +1336,13 @@ if [ "$MODE" == "root" ]; then
     exit 0
 elif [ "$MODE" == "user" ]; then
     echo "Opening user terminal in $DISTRO (no display/audio servers)..."
+    BASE_DISTRO=$(grep '^DISTRO=' "$CONF_FILE" 2>/dev/null | cut -d'"' -f2)
+    case "$BASE_DISTRO" in
+        ubuntu|debian|kali)
+            echo "[!] Note: 'apt install' needs the ROOT terminal (dpkg requires uid 0)."
+            echo "    This user shell is fine for everything else."
+            ;;
+    esac
     proot-distro login $NO_SYSVIPC $DISTRO --user user --shared-tmp
     exit 0
 fi
@@ -1474,6 +1481,14 @@ echo "2) User terminal ('user' account)"
 read -p "Select [1-2, default 1]: " TERM_CHOICE
 if [ "$TERM_CHOICE" == "2" ]; then
     echo "Opening user terminal in $DISTRO..."
+    CONF_FILE="$PREFIX/var/lib/proot-distro/installed-rootfs/$DISTRO/etc/termux-linux-manager.conf"
+    BASE_DISTRO=$(grep '^DISTRO=' "$CONF_FILE" 2>/dev/null | cut -d'"' -f2)
+    case "$BASE_DISTRO" in
+        ubuntu|debian|kali)
+            echo "[!] Note: 'apt install' needs the ROOT terminal (dpkg requires uid 0)."
+            echo "    This user shell is fine for everything else."
+            ;;
+    esac
     proot-distro login $NO_SYSVIPC $DISTRO --user user --shared-tmp
 else
     echo "Opening root terminal in $DISTRO..."
