@@ -337,7 +337,7 @@ system_dashboard() {
     du -sh $PREFIX 2>/dev/null | awk '{print $1}'
     echo "-----------------------------------------"
     echo "Available Phone Storage:"
-    df -h /data | awk 'NR==2 {print $4}'
+    df -h /data 2>/dev/null | awk 'NR==2 {print $4}'
     echo "========================================="
     read -p "Press Enter to continue..."
     show_menu

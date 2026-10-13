@@ -31,6 +31,13 @@ Currently supported distributions:
 - **Fedora** (dnf)
 - **OpenSUSE** (zypper)
 - **Void Linux** (xbps)
+- **Alpine Linux** (apk, musl — recommended for Android 5/6, tiny & fast)
+
+> **Android 5/6 devices (e.g. kernel 3.10):** the script auto-detects legacy
+> devices, installs `proot-distro` v4.2.0 from source when the package is
+> missing, forces VNC instead of Termux:X11, and skips VirGL. Only **Alpine**
+> is verified working there — modern glibc distros (Debian bookworm, Ubuntu
+> mantic, Fedora 39, …) fail at the first guest command on a 3.10 kernel.
 
 ## 🚀 Key Features
 
