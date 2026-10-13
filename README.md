@@ -14,6 +14,7 @@
 - [About the Project](#-about-the-project)
 - [Key Features](#-key-features)
 - [Installation](#-installation)
+- [Older Devices (Android 5/6)](#-older-devices-android-56-eg-oppo-a37fw--verified-guide)
 - [Usage Guide](#-usage-guide)
 - [Troubleshooting](#-troubleshooting-phantom-process-killer)
 - [Contributing](#-contributing)
@@ -74,6 +75,45 @@ cd Linux-For-Android
 chmod +x install_linux.sh
 ./install_linux.sh
 ```
+
+## 📱 Older Devices (Android 5/6, e.g. Oppo A37fw) — Verified Guide
+
+This configuration was tested end-to-end on Android 5.1.1 (kernel 3.10, aarch64).
+
+### 1. Install the right Termux
+- Current Termux requires Android 7+. On Android 5/6 install **Termux 0.118**
+  (last build with Android 5 support) from the **F-Droid archive** — not the
+  Play Store, not the latest F-Droid build.
+- If packages 404, run `termux-change-repo` and pick a working mirror.
+
+### 2. What the script handles automatically
+- Detects legacy devices (`LEGACY MODE` banner) and installs **proot-distro
+  v4.2.0** from source when the package is missing or broken.
+- Forces **VNC** (Termux:X11 needs Android 8+, VirGL is unavailable).
+- Skips GPU/audio backends gracefully when their packages don't exist.
+
+### 3. Recommended choices in the wizard
+- **Distro:** Alpine (option 8, musl — tiny, ~35 MB) or Debian, which
+  auto-switches to **bullseye** on legacy devices. Do NOT pick Ubuntu,
+  Fedora, Kali, Arch or Void here: their modern glibc cannot execute on a
+  3.10 kernel (verified: instant failure at the first guest command), and
+  Kali has no legacy plugin at all.
+- **Desktop:** `None (CLI only)` for 1–2 GB RAM phones; LXDE/XFCE + VNC only
+  if you have headroom (needs a VNC Viewer app, password `ubuntu`).
+- **Software selector:** keep it light (`git`, `htop`…). Skip browsers and
+  LibreOffice on old phones.
+- Keep **~1 GB free** before installing; CLI systems are small (Alpine
+  ~35 MB, Debian ~150 MB plus package cache).
+
+### 4. Day-to-day notes
+- CLI logs in as guest **root**: `apk add` (Alpine) / `apt install` (Debian)
+  directly — never `sudo`/`su` (impossible inside proot, see below).
+- On Debian bullseye the installer already points `bullseye-security` at
+  `archive.debian.org` (the suite is EOL and pruned from the main mirror).
+- `fastfetch` does not exist in bullseye — use `neofetch`.
+- Ignore `apt`/`dpkg` warnings about hardware, `systemd`, or `dbus` hooks
+  failing — post-install hooks can't reach real hardware from proot and fail
+  safely (a half-configured `dbus` daemon is normal and harmless).
 
 ## 💻 Usage Guide
 
