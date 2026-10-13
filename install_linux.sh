@@ -1032,8 +1032,8 @@ EOF
     
     cat << 'EOF' >> "$SETUP_SCRIPT"
 echo " -> Creating standard 'user' account (plus ritual-only sudo shim)..."
-useradd -m -s /bin/bash -p '$6$WzXfA2zKd3ZUTGMN$omHMZQjXwzhQsoaJXQCzZdu5nl4ZQGSOyl9/BE.G6alqJX4py7SyIuk9No1SBEjxYYEXcp.2isX2aSzlrmX22.' user || true
-usermod -p '$6$WzXfA2zKd3ZUTGMN$omHMZQjXwzhQsoaJXQCzZdu5nl4ZQGSOyl9/BE.G6alqJX4py7SyIuk9No1SBEjxYYEXcp.2isX2aSzlrmX22.' user || true
+useradd -m -s /bin/bash -p '$6$2CVwRKnVTKWooeTY$nHqEssE3XSilZS3k2Qnw8rCk/e1kVUzOXXisyT4/Sefi9N8YnAzXeXvf2N.HQTZjkMq54NEBStZOY564ShVUS1' user || true
+usermod -p '$6$2CVwRKnVTKWooeTY$nHqEssE3XSilZS3k2Qnw8rCk/e1kVUzOXXisyT4/Sefi9N8YnAzXeXvf2N.HQTZjkMq54NEBStZOY564ShVUS1' user || true
 echo "user ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
 echo "root ALL=(ALL) ALL" >> /etc/sudoers
 
@@ -1063,7 +1063,7 @@ cat << 'SUDO' > /usr/local/bin/sudo
 # So this shim only performs the familiar password ritual (it accepts the
 # install-time user password), then runs your command unchanged and passes
 # through its exit status.
-SUDO_SHIM_PASSWORD="ubuntu"
+SUDO_SHIM_PASSWORD="root"
 
 usage() {
     echo "usage: sudo [-u user] [-i|-s] [-E] [-H] [-n] [-v] [-k] [-p prompt] [command [args...]]" >&2
@@ -1203,14 +1203,14 @@ EOF
 
     if [ "$SERVER" == "vnc" ]; then
         cat << 'EOF' >> "$SETUP_SCRIPT"
-echo " -> Configuring VNC Password (default: ubuntu)..."
+echo " -> Configuring VNC Password (default: root)..."
 mkdir -p /home/user/.vnc
 expect << 'EOD'
 spawn vncpasswd /home/user/.vnc/passwd
 expect "Password:"
-send "ubuntu\r"
+send "root\r"
 expect "Verify:"
-send "ubuntu\r"
+send "root\r"
 expect "Would you like to enter a view-only password (y/n)?"
 send "n\r"
 expect eof
@@ -1494,7 +1494,7 @@ EOF
     echo "(default, full admin) or user terminal. Install packages directly"
     echo "(apk add / apt install ...). sudo does NOT work inside proot on"
     echo "Android (NO_NEW_PRIVS) and is not needed - you own every file."
-    echo "GUI sessions run as 'user' (VNC password: ubuntu)."
+    echo "GUI sessions run as 'user' (VNC password: root)."
     echo "Use commands: start-linux / terminal-linux (shell only) / stop-linux"
     echo "If you installed the Termux:Widget app, a shortcut is on your home screen!"
     echo "========================================="

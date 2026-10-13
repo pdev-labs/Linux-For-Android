@@ -99,7 +99,7 @@ This configuration was tested end-to-end on Android 5.1.1 (kernel 3.10, aarch64)
   3.10 kernel (verified: instant failure at the first guest command), and
   Kali has no legacy plugin at all.
 - **Desktop:** `None (CLI only)` for 1–2 GB RAM phones; LXDE/XFCE + VNC only
-  if you have headroom (needs a VNC Viewer app, password `ubuntu`).
+  if you have headroom (needs a VNC Viewer app, password `root`).
 - **Software selector:** keep it light (`git`, `htop`…). Skip browsers and
   LibreOffice on old phones.
 - Keep **~1 GB free** before installing; CLI systems are small (Alpine
@@ -145,11 +145,11 @@ display server, then lets you pick the **root** or **user** terminal.
 Handy for quick admin work and as a Termux:Widget shortcut (auto-created).
 
 ### Default Credentials & Privileges
-- **GUI sessions run as:** `user` (VNC password: `ubuntu`)
+- **GUI sessions run as:** `user` (VNC password: `root`)
 - **`start-linux` / `terminal-linux` ask every time:** **root** terminal
   (default, full admin) or **user** terminal. Install packages directly
   (`apk add` on Alpine, `apt install` on Debian/Ubuntu, …).
-- **`sudo` is a ritual-only shim** (`/usr/local/bin/sudo`, password `ubuntu`):
+- **`sudo` is a ritual-only shim** (`/usr/local/bin/sudo`, password `root`):
   it asks for the password, then runs your command unchanged. Real setuid
   elevation is impossible inside proot (see below) — and unnecessary, since
   you already own every file.
@@ -180,7 +180,7 @@ Starting in Android 12, Android limits background child processes. Since a Linux
 ### 2. `sudo` / `su` fail inside the distro ("no new privileges", wrong ownership)
 The real binaries can never work here, so every install now ships a
 **ritual-only `sudo` shim** instead (no real `sudo` package is installed):
-- `sudo <cmd>` asks for the install-time password (`ubuntu`, 3 tries like
+- `sudo <cmd>` asks for the install-time password (`root`, 3 tries like
   the real thing) and then runs the command with your current identity,
   passing through its exit status. Flags `-i`/`-s` (shell), `-u` (only
   yourself/root), `-v`, `-n`, `-p`, `-E` behave sanely; switching to any
