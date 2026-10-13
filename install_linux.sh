@@ -61,13 +61,19 @@ print_device_info() {
 
 # Install proot-distro from GitHub when 'pkg install proot-distro'
 # fails (typical on Android 5.1.1 archived repos).
-# proot-distro is just a bash script + distro plugins, so this
-# works anywhere 'proot + wget + tar' exist.
+# Install proot-distro v4.2.0 from source — the LAST shell-based release.
+# Upstream HEAD (v5+) is a Python rewrite needing modern Python/pip plus
+# Docker-registry installs, unsuitable for Android 5/6. v4.2.0 is pure
+# bash + proot, supports --override-alias and all classic rootfs tarballs.
+# Its install.sh also performs the @TERMUX_PREFIX@ substitution that a
+# naive 'cp proot-distro.sh' would skip (which yields a broken install
+# whose 'list' is empty and every install fails with "unknown distribution").
+PD_LEGACY_TAG="v4.2.0"
 install_proot_distro_from_source() {
-    echo "[*] 'proot-distro' package not found. Trying source install (legacy fallback)..."
+    echo "[*] Installing proot-distro $PD_LEGACY_TAG from source (legacy fallback)..."
     # set +e: every step here is best-effort, we check manually
     set +e
-    pkg install -y proot wget tar git 2>/dev/null || pkg install proot wget tar git -y 2>/dev/null || true
+    pkg install -y proot wget tar 2>/dev/null || true
     if ! command -v proot >/dev/null 2>&1; then
         echo "ERROR: 'proot' itself could not be installed."
         echo "Your Termux repo seems unreachable. Try:"
@@ -77,34 +83,69 @@ install_proot_distro_from_source() {
         set -e
         return 1
     fi
-    SRC_DIR="$PREFIX/share/proot-distro-legacy"
+    mkdir -p "$PREFIX/tmp"
+    SRC_DIR="$PREFIX/tmp/proot-distro-4.2.0-src"
     rm -rf "$SRC_DIR"
     if command -v git >/dev/null 2>&1; then
-        git clone --depth 1 https://github.com/termux/proot-distro "$SRC_DIR" 2>/dev/null
+        git clone --depth 1 --branch "$PD_LEGACY_TAG" https://github.com/termux/proot-distro "$SRC_DIR" 2>/dev/null || rm -rf "$SRC_DIR"
     fi
-    # Fallback if git missing/failed: fetch tarball via wget
-    if [ ! -f "$SRC_DIR/proot-distro.sh" ]; then
+    # Fallback if git missing/failed: fetch the pinned tag tarball via wget
+    if [ ! -f "$SRC_DIR/install.sh" ]; then
+        rm -rf "$SRC_DIR"
         mkdir -p "$SRC_DIR"
-        wget -qO- https://github.com/termux/proot-distro/archive/refs/heads/master.tar.gz 2>/dev/null | tar -xz -C "$PREFIX/tmp" 2>/dev/null
-        cp -r "$PREFIX/tmp"/proot-distro-master/* "$SRC_DIR"/ 2>/dev/null || true
+        if wget -qO "$PREFIX/tmp/pd-4.2.0.tar.gz" "https://github.com/termux/proot-distro/archive/refs/tags/${PD_LEGACY_TAG}.tar.gz" 2>/dev/null; then
+            tar -xzf "$PREFIX/tmp/pd-4.2.0.tar.gz" -C "$PREFIX/tmp" 2>/dev/null || true
+            cp -r "$PREFIX/tmp"/proot-distro-4.2.0/* "$SRC_DIR"/ 2>/dev/null || true
+        fi
     fi
-    if [ -f "$SRC_DIR/proot-distro.sh" ]; then
-        mkdir -p "$PREFIX/bin"
-        cp "$SRC_DIR/proot-distro.sh" "$PREFIX/bin/proot-distro"
-        chmod +x "$PREFIX/bin/proot-distro"
-        mkdir -p "$PREFIX/etc/proot-distro"
-        cp -r "$SRC_DIR"/distro-plugins/*.sh "$PREFIX/etc/proot-distro/" 2>/dev/null || true
-        mkdir -p "$PREFIX/var/lib/proot-distro/installed-rootfs"
-        mkdir -p "$PREFIX/var/lib/proot-distro/dl-cache"
-        echo "[*] proot-distro installed from source to $PREFIX/bin/proot-distro"
+    if [ -f "$SRC_DIR/install.sh" ]; then
+        # install.sh respects TERMUX_PREFIX/TERMUX_ANDROID_HOME from env,
+        # so this also works on Termux forks with non-standard paths.
+        ( cd "$SRC_DIR" && TERMUX_PREFIX="$PREFIX" TERMUX_ANDROID_HOME="$HOME" bash install.sh ) 2>/dev/null || \
+        ( cd "$SRC_DIR" && TERMUX_PREFIX="$PREFIX" TERMUX_ANDROID_HOME="$HOME" bash install.sh )
+        mkdir -p "$PREFIX/var/lib/proot-distro/installed-rootfs" "$PREFIX/var/lib/proot-distro/dl-cache"
         hash -r 2>/dev/null || true
+        if command -v proot-distro >/dev/null 2>&1; then
+            echo "[*] proot-distro $PD_LEGACY_TAG installed to $PREFIX/bin/proot-distro"
+            set -e
+            return 0
+        fi
+    fi
+    echo "ERROR: Could not fetch proot-distro $PD_LEGACY_TAG sources (no network?)."
+    set -e
+    return 1
+}
+
+# Verify the installed proot-distro actually knows distro $1.
+# Frozen Android 5 repos ship a pre---override-alias proot-distro build
+# whose plugin dir can be empty -> every install fails with
+# "unknown distribution 'debian'". Repair from pinned sources then.
+# On modern devices the pkg build is authoritative: never overwrite it,
+# just show 'proot-distro list' and stop.
+verify_proot_distro_plugin() {
+    WANT="$1"
+    set +e
+    if command -v proot-distro >/dev/null 2>&1 && proot-distro list 2>/dev/null | grep -qw "$WANT"; then
         set -e
         return 0
-    else
-        echo "ERROR: Could not fetch proot-distro sources (no network?)."
+    fi
+    if [ "$IS_LEGACY" != "1" ]; then
+        echo "ERROR: your proot-distro knows no '$WANT' distribution."
+        echo "Available distributions:"
+        proot-distro list 2>/dev/null || true
         set -e
         return 1
     fi
+    echo "[!] proot-distro has no '$WANT' plugin (stale pre-$PD_LEGACY_TAG pkg build?). Repairing from $PD_LEGACY_TAG sources..."
+    install_proot_distro_from_source || { set -e; return 1; }
+    if proot-distro list 2>/dev/null | grep -qw "$WANT"; then
+        set -e
+        return 0
+    fi
+    echo "ERROR: '$WANT' still unknown after repair. Supported names:"
+    proot-distro list 2>/dev/null || true
+    set -e
+    return 1
 }
 
 # Resilient dependency installer. Never aborts the whole script
@@ -611,7 +652,22 @@ install_linux() {
     if [ "$SERVER" == "x11" ]; then NEED_X11=1; fi
     ensure_dependencies "$NEED_X11"
     
+    # Legacy shell-era proot-distro (v4.2.0 plugins) ships no Kali plugin.
+    # Fail fast with guidance instead of "unknown distribution 'kali'".
+    if [ "$IS_LEGACY" = "1" ] && [ "$DISTRO" = "kali" ]; then
+        echo "ERROR: Kali has no plugin in legacy proot-distro (Android 5/6)."
+        echo "Please re-run and choose Ubuntu, Debian or Arch instead."
+        read -p "Press Enter to return to menu..."
+        show_menu
+        return
+    fi
+
     echo "[*] Installing $DISTRO (as $INSTANCE_NAME)..."
+    verify_proot_distro_plugin "$DISTRO" || {
+        read -p "Press Enter to return to menu..."
+        show_menu
+        return
+    }
     if proot-distro install --help 2>&1 | grep -iqE "(IMAGE:TAG|Docker image|registry)"; then
         case "$DISTRO" in
             ubuntu) IMAGE="ubuntu:24.04" ;;
