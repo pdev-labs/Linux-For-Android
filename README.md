@@ -131,6 +131,15 @@ This configuration was tested end-to-end on Android 5.1.1 (kernel 3.10, aarch64)
 - On Debian bullseye the installer already points `bullseye-security` at
   `archive.debian.org` (the suite is EOL and pruned from the main mirror).
 - `fastfetch` does not exist in bullseye — use `neofetch`.
+- **Sharing root-installed tools with `user`:** both accounts are the same
+  owner underneath, so nothing is ever permission-blocked — tools are only
+  *invisible* when they live under `/root`. Link any binary you need into
+  the shared `/usr/local/bin` (on everyone's `PATH`):
+  ```bash
+  ln -sf /root/.opencode/bin/opencode /usr/local/bin/
+  ```
+  Per-user configs stay separate (`~/.config`, `~/.local/share`), so each
+  account keeps its own setup while running the same binaries.
 - Ignore `apt`/`dpkg` warnings about hardware, `systemd`, or `dbus` hooks
   failing — post-install hooks can't reach real hardware from proot and fail
   safely. (Fresh installs pre-seed dbus's `statoverride` entry and ship a
