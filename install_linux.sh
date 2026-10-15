@@ -1013,6 +1013,12 @@ apt-get autoremove -y 2>/dev/null || true
 echo " -> Letting apt methods skip privilege dropping (no setgroups in proot)..."
 mkdir -p /etc/apt/apt.conf.d
 echo 'APT::Sandbox::User "root";' > /etc/apt/apt.conf.d/99-proot-no-sandbox
+echo " -> Silencing installer noise (debconf frontend, service autostart, locales)..."
+echo 'debconf debconf/frontend select Noninteractive' | debconf-set-selections || true
+printf '#!/bin/sh\nexit 101\n' > /usr/sbin/policy-rc.d && chmod +x /usr/sbin/policy-rc.d
+apt-get install -y apt-utils locales || true
+sed -i -E 's/# (en_US.UTF-8)/\1/' /etc/locale.gen 2>/dev/null || true
+locale-gen en_US.UTF-8 2>/dev/null || true
 EOF
         else
             echo "[!] Warning: lib/uid0.c not found next to the script; sudo stays ritual-only."
