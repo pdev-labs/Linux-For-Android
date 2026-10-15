@@ -14,6 +14,7 @@
 - [About the Project](#-about-the-project)
 - [Key Features](#-key-features)
 - [Installation](#-installation)
+- [First-Run Setup](#-first-run-setup)
 - [Older Devices (Android 5/6)](#-older-devices-android-56-eg-oppo-a37fw--verified-guide)
 - [Usage Guide](#-usage-guide)
 - [Troubleshooting](#-troubleshooting-phantom-process-killer)
@@ -86,6 +87,25 @@ cd Linux-For-Android
 chmod +x install_linux.sh
 ./install_linux.sh
 ```
+
+## 🧭 First-Run Setup
+
+The first screen offers three doors:
+
+- **Quick setup** — every default, no questions. Picks Alpine on Android 5/6
+  (Debian elsewhere), CLI-only on small/old phones, `user` / `root` / `root`
+  credentials, device timezone, `localhost`.
+- **Guided setup** — walks through distro (with a recommendation for your
+  device), desktop, display server, hardware acceleration, resolution,
+  software, instance name, username, user + root passwords (typed blind),
+  timezone, hostname, prompt style, autostart, storage, SSH, and widget —
+  then shows a summary (passwords masked) and installs without asking twice.
+- **Manager menu** — the classic Install/Update/Backup/… menu, unchanged.
+
+Answers are saved to `~/.config/linux-for-android/setup.conf` (`0600`,
+passwords base64-encoded, never plaintext). If the file exists you get a
+fourth option, **Re-install with saved answers**, for one-command rebuilds;
+a corrupt file falls back to guided setup instead of crashing.
 
 ## 📱 Older Devices (Android 5/6, e.g. Oppo A37fw) — Verified Guide
 
@@ -249,6 +269,18 @@ this never happens: `apk` performs no uid check.)
 
 Contributions, issues, and feature requests are welcome! 
 If you want to improve this project, please fork the repository and submit a pull request.
+
+### Running the test suite
+`tests/test-all.sh` exercises the installer end to end with stubbed system
+commands — entry modes, the install matrix (modern + legacy distros),
+questionnaire validation, generated scripts, the sudo password ritual over a
+real pty, and every manager-menu operation. No network, no root, no real
+installs; needs only `bash`, `coreutils`, `timeout`, and `python3` (plus
+`script` from util-linux for the pty test, skipped if absent):
+```bash
+chmod +x tests/test-all.sh
+./tests/test-all.sh   # expect: PASS=83 FAIL=0
+```
 
 ## 📝 License
 
