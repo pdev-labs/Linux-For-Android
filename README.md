@@ -119,13 +119,12 @@ This configuration was tested end-to-end on Android 5.1.1 (kernel 3.10, aarch64)
 ### 4. Day-to-day notes
 - `start-linux` / `terminal-linux` always ask: **root** or **user** terminal.
   Root is the default; pick user when you want the restricted-feeling shell.
-- Install packages directly (`apk add` / `apt install`) — never `sudo`/`su`.
-  From EITHER terminal you CAN: edit any file, configure services, and on
-  Alpine also install packages (`apk` has no uid check). On apt distros
-  (Debian/Ubuntu/Kali) installs need the ROOT terminal: `dpkg` refuses to
-  run unless uid is 0, and the user shell runs as your normal uid. (The
-  launchers warn you when you pick a user terminal there.)
-  You CANNOT anywhere in proot: `sudo`/`su` or user
+- Install packages with `apk add` (Alpine), `apt install` as root, or
+  `sudo apt install` from a user shell (the shim emulates uid 0) — never
+  `su`. Plain `apt install` without `sudo` fails in user shells because
+  `dpkg` demands uid 0; on Alpine even that works (`apk` performs no uid
+  check). From EITHER terminal you CAN: edit any file, configure services.
+  You CANNOT anywhere in proot: `su` or user
   switching (kernel `NO_NEW_PRIVS` flag — setuid can never work), `ping` /
   raw sockets, `mount`. The user shell is not restricted: it owns every
   file, so elevation is simply unnecessary.
@@ -166,9 +165,12 @@ Handy for quick admin work and as a Termux:Widget shortcut (auto-created).
   (`apk add` on Alpine, `apt install` on Debian/Ubuntu, …).
 - **`sudo` is a ritual-plus-emulation shim** (`/usr/local/bin/sudo`, password
   `root`): it asks for the password, then runs your command — preloading a
-  tiny `libuid0` that answers identity queries as uid 0 (fakeroot-style, no
-  daemon) so tools like `dpkg` proceed. Real setuid elevation remains
-  impossible inside proot — and unnecessary, since you already own every file.
+  tiny `libuid0` (built during setup, fakeroot-style, no daemon) that answers
+  identity queries as uid 0 and neutralises `chown`/`setuid`/`setgroups`, so
+  `sudo apt install` works even from a user shell. Setup also tells apt to
+  skip its sandbox user (privilege dropping is impossible in proot). Real
+  setuid elevation remains impossible inside proot — and unnecessary, since
+  you already own every file.
 - **Why no sudo?** Android app processes carry the `NO_NEW_PRIVS` flag and
   proot cannot grant real root, so `sudo`/`su` can never work inside proot
   on any device. You already own every file, so elevation is unnecessary.
@@ -215,11 +217,13 @@ While installing packages, you might see red errors like:
 **Fix:** Ignore them! These are completely normal. Linux packages try to communicate with physical hardware or the `systemd` init process during installation. Since you are safely contained on Android without direct hardware/init access, these post-installation hooks fail safely without affecting your desktop.
 
 ### 4. `dpkg: error: requested operation requires superuser privilege`
-**Symptom:** `apt install` fails inside a *user* terminal while `apt update` works.
-**Fix:** This is by design of `dpkg`, which refuses to run unless uid is 0 —
-the user shell runs as your normal uid. Re-open the distro as a **root**
-terminal (`start-linux` / `terminal-linux` → root) and install there. (On
-Alpine this never happens: `apk` performs no uid check.)
+**Symptom:** plain `apt install` fails inside a *user* terminal while `apt
+update` works.
+**Fix:** This is `dpkg` itself, which refuses to run unless uid is 0 — and
+the user shell runs as your normal uid. Either use `sudo apt install` (the
+shim emulates uid 0) or re-open the distro as a **root** terminal
+(`start-linux` / `terminal-linux` → root) and install there. (On Alpine
+this never happens: `apk` performs no uid check.)
 
 ### 5. "Cannot establish any listening sockets - Make sure an X server isn't already running"
 **Symptom:** You type `start-linux` but it immediately fails with this error.

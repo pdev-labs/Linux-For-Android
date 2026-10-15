@@ -1010,6 +1010,8 @@ fi
 rm -f /tmp/uid0.c
 apt-get purge -y gcc 2>/dev/null || true
 apt-get autoremove -y 2>/dev/null || true
+echo " -> Letting apt methods skip privilege dropping (no setgroups in proot)..."
+echo 'APT::Sandbox::User "root";' > /etc/apt/apt.conf.d/99-proot-no-sandbox
 EOF
         else
             echo "[!] Warning: lib/uid0.c not found next to the script; sudo stays ritual-only."
@@ -1376,8 +1378,8 @@ elif [ "$MODE" == "user" ]; then
     BASE_DISTRO=$(grep '^DISTRO=' "$CONF_FILE" 2>/dev/null | cut -d'"' -f2)
     case "$BASE_DISTRO" in
         ubuntu|debian|kali)
-            echo "[!] Note: 'apt install' needs the ROOT terminal (dpkg requires uid 0)."
-            echo "    This user shell is fine for everything else."
+            echo "[!] Note: plain 'apt install' needs the ROOT terminal (dpkg requires uid 0)."
+            echo "    From here, use 'sudo apt install' instead (shim emulates uid 0)."
             ;;
     esac
     proot-distro login $NO_SYSVIPC $DISTRO --user user --shared-tmp
@@ -1522,8 +1524,8 @@ if [ "$TERM_CHOICE" == "2" ]; then
     BASE_DISTRO=$(grep '^DISTRO=' "$CONF_FILE" 2>/dev/null | cut -d'"' -f2)
     case "$BASE_DISTRO" in
         ubuntu|debian|kali)
-            echo "[!] Note: 'apt install' needs the ROOT terminal (dpkg requires uid 0)."
-            echo "    This user shell is fine for everything else."
+            echo "[!] Note: plain 'apt install' needs the ROOT terminal (dpkg requires uid 0)."
+            echo "    From here, use 'sudo apt install' instead (shim emulates uid 0)."
             ;;
     esac
     proot-distro login $NO_SYSVIPC $DISTRO --user user --shared-tmp
