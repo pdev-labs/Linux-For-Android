@@ -19,6 +19,7 @@
  */
 typedef unsigned int uid_t;
 typedef unsigned int gid_t;
+typedef unsigned long size_t;
 
 uid_t getuid(void) { return 0; }
 uid_t geteuid(void) { return 0; }
@@ -66,4 +67,80 @@ int fchownat(int d, const char *p, uid_t o, gid_t g, int fl)
 {
 	(void)d; (void)p; (void)o; (void)g; (void)fl;
 	return 0;
+}
+
+/*
+ * Identity *changes* must also be neutralised: tools that believe they are
+ * root (see above) try to sanitise their group set at startup (dpkg calls
+ * setgroups/setgid and aborts with "cannot set primary group ID" when the
+ * kernel refuses). Without CAP_SETUID/CAP_SETGID those calls can never
+ * succeed, so report success and keep the real (Termux uid) identity, which
+ * is consistent everywhere in the guest. getgroups is answered accordingly
+ * so membership tests against group 0 pass.
+ */
+int setuid(uid_t u)
+{
+	(void)u;
+	return 0;
+}
+
+int seteuid(uid_t u)
+{
+	(void)u;
+	return 0;
+}
+
+int setgid(gid_t g)
+{
+	(void)g;
+	return 0;
+}
+
+int setegid(gid_t g)
+{
+	(void)g;
+	return 0;
+}
+
+int setreuid(uid_t r, uid_t e)
+{
+	(void)r; (void)e;
+	return 0;
+}
+
+int setregid(gid_t r, gid_t e)
+{
+	(void)r; (void)e;
+	return 0;
+}
+
+int setresuid(uid_t r, uid_t e, uid_t s)
+{
+	(void)r; (void)e; (void)s;
+	return 0;
+}
+
+int setresgid(gid_t r, gid_t e, gid_t s)
+{
+	(void)r; (void)e; (void)s;
+	return 0;
+}
+
+int setgroups(size_t n, const gid_t *list)
+{
+	(void)n; (void)list;
+	return 0;
+}
+
+int initgroups(const char *user, gid_t g)
+{
+	(void)user; (void)g;
+	return 0;
+}
+
+int getgroups(int n, gid_t *list)
+{
+	if (n > 0 && list)
+		list[0] = 0;
+	return n > 0 ? 1 : 0;
 }
