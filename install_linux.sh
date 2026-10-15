@@ -184,7 +184,8 @@ ensure_dependencies() {
 
     # virglrenderer-android = optional GPU accel, Android 7+ only.
     # Missing on Android 5 -> silently skip, VNC will be used.
-    if [ "$IS_LEGACY" != "1" ]; then
+    # NEED_VIRGL (from guided setup) can disable it on modern devices too.
+    if [ "$IS_LEGACY" != "1" ] && [ "${NEED_VIRGL:-1}" = "1" ]; then
         echo "[*] Installing VirGL (optional, for GPU acceleration)..."
         pkg install -y virglrenderer-android 2>/dev/null || echo "[!] virglrenderer-android unavailable, continuing without GPU acceleration."
     else
@@ -236,6 +237,355 @@ deploy_legacy_plugins() {
         echo "[!] Warning: plugins/bullseye.sh not found next to the script;"
         echo "    legacy Debian installs will fail. Re-clone the repository."
     fi
+}
+
+# ============================================================
+# Guided setup questionnaire (integrated first screen).
+# Asks everything up front, saves answers to setup.conf for unattended
+# re-runs, then hands off to install_linux() with SETUP_ANSWERED=1 so no
+# question is asked twice. Passwords are stored base64-encoded only.
+# ============================================================
+SETUP_CONF="$HOME/.config/linux-for-android/setup.conf"
+
+b64enc() {
+    printf '%s' "$1" | base64 2>/dev/null | tr -d '\n'
+}
+
+setup_read_secret() {
+    # $1 = var name to fill, $2 = prompt, $3 = default (used on empty)
+    local __prompt="$2" __dflt="$3" __val=""
+    if [ -t 0 ]; then
+        printf '%s' "$__prompt" >&2
+        IFS= read -rs __val || true
+        printf '\n' >&2
+    else
+        IFS= read -r __val || true
+    fi
+    [ -z "$__val" ] && __val="$__dflt"
+    printf -v "$1" '%s' "$__val"
+}
+
+setup_guess_timezone() {
+    local _tz=""
+    _tz=$(getprop persist.sys.timezone 2>/dev/null || true)
+    case "$_tz" in
+        ""|*[!A-Za-z0-9_+./-]*|*..*|/*|*/) _tz="UTC" ;;
+    esac
+    printf '%s' "${_tz:-UTC}"
+}
+
+setup_ram_mb() {
+    local _m=""
+    _m=$(free -m 2>/dev/null | awk '/^Mem:/ {print $2}')
+    case "$_m" in
+        ''|*[!0-9]*) _m=2048 ;;
+    esac
+    printf '%s' "$_m"
+}
+
+setup_save() {
+    mkdir -p "$(dirname "$SETUP_CONF")"
+    cat > "$SETUP_CONF" <<EOF
+# Linux-for-Android setup answers (reused on re-install, chmod 600).
+# Passwords are base64-encoded, never plaintext.
+DISTRO="$DISTRO"
+DE="$DE"
+SERVER="$SERVER"
+RESOLUTION="$RESOLUTION"
+APP_CHOICES="$APP_CHOICES"
+INSTANCE_NAME="$INSTANCE_NAME"
+SETUP_USER="$SETUP_USER"
+SETUP_USER_B64="$SETUP_USER_B64"
+SETUP_ROOT_B64="$SETUP_ROOT_B64"
+TIMEZONE="$TIMEZONE"
+HOSTNAME="$HOSTNAME"
+PSTYLE="$PSTYLE"
+NEED_VIRGL="$NEED_VIRGL"
+DO_AUTOSTART="$DO_AUTOSTART"
+DO_STORAGE="$DO_STORAGE"
+DO_SSH="$DO_SSH"
+DO_WIDGET="$DO_WIDGET"
+EOF
+    chmod 600 "$SETUP_CONF" 2>/dev/null || true
+    echo "[*] Answers saved to $SETUP_CONF (reused automatically next time)."
+}
+
+setup_summary() {
+    echo ""
+    echo "========================================="
+    echo "          Setup Summary                  "
+    echo "========================================="
+    echo "Distribution : $DISTRO"
+    echo "Desktop      : $DE"
+    echo "Server       : $SERVER"
+    [ "$SERVER" = "vnc" ] && echo "Resolution   : $RESOLUTION"
+    echo "Software     : ${APP_CHOICES:-none}"
+    echo "Instance     : ${INSTANCE_NAME:-(auto)}"
+    echo "Username     : $SETUP_USER"
+    echo "Password     : ****"
+    echo "Root passwd  : ****"
+    echo "Timezone     : $TIMEZONE"
+    echo "Hostname     : $HOSTNAME"
+    echo "HW accel     : $([ "$NEED_VIRGL" = "1" ] && echo on || echo off)"
+    echo "Prompt style : $PSTYLE"
+    echo "Autostart    : $([ "$DO_AUTOSTART" = "1" ] && echo yes || echo no)"
+    echo "Storage perm : $([ "$DO_STORAGE" = "1" ] && echo yes || echo no)"
+    echo "SSH server   : $([ "$DO_SSH" = "1" ] && echo yes || echo no)"
+    echo "Widget hint  : $([ "$DO_WIDGET" = "1" ] && echo yes || echo no)"
+    echo "========================================="
+}
+
+setup_quick() {
+    echo "[*] Quick setup: taking every default."
+    if [ "$IS_LEGACY" = "1" ]; then DISTRO="alpine"; else DISTRO="debian"; fi
+    if [ "$IS_LEGACY" = "1" ] || [ "$(setup_ram_mb)" -le 2048 ]; then DE="none"; else DE="xfce4"; fi
+    if [ "$DE" = "none" ]; then SERVER="none"; elif [ "$IS_LEGACY" = "1" ]; then SERVER="vnc"; else SERVER="x11"; fi
+    RESOLUTION="1280x720"
+    APP_CHOICES=""
+    INSTANCE_NAME=""
+    SETUP_USER="user"
+    SETUP_USER_B64="$(b64enc root)"
+    SETUP_ROOT_B64="$(b64enc root)"
+    TIMEZONE="$(setup_guess_timezone)"
+    HOSTNAME="localhost"
+    PSTYLE="minimal"
+    if [ "$IS_LEGACY" = "1" ]; then NEED_VIRGL=0; else NEED_VIRGL=1; fi
+    DO_AUTOSTART=0
+    DO_STORAGE=1
+    DO_SSH=0
+    DO_WIDGET=0
+    SETUP_ANSWERED=1
+    setup_summary
+    setup_save
+    install_linux
+}
+
+setup_guided() {
+    echo ""
+    echo "========================================="
+    echo "   Guided Setup (Enter = default)        "
+    echo "========================================="
+    # 1. Distro
+    if [ "$IS_LEGACY" = "1" ]; then _dd="alpine (option 8)"; else _dd="debian (option 2)"; fi
+    echo ""
+    echo "Choose Linux Distribution (recommended here: $_dd):"
+    echo "1) Ubuntu  2) Debian  3) Kali  4) Fedora"
+    echo "5) OpenSUSE 6) Void   7) Arch   8) Alpine"
+    while true; do
+        read -p "Select Distro [1-8]: " DIST_CHOICE || true
+        case "${DIST_CHOICE:-}" in
+            1) DISTRO="ubuntu"; break ;;
+            2) DISTRO="debian"; break ;;
+            3) if [ "$IS_LEGACY" = "1" ]; then echo "ERROR: Kali has no legacy plugin (Android 5/6). Pick Debian (bullseye) or Alpine."; else DISTRO="kali"; break; fi ;;
+            4) DISTRO="fedora"; break ;;
+            5) DISTRO="opensuse"; break ;;
+            6) DISTRO="void"; break ;;
+            7) DISTRO="archlinux"; break ;;
+            8) DISTRO="alpine"; break ;;
+            "") if [ "$IS_LEGACY" = "1" ]; then DISTRO="alpine"; else DISTRO="debian"; fi; break ;;
+            *) echo "Invalid choice, try again." ;;
+        esac
+    done
+    # 2. Desktop
+    if [ "$IS_LEGACY" = "1" ] || [ "$(setup_ram_mb)" -le 2048 ]; then _de="None (CLI only)"; else _de="XFCE4"; fi
+    echo ""
+    echo "Choose Desktop Environment (suggested: $_de):"
+    echo "1) XFCE4  2) LXDE  3) MATE  4) None (CLI only)"
+    while true; do
+        read -p "Select DE [1-4]: " DE_CHOICE || true
+        case "${DE_CHOICE:-}" in
+            1) DE="xfce4"; break ;;
+            2) DE="lxde"; break ;;
+            3) DE="mate"; break ;;
+            4) DE="none"; break ;;
+            "") if [ "$IS_LEGACY" = "1" ] || [ "$(setup_ram_mb)" -le 2048 ]; then DE="none"; else DE="xfce4"; fi; break ;;
+            *) echo "Invalid choice, try again." ;;
+        esac
+    done
+    if [ "$DISTRO" = "alpine" ] && [ "$DE" = "lxde" ]; then
+        echo "[*] LXDE is not packaged for Alpine -> using XFCE4 instead."
+        DE="xfce4"
+    fi
+    # 3. Display server + resolution + HW accel (GUI only)
+    SERVER="none"
+    RESOLUTION="1280x720"
+    NEED_VIRGL=0
+    if [ "$DE" != "none" ]; then
+        if [ "$IS_LEGACY" = "1" ]; then
+            echo "[*] Legacy Android: display server auto-set to VNC, HW acceleration off."
+            SERVER="vnc"
+        else
+            echo ""
+            echo "Choose Display Server:"
+            echo "1) Termux:X11 (Hardware Acceleration, Faster)"
+            echo "2) VNC (Software Rendering, Slower)"
+            while true; do
+                read -p "Select Server [1-2, default 1]: " SRV_CHOICE || true
+                case "${SRV_CHOICE:-1}" in
+                    1) SERVER="x11"; break ;;
+                    2) SERVER="vnc"; break ;;
+                    *) echo "Invalid choice, try again." ;;
+                esac
+            done
+            echo ""
+            echo "Hardware acceleration (VirGL GPU passthrough)?"
+            echo "1) On (default)  2) Off"
+            while true; do
+                read -p "Select [1-2, default 1]: " HW_CHOICE || true
+                case "${HW_CHOICE:-1}" in
+                    1) NEED_VIRGL=1; break ;;
+                    2) NEED_VIRGL=0; break ;;
+                    *) echo "Invalid choice, try again." ;;
+                esac
+            done
+        fi
+        if [ "$SERVER" = "vnc" ]; then
+            echo ""
+            echo "Choose Display Resolution:"
+            echo "1) Auto / 720p (default)  2) 1080p  3) Tablet (1440x1080)"
+            while true; do
+                read -p "Select Resolution [1-3, default 1]: " RES_CHOICE || true
+                case "${RES_CHOICE:-1}" in
+                    1) RESOLUTION="1280x720"; break ;;
+                    2) RESOLUTION="1920x1080"; break ;;
+                    3) RESOLUTION="1440x1080"; break ;;
+                    *) echo "Invalid choice, try again." ;;
+                esac
+            done
+        fi
+    fi
+    # 4. Software
+    echo ""
+    echo "Software (numbers separated by spaces, Enter to skip):"
+    echo "Dev: 1)Python 2)Git 3)Node.js 4)curl 5)wget 6)Antigravity IDE 14)VS Code"
+    echo "Web: 7)Firefox 8)Chromium   Office: 9)LibreOffice"
+    echo "Media: 10)VLC 11)GIMP   Sys: 12)htop 13)neofetch"
+    while true; do
+        read -p "Selection: " APP_CHOICES || true
+        APP_CHOICES="$(echo "${APP_CHOICES:-}" | xargs)"
+        if [ -z "$APP_CHOICES" ]; then break; fi
+        if echo "$APP_CHOICES" | grep -Eq '^[0-9 ]+$'; then
+            _bad=$(for n in $APP_CHOICES; do [ "$n" -ge 1 ] 2>/dev/null && [ "$n" -le 14 ] 2>/dev/null || echo "$n"; done)
+            if [ -z "$_bad" ]; then break; fi
+            echo "Invalid numbers: $_bad — use 1-14 separated by spaces."
+        else
+            echo "Use numbers 1-14 separated by spaces (or Enter to skip)."
+        fi
+    done
+    # 5. Instance name
+    echo ""
+    while true; do
+        read -p "Instance name (blank = auto): " INSTANCE_NAME || true
+        INSTANCE_NAME="$(echo "${INSTANCE_NAME:-}" | xargs)"
+        if [ -z "$INSTANCE_NAME" ]; then break; fi
+        if echo "$INSTANCE_NAME" | grep -Eq '^[A-Za-z0-9_.-]+$'; then break; fi
+        echo "Use letters, digits, dot, underscore or dash."
+    done
+    # 6-8. Username + passwords
+    echo ""
+    while true; do
+        read -p "Username [default: user]: " SETUP_USER || true
+        SETUP_USER="${SETUP_USER:-user}"
+        if echo "$SETUP_USER" | grep -Eq '^[a-z_][a-z0-9_-]*$' && [ "${#SETUP_USER}" -le 32 ]; then break; fi
+        echo "Lowercase letters, digits, _ or -, must start with a letter or _."
+    done
+    _pw=""
+    setup_read_secret _pw "Password for $SETUP_USER [default: root]: " "root"
+    SETUP_USER_B64="$(b64enc "$_pw")"
+    _pw=""
+    setup_read_secret _pw "Root password [default: root]: " "root"
+    SETUP_ROOT_B64="$(b64enc "$_pw")"
+    _pw=""
+    echo "[*] This password doubles as the VNC and sudo-ritual password."
+    # 9-10. Timezone + hostname
+    echo ""
+    _tzdef="$(setup_guess_timezone)"
+    while true; do
+        read -p "Timezone [default: $_tzdef]: " TIMEZONE || true
+        TIMEZONE="${TIMEZONE:-$_tzdef}"
+        if echo "$TIMEZONE" | grep -Eq '^[A-Za-z0-9_+./-]+$'; then break; fi
+        echo "Format like Area/City (letters, digits, _ + . / -)."
+    done
+    while true; do
+        read -p "Hostname [default: localhost]: " HOSTNAME || true
+        HOSTNAME="${HOSTNAME:-localhost}"
+        if echo "$HOSTNAME" | grep -Eq '^[A-Za-z0-9-]+$' && [ "${#HOSTNAME}" -le 63 ]; then break; fi
+        echo "Letters, digits and dashes only."
+    done
+    # 11. Prompt style
+    echo ""
+    echo "Shell prompt style:"
+    echo "1) Minimal (default)  2) Informative (colors, time, exit status)"
+    while true; do
+        read -p "Select [1-2, default 1]: " PSTYLE_CHOICE || true
+        case "${PSTYLE_CHOICE:-1}" in
+            1) PSTYLE="minimal"; break ;;
+            2) PSTYLE="informative"; break ;;
+            *) echo "Invalid choice, try again." ;;
+        esac
+    done
+    # 12-14. Autostart / storage / SSH / widget
+    echo ""
+    read -p "Autostart at boot via Termux:Boot? (needs the Termux:Boot app) [y/N]: " _a || true
+    case "$_a" in [Yy]*) DO_AUTOSTART=1 ;; *) DO_AUTOSTART=0 ;; esac
+    read -p "Request Android storage access now? [Y/n]: " _a || true
+    case "$_a" in [Nn]*) DO_STORAGE=0 ;; *) DO_STORAGE=1 ;; esac
+    read -p "Start an SSH server after install? [y/N]: " _a || true
+    case "$_a" in [Yy]*) DO_SSH=1 ;; *) DO_SSH=0 ;; esac
+    read -p "Show Termux:Widget shortcut instructions? [y/N]: " _a || true
+    case "$_a" in [Yy]*) DO_WIDGET=1 ;; *) DO_WIDGET=0 ;; esac
+    # Summary + save + go
+    setup_summary
+    read -p "Proceed with installation? [Y/n]: " _ok || true
+    case "$_ok" in
+        [Nn]*) echo "Setup cancelled."; show_menu; return ;;
+    esac
+    SETUP_ANSWERED=1
+    setup_save
+    install_linux
+}
+
+setup_load_saved() {
+    # shellcheck disable=SC1090
+    source "$SETUP_CONF"
+    if [ -z "${DISTRO:-}" ] || [ -z "${DE:-}" ]; then
+        echo "[!] Saved config is incomplete, starting guided setup instead."
+        setup_guided
+        return
+    fi
+    : "${SERVER:=none}" "${RESOLUTION:=1280x720}" "${APP_CHOICES:=}"
+    : "${INSTANCE_NAME:=}" "${SETUP_USER:=user}"
+    : "${SETUP_USER_B64:=cm9vdA==}" "${SETUP_ROOT_B64:=cm9vdA==}"
+    : "${TIMEZONE:=UTC}" "${HOSTNAME:=localhost}" "${PSTYLE:=minimal}"
+    : "${NEED_VIRGL:=1}" "${DO_AUTOSTART:=0}" "${DO_STORAGE:=1}"
+    : "${DO_SSH:=0}" "${DO_WIDGET:=0}"
+    SETUP_ANSWERED=1
+    echo "[*] Loaded saved answers from $SETUP_CONF"
+    setup_summary
+    install_linux
+}
+
+setup_entry() {
+    echo ""
+    echo "========================================="
+    echo "   Linux for Android - Setup             "
+    echo "========================================="
+    print_device_info
+    echo ""
+    echo "1) Quick setup (all defaults, fastest)"
+    echo "2) Guided setup (answer questions)"
+    echo "3) Manager menu (install/update/backup/...)"
+    if [ -f "$SETUP_CONF" ]; then
+        echo "4) Re-install with saved answers"
+    fi
+    read -p "Select: " ENTRY_CHOICE || true
+    case "${ENTRY_CHOICE:-}" in
+        1) setup_quick ;;
+        2) setup_guided ;;
+        3|"") show_menu ;;
+        4) if [ -f "$SETUP_CONF" ]; then setup_load_saved; else echo "No saved setup found."; show_menu; fi ;;
+        *) echo "Invalid choice"; sleep 1; setup_entry ;;
+    esac
 }
 
 require_proot_distro() {
@@ -592,7 +942,9 @@ install_linux() {
     echo ""
     print_device_info
     echo ""
-    select_os_flavor
+    if [ "$SETUP_ANSWERED" != "1" ]; then
+        select_os_flavor
+    fi
     # 32-bit ARM warning (Oppo A37fw and similar): some images lack armv7 builds
     if [ "$IS_32BIT_ARM" = "1" ]; then
         case "$DISTRO" in
@@ -631,10 +983,11 @@ install_linux() {
         esac
     fi
     
+    if [ "$SETUP_ANSWERED" != "1" ]; then
     DE="none"
     SERVER="none"
     RESOLUTION="1280x720"
-    
+
     echo ""
     echo "Choose Desktop Environment:"
     echo "1) XFCE4 (Recommended, Lightweight GUI)"
@@ -643,14 +996,15 @@ install_linux() {
     echo "4) None (CLI only)"
     read -p "Select DE [1-4]: " DE_CHOICE
     if [ "$DE_CHOICE" == "1" ]; then DE="xfce4"; elif [ "$DE_CHOICE" == "2" ]; then DE="lxde"; elif [ "$DE_CHOICE" == "3" ]; then DE="mate"; else DE="none"; fi
+    fi
     # Alpine repos ship no LXDE meta-package (and no startlxde). Fall back
     # to XFCE4 rather than installing a desktop that cannot start.
     if [ "$DISTRO" == "alpine" ] && [ "$DE" == "lxde" ]; then
         echo "[*] LXDE is not packaged for Alpine -> using XFCE4 instead."
         DE="xfce4"
     fi
-    
-    if [ "$DE" != "none" ]; then
+
+    if [ "$DE" != "none" ] && [ "$SETUP_ANSWERED" != "1" ]; then
         # Legacy Android (5/6, SDK < 24): Termux:X11 needs Android 8+.
         # Force VNC so install never dead-ends on Oppo A37fw-class devices.
         if [ "$IS_LEGACY" = "1" ]; then
@@ -676,8 +1030,16 @@ install_linux() {
             if [ "$RES_CHOICE" == "2" ]; then RESOLUTION="1920x1080"; elif [ "$RES_CHOICE" == "3" ]; then RESOLUTION="1440x1080"; else RESOLUTION="1280x720"; fi
         fi
     fi
+    # Safety clamp for answered setups replayed on legacy hardware (e.g. a
+    # config saved elsewhere): X11 can never work there.
+    if [ "$IS_LEGACY" = "1" ] && [ "$DE" != "none" ] && [ "$SERVER" = "x11" ]; then
+        echo "[*] Legacy Android: clamping display server to VNC."
+        SERVER="vnc"
+        [ -z "$RESOLUTION" ] && RESOLUTION="1280x720"
+    fi
 
     # SOFTWARE SELECTOR
+    if [ "$SETUP_ANSWERED" != "1" ]; then
     echo ""
     echo "========================================="
     echo "      Software Selector (Optional)       "
@@ -697,6 +1059,7 @@ install_linux() {
     echo "========================================="
     echo "Enter numbers separated by spaces (e.g. 1 2 7 12), or press Enter to skip."
     read -p "Selection: " APP_CHOICES
+    fi
 
     INSTALL_PYTHON=0; INSTALL_GIT=0; INSTALL_NODEJS=0; INSTALL_CURL=0; INSTALL_WGET=0; INSTALL_IDE=0
     INSTALL_FIREFOX=0; INSTALL_CHROMIUM=0
@@ -723,7 +1086,9 @@ install_linux() {
     done
     
     echo ""
+    if [ "$SETUP_ANSWERED" != "1" ]; then
     read -p "Enter a custom name for this installation (Leave blank for auto-generation): " INSTANCE_NAME
+    fi
     if [ -z "$INSTANCE_NAME" ]; then
         if [ -d "$PREFIX/var/lib/proot-distro/installed-rootfs/$DISTRO" ] || [ -f "$PREFIX/etc/proot-distro/$DISTRO.sh" ]; then
             INSTANCE_NAME="${DISTRO}-$(date +%M%S)"
@@ -737,7 +1102,7 @@ install_linux() {
     echo "Beginning Installation of $INSTANCE_NAME..."
     echo "========================================="
 
-    if [ ! -d ~/storage ]; then
+    if [ "${DO_STORAGE:-1}" = "1" ] && [ ! -d ~/storage ]; then
         echo "[*] Requesting Android Storage Permission..."
         termux-setup-storage || true
         sleep 2
@@ -946,12 +1311,20 @@ install_linux() {
     esac
 
     # Save the configuration for dynamic boot!
+    LINUX_USER="${SETUP_USER:-user}"
+    if ! echo "$LINUX_USER" | grep -Eq '^[a-z_][a-z0-9_-]*$'; then LINUX_USER="user"; fi
+    UPASS_B64="${SETUP_USER_B64:-cm9vdA==}"
+    RPASS_B64="${SETUP_ROOT_B64:-cm9vdA==}"
+    SPASS_B64="$UPASS_B64"
     mkdir -p "$ROOTFS/etc"
     echo "DISTRO=\"$DISTRO\"" > "$ROOTFS/etc/termux-linux-manager.conf"
     echo "DE=\"$DE\"" >> "$ROOTFS/etc/termux-linux-manager.conf"
     echo "SERVER=\"$SERVER\"" >> "$ROOTFS/etc/termux-linux-manager.conf"
     echo "RESOLUTION=\"$RESOLUTION\"" >> "$ROOTFS/etc/termux-linux-manager.conf"
     echo "UPDATE_CMD=\"$UPDATE_CMD\"" >> "$ROOTFS/etc/termux-linux-manager.conf"
+    echo "USER_NAME=\"$LINUX_USER\"" >> "$ROOTFS/etc/termux-linux-manager.conf"
+    echo "TIMEZONE=\"${TIMEZONE:-UTC}\"" >> "$ROOTFS/etc/termux-linux-manager.conf"
+    echo "HOSTNAME=\"${HOSTNAME:-localhost}\"" >> "$ROOTFS/etc/termux-linux-manager.conf"
     
     # (Removed broken universal wallpaper download)
     
@@ -1080,18 +1453,27 @@ EOF
     fi
     
     cat << 'EOF' >> "$SETUP_SCRIPT"
-echo " -> Creating standard 'user' account (plus ritual-only sudo shim)..."
-useradd -m -s /bin/bash -p '$6$2CVwRKnVTKWooeTY$nHqEssE3XSilZS3k2Qnw8rCk/e1kVUzOXXisyT4/Sefi9N8YnAzXeXvf2N.HQTZjkMq54NEBStZOY564ShVUS1' user || true
-usermod -p '$6$2CVwRKnVTKWooeTY$nHqEssE3XSilZS3k2Qnw8rCk/e1kVUzOXXisyT4/Sefi9N8YnAzXeXvf2N.HQTZjkMq54NEBStZOY564ShVUS1' user || true
-echo "user ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
+echo " -> Creating standard '__LUSER__' account (plus ritual-only sudo shim)..."
+useradd -m -s /bin/bash __LUSER__ || true
+LPASS_USER="$(echo '__UPASS_B64__' | base64 -d 2>/dev/null)"
+if [ -n "$LPASS_USER" ]; then
+    printf '%s:%s\n' "__LUSER__" "$LPASS_USER" | chpasswd || true
+fi
+unset LPASS_USER
+LPASS_ROOT="$(echo '__RPASS_B64__' | base64 -d 2>/dev/null)"
+if [ -n "$LPASS_ROOT" ]; then
+    printf '%s:%s\n' "root" "$LPASS_ROOT" | chpasswd || true
+fi
+unset LPASS_ROOT
+echo "__LUSER__ ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
 echo "root ALL=(ALL) ALL" >> /etc/sudoers
 
 echo " -> Linking Android Internal Storage..."
-mkdir -p /home/user/storage
+mkdir -p /home/__LUSER__/storage
 if [ -d /data/data/com.termux/files/home/storage ]; then
-    ln -sf /data/data/com.termux/files/home/storage/* /home/user/storage/
+    ln -sf /data/data/com.termux/files/home/storage/* /home/__LUSER__/storage/
 fi
-chown -R user:user /home/user/storage
+chown -R __LUSER__:__LUSER__ /home/__LUSER__/storage
 mkdir -p /root/storage
 if [ -d /data/data/com.termux/files/home/storage ]; then
     ln -sf /data/data/com.termux/files/home/storage/* /root/storage/
@@ -1114,7 +1496,9 @@ cat << 'SUDO' > /usr/local/bin/sudo
 # its exit status. When /usr/local/lib/libuid0.so exists (built during
 # setup on apt distros, see lib/uid0.c), it is preloaded so uid-gated tools
 # like dpkg proceed; files still land owned by you either way.
-SUDO_SHIM_PASSWORD="root"
+# The accepted password is stored base64-encoded (never plaintext): the
+# typed password is encoded the same way before comparing.
+SUDO_SHIM_B64="__SPASS_B64__"
 
 usage() {
     echo "usage: sudo [-u user] [-i|-s] [-E] [-H] [-n] [-v] [-k] [-p prompt] [command [args...]]" >&2
@@ -1207,7 +1591,7 @@ tries=0
 authed=0
 while [ "$tries" -lt 3 ]; do
     if ! ask_password; then authed=-1; break; fi
-    if [ "$_pw" = "$SUDO_SHIM_PASSWORD" ]; then authed=1; break; fi
+    if [ "$(printf '%s' "$_pw" | base64 2>/dev/null | tr -d '\n')" = "$SUDO_SHIM_B64" ]; then authed=1; break; fi
     tries=$((tries + 1))
     [ "$tries" -lt 3 ] && echo "Sorry, try again." >&2
 done
@@ -1263,14 +1647,15 @@ EOF
 
     if [ "$SERVER" == "vnc" ]; then
         cat << 'EOF' >> "$SETUP_SCRIPT"
-echo " -> Configuring VNC Password (default: root)..."
-mkdir -p /home/user/.vnc
+echo " -> Configuring VNC password..."
+mkdir -p /home/__LUSER__/.vnc
 expect << 'EOD'
-spawn vncpasswd /home/user/.vnc/passwd
+set vpw [exec echo __UPASS_B64__ | base64 -d]
+spawn vncpasswd /home/__LUSER__/.vnc/passwd
 expect "Password:"
-send "root\r"
+send "$vpw\r"
 expect "Verify:"
-send "root\r"
+send "$vpw\r"
 expect "Would you like to enter a view-only password (y/n)?"
 send "n\r"
 expect eof
@@ -1278,7 +1663,7 @@ EOD
 EOF
         if [ "$DE" == "xfce4" ]; then
             cat << 'EOF' >> "$SETUP_SCRIPT"
-cat << 'STARTUP' > /home/user/.vnc/xstartup
+cat << 'STARTUP' > /home/__LUSER__/.vnc/xstartup
 #!/bin/sh
 export PULSE_SERVER=127.0.0.1
 startxfce4 &
@@ -1286,7 +1671,7 @@ STARTUP
 EOF
         elif [ "$DE" == "lxde" ]; then
             cat << 'EOF' >> "$SETUP_SCRIPT"
-cat << 'STARTUP' > /home/user/.vnc/xstartup
+cat << 'STARTUP' > /home/__LUSER__/.vnc/xstartup
 #!/bin/sh
 export PULSE_SERVER=127.0.0.1
 startlxde &
@@ -1294,7 +1679,7 @@ STARTUP
 EOF
         elif [ "$DE" == "mate" ]; then
             cat << 'EOF' >> "$SETUP_SCRIPT"
-cat << 'STARTUP' > /home/user/.vnc/xstartup
+cat << 'STARTUP' > /home/__LUSER__/.vnc/xstartup
 #!/bin/sh
 export PULSE_SERVER=127.0.0.1
 dbus-launch --exit-with-session mate-session &
@@ -1302,11 +1687,54 @@ STARTUP
 EOF
         fi
         cat << 'EOF' >> "$SETUP_SCRIPT"
-chmod +x /home/user/.vnc/xstartup
-chown -R user:user /home/user/.vnc
+chmod +x /home/__LUSER__/.vnc/xstartup
+chown -R __LUSER__:__LUSER__ /home/__LUSER__/.vnc
 EOF
     fi
     
+    # Timezone / hostname / shell prompt (from guided setup; skipped when
+    # unset, e.g. classic wizard path). Values are charset-validated at
+    # input time; __TZ__/__HOSTNAME__ use '#' sed delimiter (may contain /).
+    if [ -n "${TIMEZONE:-}" ]; then
+        cat << 'EOF' >> "$SETUP_SCRIPT"
+echo " -> Setting timezone (__TZ__)..."
+if [ -f "/usr/share/zoneinfo/__TZ__" ]; then
+    ln -sf "/usr/share/zoneinfo/__TZ__" /etc/localtime
+    echo "__TZ__" > /etc/timezone 2>/dev/null || true
+else
+    echo "[!] Timezone __TZ__ not found in guest, keeping default."
+fi
+EOF
+    fi
+    if [ -n "${HOSTNAME:-}" ]; then
+        cat << 'EOF' >> "$SETUP_SCRIPT"
+echo " -> Setting hostname (__HOSTNAME__)..."
+echo "__HOSTNAME__" > /etc/hostname
+grep -q "__HOSTNAME__" /etc/hosts 2>/dev/null || echo "127.0.1.1 __HOSTNAME__" >> /etc/hosts
+EOF
+    fi
+    if [ "${SETUP_ANSWERED:-}" = "1" ]; then
+    if [ "${PSTYLE:-minimal}" = "informative" ]; then
+        cat << 'EOF' >> "$SETUP_SCRIPT"
+echo " -> Configuring informative shell prompt..."
+printf "%s\n" "PS1='\[\e[32m\]\u@\h\[\e[0m\]:\[\e[34m\]\w\[\e[0m\] [\A] \$ '" >> /root/.bashrc
+printf "%s\n" "PS1='\[\e[32m\]\u@\h\[\e[0m\]:\[\e[34m\]\w\[\e[0m\] [\A] \$ '" >> /home/__LUSER__/.bashrc
+chown __LUSER__:__LUSER__ /home/__LUSER__/.bashrc 2>/dev/null || true
+EOF
+    else
+        cat << 'EOF' >> "$SETUP_SCRIPT"
+echo " -> Configuring minimal shell prompt..."
+printf "%s\n" "PS1='\u@\h:\w\$ '" >> /root/.bashrc
+printf "%s\n" "PS1='\u@\h:\w\$ '" >> /home/__LUSER__/.bashrc
+chown __LUSER__:__LUSER__ /home/__LUSER__/.bashrc 2>/dev/null || true
+EOF
+    fi
+    fi
+
+    # Substitute setup-chosen values (see comment at first sed call site).
+    sed -i "s/__LUSER__/$LINUX_USER/g; s/__UPASS_B64__/$UPASS_B64/g; s/__RPASS_B64__/$RPASS_B64/g; s/__SPASS_B64__/$SPASS_B64/g" "$SETUP_SCRIPT"
+    sed -i "s#__TZ__#${TIMEZONE:-UTC}#g; s#__HOSTNAME__#${HOSTNAME:-localhost}#g" "$SETUP_SCRIPT"
+
     echo "[*] Executing setup inside $INSTANCE_NAME (this will take a while)..."
     # Alpine base ships busybox sh only: pre-install bash/sudo/shadow via sh
     # first, otherwise the 'bash /tmp/...' setup invocation cannot start.
@@ -1385,7 +1813,7 @@ else
     echo ""
     echo "No desktop installed (CLI only)."
     echo "1) Root terminal (default, admin)"
-    echo "2) User terminal ('user' account)"
+    echo "2) User terminal ('__LUSER__' account)"
     read -p "Select [1-2]: " MODE_CHOICE
     if [ "$MODE_CHOICE" == "2" ]; then MODE="user"; else MODE="root"; fi
 fi
@@ -1403,7 +1831,7 @@ elif [ "$MODE" == "user" ]; then
             echo "    From here, use 'sudo apt install' instead (shim emulates uid 0)."
             ;;
     esac
-    proot-distro login $NO_SYSVIPC $DISTRO --user user --shared-tmp
+    proot-distro login $NO_SYSVIPC $DISTRO --user __LUSER__ --shared-tmp
     exit 0
 fi
 
@@ -1430,21 +1858,22 @@ if [ "$SERVER" == "x11" ]; then
     echo "Starting Termux:X11..."
     termux-x11 :1 &
     sleep 2
-    echo "Starting $DISTRO as 'user'..."
+    echo "Starting $DISTRO as '__LUSER__'..."
     if [ "$DE" == "xfce4" ]; then
-        nohup proot-distro login $NO_SYSVIPC $DISTRO --user user --shared-tmp -- bash -c "export PULSE_SERVER=127.0.0.1; export DISPLAY=:1; export GALLIUM_DRIVER=virpipe; export MESA_GL_VERSION_OVERRIDE=4.0; startxfce4" >/dev/null 2>&1 &
+        nohup proot-distro login $NO_SYSVIPC $DISTRO --user __LUSER__ --shared-tmp -- bash -c "export PULSE_SERVER=127.0.0.1; export DISPLAY=:1; export GALLIUM_DRIVER=virpipe; export MESA_GL_VERSION_OVERRIDE=4.0; startxfce4" >/dev/null 2>&1 &
     elif [ "$DE" == "lxde" ]; then
-        nohup proot-distro login $NO_SYSVIPC $DISTRO --user user --shared-tmp -- bash -c "export PULSE_SERVER=127.0.0.1; export DISPLAY=:1; export GALLIUM_DRIVER=virpipe; export MESA_GL_VERSION_OVERRIDE=4.0; startlxde" >/dev/null 2>&1 &
+        nohup proot-distro login $NO_SYSVIPC $DISTRO --user __LUSER__ --shared-tmp -- bash -c "export PULSE_SERVER=127.0.0.1; export DISPLAY=:1; export GALLIUM_DRIVER=virpipe; export MESA_GL_VERSION_OVERRIDE=4.0; startlxde" >/dev/null 2>&1 &
     elif [ "$DE" == "mate" ]; then
-        nohup proot-distro login $NO_SYSVIPC $DISTRO --user user --shared-tmp -- bash -c "export PULSE_SERVER=127.0.0.1; export DISPLAY=:1; export GALLIUM_DRIVER=virpipe; export MESA_GL_VERSION_OVERRIDE=4.0; dbus-launch --exit-with-session mate-session" >/dev/null 2>&1 &
+        nohup proot-distro login $NO_SYSVIPC $DISTRO --user __LUSER__ --shared-tmp -- bash -c "export PULSE_SERVER=127.0.0.1; export DISPLAY=:1; export GALLIUM_DRIVER=virpipe; export MESA_GL_VERSION_OVERRIDE=4.0; dbus-launch --exit-with-session mate-session" >/dev/null 2>&1 &
     fi
 elif [ "$SERVER" == "vnc" ]; then
     echo "Starting VNC Server..."
     if [ -z "$RESOLUTION" ]; then RESOLUTION="1280x720"; fi
-    proot-distro login $NO_SYSVIPC $DISTRO --user user --shared-tmp -- bash -c "export PULSE_SERVER=127.0.0.1; export GALLIUM_DRIVER=virpipe; export MESA_GL_VERSION_OVERRIDE=4.0; vncserver -geometry $RESOLUTION :1"
+    proot-distro login $NO_SYSVIPC $DISTRO --user __LUSER__ --shared-tmp -- bash -c "export PULSE_SERVER=127.0.0.1; export GALLIUM_DRIVER=virpipe; export MESA_GL_VERSION_OVERRIDE=4.0; vncserver -geometry $RESOLUTION :1"
 fi
 EOF
     chmod +x $PREFIX/bin/start-linux
+    sed -i "s/__LUSER__/$LINUX_USER/g" $PREFIX/bin/start-linux
     
     cat << 'EOF' > $PREFIX/bin/stop-linux
 #!/bin/bash
@@ -1499,10 +1928,11 @@ if [ "$SERVER" == "x11" ]; then
     pkill -f termux-x11 2>/dev/null || true
 elif [ "$SERVER" == "vnc" ]; then
     echo "Stopping VNC Server..."
-    proot-distro login $NO_SYSVIPC $DISTRO --user user --shared-tmp -- bash -c "vncserver -kill :1" 2>/dev/null || true
+    proot-distro login $NO_SYSVIPC $DISTRO --user __LUSER__ --shared-tmp -- bash -c "vncserver -kill :1" 2>/dev/null || true
 fi
 EOF
     chmod +x $PREFIX/bin/stop-linux
+    sed -i "s/__LUSER__/$LINUX_USER/g" $PREFIX/bin/stop-linux
 
     cat << 'EOF' > $PREFIX/bin/terminal-linux
 #!/bin/bash
@@ -1537,7 +1967,7 @@ fi
 
 echo ""
 echo "1) Root terminal (admin - sudo does not work inside proot, and is not needed)"
-echo "2) User terminal ('user' account)"
+echo "2) User terminal ('__LUSER__' account)"
 read -p "Select [1-2, default 1]: " TERM_CHOICE
 if [ "$TERM_CHOICE" == "2" ]; then
     echo "Opening user terminal in $DISTRO..."
@@ -1549,18 +1979,63 @@ if [ "$TERM_CHOICE" == "2" ]; then
             echo "    From here, use 'sudo apt install' instead (shim emulates uid 0)."
             ;;
     esac
-    proot-distro login $NO_SYSVIPC $DISTRO --user user --shared-tmp
+    proot-distro login $NO_SYSVIPC $DISTRO --user __LUSER__ --shared-tmp
 else
     echo "Opening root terminal in $DISTRO..."
     proot-distro login $NO_SYSVIPC $DISTRO --shared-tmp
 fi
 EOF
     chmod +x $PREFIX/bin/terminal-linux
+    sed -i "s/__LUSER__/$LINUX_USER/g" $PREFIX/bin/terminal-linux
     cat << 'EOF' > ~/.shortcuts/Terminal-Linux
 #!/bin/bash
 terminal-linux
 EOF
     chmod +x ~/.shortcuts/Terminal-Linux 2>/dev/null || true
+
+    # Post-install extras chosen in guided setup (all optional, all safe to
+    # skip: every block tolerates missing pieces).
+    if [ "${DO_SSH:-0}" = "1" ]; then
+        echo "[*] Setting up SSH server..."
+        pkg install -y openssh 2>/dev/null || pkg install openssh -y 2>/dev/null || true
+        if command -v sshd >/dev/null 2>&1; then
+            sshd 2>/dev/null || true
+            _ip=$(ifconfig 2>/dev/null | grep -E 'inet .*broadcast' | awk '{print $2}' | head -n 1 || true)
+            if [ -z "$_ip" ]; then _ip="YOUR_PHONE_IP"; fi
+            echo "========================================="
+            echo "SSH server running! From your PC:"
+            echo "   ssh $(whoami)@$_ip -p 8022"
+            echo "(Run 'passwd' first if you never set a Termux password.)"
+            echo "========================================="
+        else
+            echo "[!] openssh unavailable, skipping SSH server."
+        fi
+    fi
+    if [ "${DO_WIDGET:-0}" = "1" ]; then
+        echo "[*] Widget shortcuts (~/.shortcuts/Start-Linux, Terminal-Linux) are ready."
+        echo "    Long-press home screen -> Widgets -> Termux:Widget to place them."
+    fi
+    if [ "${DO_AUTOSTART:-0}" = "1" ]; then
+        echo "[*] Setting up Termux:Boot autostart (needs the Termux:Boot app)..."
+        mkdir -p ~/.termux/boot
+        {
+            echo "#!/bin/bash"
+            echo "# Generated by Linux-for-Android setup: starts services at boot."
+            echo "termux-wake-lock 2>/dev/null || true"
+            if [ "${DO_SSH:-0}" = "1" ]; then
+                echo "sshd 2>/dev/null || true"
+            fi
+            if [ "$SERVER" = "vnc" ]; then
+                echo "sleep 5"
+                echo "proot-distro login $(pd_login_flags) $INSTANCE_NAME --user $LINUX_USER --shared-tmp -- bash -c \"vncserver -geometry ${RESOLUTION:-1280x720} :1\" >/dev/null 2>&1 || true"
+            elif [ "$SERVER" = "x11" ]; then
+                echo "# NOTE: Termux:X11 needs its app window open, so it cannot"
+                echo "# autostart unattended. Start it with start-linux instead."
+            fi
+        } > ~/.termux/boot/start-linux-services.sh
+        chmod +x ~/.termux/boot/start-linux-services.sh
+        echo "    Boot script written to ~/.termux/boot/start-linux-services.sh"
+    fi
 
     echo ""
     echo "========================================="
@@ -1569,7 +2044,7 @@ EOF
     echo "(default, full admin) or user terminal. Install packages directly"
     echo "(apk add / apt install ...). sudo does NOT work inside proot on"
     echo "Android (NO_NEW_PRIVS) and is not needed - you own every file."
-    echo "GUI sessions run as 'user' (VNC password: root)."
+    echo "GUI sessions run as '$LINUX_USER' (VNC password: the one you chose in setup)."
     echo "Use commands: start-linux / terminal-linux (shell only) / stop-linux"
     echo "If you installed the Termux:Widget app, a shortcut is on your home screen!"
     echo "========================================="
@@ -1580,4 +2055,4 @@ EOF
 # Initialise device profile once so IS_LEGACY / ARCH are set for menu ops
 detect_environment
 
-show_menu
+setup_entry
