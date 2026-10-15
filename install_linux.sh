@@ -185,11 +185,13 @@ ensure_dependencies() {
     # virglrenderer-android = optional GPU accel, Android 7+ only.
     # Missing on Android 5 -> silently skip, VNC will be used.
     # NEED_VIRGL (from guided setup) can disable it on modern devices too.
-    if [ "$IS_LEGACY" != "1" ] && [ "${NEED_VIRGL:-1}" = "1" ]; then
+    if [ "$IS_LEGACY" = "1" ]; then
+        echo "[*] Skipping virglrenderer-android (not available on Android 5/6)."
+    elif [ "${NEED_VIRGL:-1}" = "1" ]; then
         echo "[*] Installing VirGL (optional, for GPU acceleration)..."
         pkg install -y virglrenderer-android 2>/dev/null || echo "[!] virglrenderer-android unavailable, continuing without GPU acceleration."
     else
-        echo "[*] Skipping virglrenderer-android (not available on Android 5/6)."
+        echo "[*] VirGL disabled by setup choice."
     fi
 
     if [ "$NEED_X11" = "1" ]; then
@@ -503,8 +505,9 @@ setup_guided() {
     while true; do
         read -p "Timezone [default: $_tzdef]: " TIMEZONE || true
         TIMEZONE="${TIMEZONE:-$_tzdef}"
-        if echo "$TIMEZONE" | grep -Eq '^[A-Za-z0-9_+./-]+$'; then break; fi
-        echo "Format like Area/City (letters, digits, _ + . / -)."
+        # Real zones are Area/City (contain /); UTC is the only bare word.
+        if [ "$TIMEZONE" = "UTC" ] || echo "$TIMEZONE" | grep -Eq '^[A-Za-z0-9_+.-]+/[A-Za-z0-9_+./-]+$'; then break; fi
+        echo "Format like Area/City (e.g. Asia/Kathmandu) or UTC."
     done
     while true; do
         read -p "Hostname [default: localhost]: " HOSTNAME || true
@@ -547,7 +550,9 @@ setup_guided() {
 
 setup_load_saved() {
     # shellcheck disable=SC1090
-    source "$SETUP_CONF"
+    # Guarded: a corrupt file must fall back to guided setup, not abort
+    # the whole script under set -e.
+    source "$SETUP_CONF" 2>/dev/null || true
     if [ -z "${DISTRO:-}" ] || [ -z "${DE:-}" ]; then
         echo "[!] Saved config is incomplete, starting guided setup instead."
         setup_guided
