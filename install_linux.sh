@@ -975,6 +975,20 @@ EOF
 echo " -> Updating repositories..."
 $UPDATE_CMD
 EOF
+
+    # dbus's postinst registers its setuid helper via dpkg-statoverride,
+    # whose atomic file-replace dance fails under old proot (EPERM creating
+    # the backup). Pre-seed the exact entry it wants: its own
+    # '--list path' check then skips the failing call entirely and the
+    # package configures cleanly. (Helper setuid bits are meaningless in
+    # proot anyway.)
+    if [ "$DISTRO" == "ubuntu" ] || [ "$DISTRO" == "debian" ] || [ "$DISTRO" == "kali" ]; then
+        cat << 'EOF' >> "$SETUP_SCRIPT"
+echo " -> Pre-seeding dpkg-statoverride entry for dbus..."
+rm -f /var/lib/dpkg/statoverride-new /var/lib/dpkg/statoverride-old
+grep -q "dbus-daemon-launch-helper" /var/lib/dpkg/statoverride 2>/dev/null || echo "root messagebus 4754 /usr/lib/dbus-1.0/dbus-daemon-launch-helper" >> /var/lib/dpkg/statoverride
+EOF
+    fi
     
     APT_PKGS="$SUDO_PKG"
     if [ "$DE" == "xfce4" ]; then APT_PKGS="$APT_PKGS $XFCE_PKG"; fi
