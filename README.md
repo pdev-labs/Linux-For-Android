@@ -133,7 +133,8 @@ This configuration was tested end-to-end on Android 5.1.1 (kernel 3.10, aarch64)
 - `fastfetch` does not exist in bullseye — use `neofetch`.
 - Ignore `apt`/`dpkg` warnings about hardware, `systemd`, or `dbus` hooks
   failing — post-install hooks can't reach real hardware from proot and fail
-  safely (a half-configured `dbus` daemon is normal and harmless).
+  safely. (Fresh installs pre-seed dbus's `statoverride` entry and ship a
+  `policy-rc.d`, so dbus configures cleanly instead of ending half-done.)
 
 ## 💻 Usage Guide
 
