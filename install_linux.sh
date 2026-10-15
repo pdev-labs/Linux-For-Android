@@ -1011,6 +1011,7 @@ rm -f /tmp/uid0.c
 apt-get purge -y gcc 2>/dev/null || true
 apt-get autoremove -y 2>/dev/null || true
 echo " -> Letting apt methods skip privilege dropping (no setgroups in proot)..."
+mkdir -p /etc/apt/apt.conf.d
 echo 'APT::Sandbox::User "root";' > /etc/apt/apt.conf.d/99-proot-no-sandbox
 EOF
         else
