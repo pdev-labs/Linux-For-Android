@@ -990,6 +990,32 @@ $INSTALL_CMD $APT_PKGS
 EOF
     fi
 
+    # Build the uid0 emulation library on apt distros so the sudo shim can
+    # satisfy dpkg's uid-0 check inside user shells (see lib/uid0.c).
+    # Toolchain is transient: installed, used once, purged right after.
+    # The guest /tmp is shared with the host ($PREFIX/tmp via --shared-tmp),
+    # so stage the source host-side first.
+    if [ "$DISTRO" == "ubuntu" ] || [ "$DISTRO" == "debian" ] || [ "$DISTRO" == "kali" ]; then
+        SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+        if [ -f "$SCRIPT_DIR/lib/uid0.c" ]; then
+            cp "$SCRIPT_DIR/lib/uid0.c" "$PREFIX/tmp/uid0.c"
+            cat << 'EOF' >> "$SETUP_SCRIPT"
+echo " -> Building uid0 emulation library (lets sudo satisfy dpkg)..."
+apt-get install -y gcc || true
+if command -v gcc >/dev/null 2>&1; then
+    gcc -shared -nostdlib -O2 -o /usr/local/lib/libuid0.so /tmp/uid0.c && chmod 644 /usr/local/lib/libuid0.so && echo "    uid0 library ready." || echo "[!] uid0 build failed (sudo stays ritual-only)."
+else
+    echo "[!] gcc unavailable, skipping uid0 build (sudo stays ritual-only)."
+fi
+rm -f /tmp/uid0.c
+apt-get purge -y gcc 2>/dev/null || true
+apt-get autoremove -y 2>/dev/null || true
+EOF
+        else
+            echo "[!] Warning: lib/uid0.c not found next to the script; sudo stays ritual-only."
+        fi
+    fi
+
     if [ "$INSTALL_VSCODE" == "1" ]; then
         cat << 'EOF' >> "$SETUP_SCRIPT"
 echo " -> Configuring VS Code Repository..."
@@ -1061,8 +1087,10 @@ cat << 'SUDO' > /usr/local/bin/sudo
 # guest file is already owned by you.
 #
 # So this shim only performs the familiar password ritual (it accepts the
-# install-time user password), then runs your command unchanged and passes
-# through its exit status.
+# install-time user password), then runs your command and passes through
+# its exit status. When /usr/local/lib/libuid0.so exists (built during
+# setup on apt distros, see lib/uid0.c), it is preloaded so uid-gated tools
+# like dpkg proceed; files still land owned by you either way.
 SUDO_SHIM_PASSWORD="root"
 
 usage() {
@@ -1175,6 +1203,15 @@ export SUDO_USER="${USER:-$_self}"
 export SUDO_COMMAND="$*"
 
 if [ "$VALIDATE_ONLY" -eq 1 ]; then exit 0; fi
+# UID emulation (lib/uid0.c in the repo, built during setup): lets
+# uid-gated tools such as dpkg proceed inside a user shell by answering
+# identity queries as 0 and no-op'ing chown. Files really land owned by
+# you, which is consistent everywhere in the guest. Only active when the
+# library exists; harmlessly absent otherwise.
+if [ -f /usr/local/lib/libuid0.so ]; then
+    LD_PRELOAD="/usr/local/lib/libuid0.so${LD_PRELOAD:+:$LD_PRELOAD}"
+    export LD_PRELOAD
+fi
 if [ "$RUN_SHELL" -eq 1 ] || [ $# -eq 0 ]; then
     if [ $# -eq 0 ] && [ "$RUN_SHELL" -eq 0 ]; then usage; exit 1; fi
     if [ "$KEEP_ENV" -ne 1 ]; then HOME=/root; export HOME; fi

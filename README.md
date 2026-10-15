@@ -164,10 +164,11 @@ Handy for quick admin work and as a Termux:Widget shortcut (auto-created).
 - **`start-linux` / `terminal-linux` ask every time:** **root** terminal
   (default, full admin) or **user** terminal. Install packages directly
   (`apk add` on Alpine, `apt install` on Debian/Ubuntu, …).
-- **`sudo` is a ritual-only shim** (`/usr/local/bin/sudo`, password `root`):
-  it asks for the password, then runs your command unchanged. Real setuid
-  elevation is impossible inside proot (see below) — and unnecessary, since
-  you already own every file.
+- **`sudo` is a ritual-plus-emulation shim** (`/usr/local/bin/sudo`, password
+  `root`): it asks for the password, then runs your command — preloading a
+  tiny `libuid0` that answers identity queries as uid 0 (fakeroot-style, no
+  daemon) so tools like `dpkg` proceed. Real setuid elevation remains
+  impossible inside proot — and unnecessary, since you already own every file.
 - **Why no sudo?** Android app processes carry the `NO_NEW_PRIVS` flag and
   proot cannot grant real root, so `sudo`/`su` can never work inside proot
   on any device. You already own every file, so elevation is unnecessary.
