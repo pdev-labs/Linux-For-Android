@@ -36,14 +36,25 @@ Currently supported distributions:
 
 > **Android 5/6 devices (e.g. kernel 3.10):** the script auto-detects legacy
 > devices, installs `proot-distro` v4.2.0 from source when the package is
-> missing, forces VNC instead of Termux:X11, and skips VirGL. Only **Alpine**
-> is verified working there — modern glibc distros (Debian bookworm, Ubuntu
-> mantic, Fedora 39, …) fail at the first guest command on a 3.10 kernel.
+> missing, forces VNC instead of Termux:X11, and skips VirGL. **Alpine**
+> (musl) and **Debian** (auto-switches to bullseye, glibc 2.31) are verified
+> working there — modern glibc distros (bookworm, Ubuntu mantic, Fedora
+> 39, …) cannot execute on a 3.10 kernel.
 
 ## 🚀 Key Features
 
 ### The Ultimate Experience
-- **True Linux Experience (Sudo):** Sets up a proper non-root user (`user`) with `sudo` privileges. Install packages just like on a real PC!
+- **Root or User Terminal, Your Choice:** `start-linux` (and the standalone
+  `terminal-linux` shortcut) ask every boot whether you want a **root**
+  terminal (full admin) or the **`user`** terminal — with no display/audio
+  servers started in terminal modes.
+- **Honest Privileges (Ritual `sudo`):** Real setuid elevation is impossible
+  inside proot on Android, so instead of a broken `sudo` you get a small
+  ritual-only shim: it asks for the install password, then runs your command
+  with the full access you already have. No silent failures, no surprises.
+- **Legacy Android Auto-Support:** Android 5/6 devices are detected and get
+  proot-distro v4.2.0 from source, forced VNC, Alpine + Debian-bullseye
+  options, and workarounds for old `proot` — all automatically.
 - **VirGL 3D Hardware Acceleration:** Automatically configures `virglrenderer-android`, passing 3D OpenGL rendering directly to your phone's physical GPU for incredibly smooth graphics.
 - **Hardware Acceleration (Termux:X11):** Choose between traditional VNC (software rendering) or Termux:X11 for a much smoother, hardware-accelerated desktop experience.
 - **Dynamic Display Settings:** Dynamically pick your screen resolution and UI scaling (Auto, 720p, 1080p, or Tablet size) to perfectly fit your device.
@@ -57,7 +68,7 @@ Currently supported distributions:
 
 ### Portability & Convenience
 - **Portable Export & Import (Share with Friends!):** Export your fully customized Linux OS as a `.tar.gz` file into your Android `Downloads` folder. Your friends can place the file in their `Downloads` folder and use the "Import" button to instantly clone your exact setup!
-- **Home-Screen Widgets:** If you use the `Termux:Widget` app, the script automatically generates a shortcut so you can launch your Linux desktop with one tap straight from your Android home screen!
+- **Home-Screen Widgets:** If you use the `Termux:Widget` app, the script automatically generates shortcuts so you can launch your Linux desktop (`Start-Linux`) or a plain shell (`Terminal-Linux`) with one tap straight from your Android home screen!
 
 ## ⚙️ Installation
 
@@ -202,14 +213,21 @@ While installing packages, you might see red errors like:
 - `Failed to send reload request`
 **Fix:** Ignore them! These are completely normal. Linux packages try to communicate with physical hardware or the `systemd` init process during installation. Since you are safely contained on Android without direct hardware/init access, these post-installation hooks fail safely without affecting your desktop.
 
-### 4. "Cannot establish any listening sockets - Make sure an X server isn't already running"
+### 4. `dpkg: error: requested operation requires superuser privilege`
+**Symptom:** `apt install` fails inside a *user* terminal while `apt update` works.
+**Fix:** This is by design of `dpkg`, which refuses to run unless uid is 0 —
+the user shell runs as your normal uid. Re-open the distro as a **root**
+terminal (`start-linux` / `terminal-linux` → root) and install there. (On
+Alpine this never happens: `apk` performs no uid check.)
+
+### 5. "Cannot establish any listening sockets - Make sure an X server isn't already running"
 **Symptom:** You type `start-linux` but it immediately fails with this error.
 **Fix:** The Termux:X11 display server is stuck running in the background from a previous session. Simply run `stop-linux` in your terminal to easily clean up the ghost processes, then run `start-linux` again.
 
-### 5. Termux:X11 app stays open after running `stop-linux`
+### 6. Termux:X11 app stays open after running `stop-linux`
 **Fix:** This is normal! `stop-linux` safely shuts down the background Linux servers, but it cannot forcefully close the Android App window itself due to Android security sandboxing. Simply swipe the Termux:X11 app away in your Android "Recent Apps" menu.
 
-### 6. Installation seems frozen at "Setting up elementary-xfce-icon-theme..."
+### 7. Installation seems frozen at "Setting up elementary-xfce-icon-theme..."
 **Fix:** Be patient! This specific package contains tens of thousands of tiny icon files. Because `proot` must translate every single file operation via your phone's CPU, unpacking thousands of files takes significantly longer than on a native PC (sometimes 10 to 20 minutes on mid-range phones). Keep Termux open and let it finish!
 
 ## 🤝 Contributing
