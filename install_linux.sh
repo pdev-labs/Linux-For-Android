@@ -1330,6 +1330,7 @@ install_linux() {
     echo "USER_NAME=\"$LINUX_USER\"" >> "$ROOTFS/etc/termux-linux-manager.conf"
     echo "TIMEZONE=\"${TIMEZONE:-UTC}\"" >> "$ROOTFS/etc/termux-linux-manager.conf"
     echo "HOSTNAME=\"${HOSTNAME:-localhost}\"" >> "$ROOTFS/etc/termux-linux-manager.conf"
+    echo "NEED_VIRGL=\"${NEED_VIRGL:-1}\"" >> "$ROOTFS/etc/termux-linux-manager.conf"
     
     # (Removed broken universal wallpaper download)
     
@@ -1718,6 +1719,18 @@ echo "__HOSTNAME__" > /etc/hostname
 grep -q "__HOSTNAME__" /etc/hosts 2>/dev/null || echo "127.0.1.1 __HOSTNAME__" >> /etc/hosts
 EOF
     fi
+    # Proot cannot change the kernel hostname (no UTS namespace), so \h in
+    # PS1 would always show Android's own name. Bake the chosen hostname
+    # directly into the prompt instead. Applies to every guided install.
+    if [ -n "${HOSTNAME:-}" ]; then
+        cat << 'EOF' >> "$SETUP_SCRIPT"
+echo " -> Baking '__HOSTNAME__' into shell prompts (proot cannot set UTS hostname)..."
+sed -i 's/\\h/__HOSTNAME__/g' /root/.bashrc /home/__LUSER__/.bashrc 2>/dev/null || true
+printf "%s\n" "export HOSTNAME=__HOSTNAME__" >> /root/.bashrc
+printf "%s\n" "export HOSTNAME=__HOSTNAME__" >> /home/__LUSER__/.bashrc
+chown __LUSER__:__LUSER__ /home/__LUSER__/.bashrc 2>/dev/null || true
+EOF
+    fi
     if [ "${SETUP_ANSWERED:-}" = "1" ]; then
     if [ "${PSTYLE:-minimal}" = "informative" ]; then
         cat << 'EOF' >> "$SETUP_SCRIPT"
@@ -1791,6 +1804,7 @@ fi
 # The conf stores the BASE distro name in $DISTRO; restore the instance
 # (directory) name or every login targets a non-installed alias.
 DISTRO="$INSTANCE_NAME"
+X11_USER="$LINUX_USER"
 
 # Old proot (frozen Android 5 repos) has no --sysvipc, but proot-distro
 # login passes it by default -> opt out when the combination requires it.
@@ -1848,8 +1862,12 @@ else
 fi
 
 echo "Starting VirGL Server..."
-if command -v virgl_test_server_android >/dev/null 2>&1; then
+VIRGL_ENV=""
+if command -v virgl_test_server_android >/dev/null 2>&1 && [ "${NEED_VIRGL:-1}" = "1" ]; then
     virgl_test_server_android &
+    VIRGL_ENV="export GALLIUM_DRIVER=virpipe; export MESA_GL_VERSION_OVERRIDE=4.0;"
+elif [ "${NEED_VIRGL:-1}" != "1" ]; then
+    echo "[*] Hardware acceleration disabled by setup choice."
 else
     echo "[!] virgl_test_server_android not found, continuing with software rendering (expected on Android 5/6)."
 fi
@@ -1863,18 +1881,25 @@ if [ "$SERVER" == "x11" ]; then
     echo "Starting Termux:X11..."
     termux-x11 :1 &
     sleep 2
-    echo "Starting $DISTRO as '__LUSER__'..."
+    # XDG_RUNTIME_DIR is required by xfce4-session/dbus; without it the
+    # session dies instantly and Termux:X11 shows only the root 'X' cursor.
+    # Session output goes to ~/start-linux-session.log so failures are
+    # visible instead of hidden.
+    X11_USER="$LINUX_USER"
+    echo "Starting $DISTRO desktop as '$X11_USER' (session log: ~/start-linux-session.log)..."
     if [ "$DE" == "xfce4" ]; then
-        nohup proot-distro login $NO_SYSVIPC $DISTRO --user __LUSER__ --shared-tmp -- bash -c "export PULSE_SERVER=127.0.0.1; export DISPLAY=:1; export GALLIUM_DRIVER=virpipe; export MESA_GL_VERSION_OVERRIDE=4.0; startxfce4" >/dev/null 2>&1 &
+        nohup proot-distro login $NO_SYSVIPC $DISTRO --user "$X11_USER" --shared-tmp -- bash -c "mkdir -p /tmp/.X11-unix /tmp/xdg; chmod 1777 /tmp/.X11-unix /tmp/xdg; export XDG_RUNTIME_DIR=/tmp/xdg; export PULSE_SERVER=127.0.0.1; export DISPLAY=:1; $VIRGL_ENV dbus-launch --exit-with-session startxfce4 > \$HOME/start-linux-session.log 2>&1" &
     elif [ "$DE" == "lxde" ]; then
-        nohup proot-distro login $NO_SYSVIPC $DISTRO --user __LUSER__ --shared-tmp -- bash -c "export PULSE_SERVER=127.0.0.1; export DISPLAY=:1; export GALLIUM_DRIVER=virpipe; export MESA_GL_VERSION_OVERRIDE=4.0; startlxde" >/dev/null 2>&1 &
+        nohup proot-distro login $NO_SYSVIPC $DISTRO --user "$X11_USER" --shared-tmp -- bash -c "mkdir -p /tmp/.X11-unix /tmp/xdg; chmod 1777 /tmp/.X11-unix /tmp/xdg; export XDG_RUNTIME_DIR=/tmp/xdg; export PULSE_SERVER=127.0.0.1; export DISPLAY=:1; $VIRGL_ENV dbus-launch --exit-with-session startlxde > \$HOME/start-linux-session.log 2>&1" &
     elif [ "$DE" == "mate" ]; then
-        nohup proot-distro login $NO_SYSVIPC $DISTRO --user __LUSER__ --shared-tmp -- bash -c "export PULSE_SERVER=127.0.0.1; export DISPLAY=:1; export GALLIUM_DRIVER=virpipe; export MESA_GL_VERSION_OVERRIDE=4.0; dbus-launch --exit-with-session mate-session" >/dev/null 2>&1 &
+        nohup proot-distro login $NO_SYSVIPC $DISTRO --user "$X11_USER" --shared-tmp -- bash -c "mkdir -p /tmp/.X11-unix /tmp/xdg; chmod 1777 /tmp/.X11-unix /tmp/xdg; export XDG_RUNTIME_DIR=/tmp/xdg; export PULSE_SERVER=127.0.0.1; export DISPLAY=:1; $VIRGL_ENV dbus-launch --exit-with-session mate-session > \$HOME/start-linux-session.log 2>&1" &
     fi
+    echo "If the screen stays on the X cursor, the desktop failed to start:"
+    echo "  cat ~/start-linux-session.log   (inside the distro) for the reason."
 elif [ "$SERVER" == "vnc" ]; then
     echo "Starting VNC Server..."
     if [ -z "$RESOLUTION" ]; then RESOLUTION="1280x720"; fi
-    proot-distro login $NO_SYSVIPC $DISTRO --user __LUSER__ --shared-tmp -- bash -c "export PULSE_SERVER=127.0.0.1; export GALLIUM_DRIVER=virpipe; export MESA_GL_VERSION_OVERRIDE=4.0; vncserver -geometry $RESOLUTION :1"
+    proot-distro login $NO_SYSVIPC $DISTRO --user "$X11_USER" --shared-tmp -- bash -c "export PULSE_SERVER=127.0.0.1; $VIRGL_ENV vncserver -geometry $RESOLUTION :1"
 fi
 EOF
     chmod +x $PREFIX/bin/start-linux
