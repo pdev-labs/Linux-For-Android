@@ -49,6 +49,7 @@ Currently supported distributions:
   `terminal-linux` shortcut) ask every boot whether you want a **root**
   terminal (full admin) or the **`user`** terminal — with no display/audio
   servers started in terminal modes.
+- **Feels like a real Linux box:** Ubuntu-style colored prompt with your chosen hostname, a proper login banner, a `hostname` command that reports that name, colorised `ls`/`grep`, and Termux/Android variables stripped from `env`. No proot caveats or "use the root terminal" notices in the guest.
 - **Honest Privileges (Ritual `sudo`):** Real setuid elevation is impossible
   inside proot on Android, so instead of a broken `sudo` you get a small
   ritual-only shim: it asks for the install password, then runs your command
@@ -324,7 +325,7 @@ installs; needs only `bash`, `coreutils`, `timeout`, and `python3` (plus
 `script` from util-linux for the pty test, skipped if absent):
 ```bash
 chmod +x tests/test-all.sh
-./tests/test-all.sh   # expect: PASS=121 FAIL=0
+./tests/test-all.sh   # expect: PASS=130 FAIL=0
 ```
 
 ## 📝 License

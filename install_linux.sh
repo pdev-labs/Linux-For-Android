@@ -935,7 +935,7 @@ upgrade_existing() {
     fi
 
     # Load what the old install recorded; supply defaults for newer keys.
-    USER_NAME="user"; DE="none"; SERVER="none"; RESOLUTION=""
+    USER_NAME="user"; DE="none"; SERVER="none"; RESOLUTION=""; PSTYLE="minimal"
     HOSTNAME="localhost"; TIMEZONE="UTC"; NEED_VIRGL="1"
     if [ -f "$CONF" ]; then
         # shellcheck disable=SC1090
@@ -961,17 +961,15 @@ upgrade_existing() {
         grep -q '^TIMEZONE=' "$CONF" || echo 'TIMEZONE="UTC"' >> "$CONF"
         grep -q '^HOSTNAME=' "$CONF" || echo 'HOSTNAME="localhost"' >> "$CONF"
         grep -q '^NEED_VIRGL=' "$CONF" || echo 'NEED_VIRGL="1"' >> "$CONF"
+        grep -q '^PSTYLE=' "$CONF" || echo 'PSTYLE="minimal"' >> "$CONF"
     fi
 
-    # 3. proot cannot change the UTS hostname: bake it into the prompt.
-    if [ -n "${HOSTNAME:-}" ] && [ "$HOSTNAME" != "localhost" ]; then
-        local rc
-        for rc in "$ROOTFS/root/.bashrc" "$ROOTFS/home/$LINUX_USER/.bashrc"; do
-            [ -f "$rc" ] || continue
-            sed -i "s/\\\\h/$HOSTNAME/g" "$rc" 2>/dev/null || true
-            grep -q '^export HOSTNAME=' "$rc" || printf 'export HOSTNAME=%s\n' "$HOSTNAME" >> "$rc"
-        done
-        echo "[*] Hostname '$HOSTNAME' baked into shell prompts."
+    # 3. Realistic shell: prompt, banner, hostname command, clean env.
+    if [ -f "$LFA_DIR/lib/real-feel.sh" ]; then
+        LFA_ROOT="$ROOTFS" LFA_USER="$LINUX_USER" \
+            LFA_HOSTNAME="${HOSTNAME:-localhost}" LFA_PSTYLE="${PSTYLE:-minimal}" \
+            sh "$LFA_DIR/lib/real-feel.sh" || true
+        echo "[*] Shell polished (prompt, banner, hostname, environment)."
     fi
 
     # 4. Refresh the VNC xstartup (newer versions tolerate missing dbus).
@@ -1322,18 +1320,9 @@ else
 fi
 
 if [ "$MODE" == "root" ]; then
-    echo "Opening root terminal in $DISTRO (sudo does not work inside proot, and is not needed)..."
     proot-distro login $NO_SYSVIPC $DISTRO --shared-tmp
     exit 0
 elif [ "$MODE" == "user" ]; then
-    echo "Opening user terminal in $DISTRO (no display/audio servers)..."
-    BASE_DISTRO=$(grep '^DISTRO=' "$CONF_FILE" 2>/dev/null | cut -d'"' -f2)
-    case "$BASE_DISTRO" in
-        ubuntu|debian|kali)
-            echo "[!] Note: plain 'apt install' needs the ROOT terminal (dpkg requires uid 0)."
-            echo "    From here, use 'sudo apt install' instead (shim emulates uid 0)."
-            ;;
-    esac
     proot-distro login $NO_SYSVIPC $DISTRO --user __LUSER__ --shared-tmp
     exit 0
 fi
@@ -1493,22 +1482,12 @@ if ! proot --help 2>&1 | grep -q "sysvipc"; then
 fi
 
 echo ""
-echo "1) Root terminal (admin - sudo does not work inside proot, and is not needed)"
+echo "1) Root terminal (admin)"
 echo "2) User terminal ('__LUSER__' account)"
 read -p "Select [1-2, default 1]: " TERM_CHOICE
 if [ "$TERM_CHOICE" == "2" ]; then
-    echo "Opening user terminal in $DISTRO..."
-    CONF_FILE="$(lfa_conf "$DISTRO")"
-    BASE_DISTRO=$(grep '^DISTRO=' "$CONF_FILE" 2>/dev/null | cut -d'"' -f2)
-    case "$BASE_DISTRO" in
-        ubuntu|debian|kali)
-            echo "[!] Note: plain 'apt install' needs the ROOT terminal (dpkg requires uid 0)."
-            echo "    From here, use 'sudo apt install' instead (shim emulates uid 0)."
-            ;;
-    esac
     proot-distro login $NO_SYSVIPC $DISTRO --user __LUSER__ --shared-tmp
 else
-    echo "Opening root terminal in $DISTRO..."
     proot-distro login $NO_SYSVIPC $DISTRO --shared-tmp
 fi
 EOF
@@ -1764,6 +1743,9 @@ install_linux() {
     ROOTFS="$(pd_rootfs "$INSTANCE_NAME")"
     mkdir -p "$PREFIX/tmp"
     SETUP_SCRIPT="$PREFIX/tmp/gui_setup_$$.sh"
+    if [ -f "$LFA_DIR/lib/real-feel.sh" ]; then
+        cp "$LFA_DIR/lib/real-feel.sh" "$PREFIX/tmp/lfa-real-feel.sh"
+    fi
     
     # Configure package manager mapping
     case "$DISTRO" in
@@ -1932,6 +1914,7 @@ install_linux() {
     echo "TIMEZONE=\"${TIMEZONE:-UTC}\"" >> "$ROOTFS/etc/termux-linux-manager.conf"
     echo "HOSTNAME=\"${HOSTNAME:-localhost}\"" >> "$ROOTFS/etc/termux-linux-manager.conf"
     echo "NEED_VIRGL=\"${NEED_VIRGL:-1}\"" >> "$ROOTFS/etc/termux-linux-manager.conf"
+    echo "PSTYLE=\"${PSTYLE:-minimal}\"" >> "$ROOTFS/etc/termux-linux-manager.conf"
     
     # (Removed broken universal wallpaper download)
     
@@ -2358,39 +2341,20 @@ echo "__HOSTNAME__" > /etc/hostname
 grep -q "__HOSTNAME__" /etc/hosts 2>/dev/null || echo "127.0.1.1 __HOSTNAME__" >> /etc/hosts
 EOF
     fi
-    # Proot cannot change the kernel hostname (no UTS namespace), so \h in
-    # PS1 would always show Android's own name. Bake the chosen hostname
-    # directly into the prompt instead. Applies to every guided install.
-    if [ -n "${HOSTNAME:-}" ]; then
+    # Realistic shell: Ubuntu-style colored prompt, login banner, a
+    # `hostname` command that reports the chosen name, and cleanup of the
+    # Termux/Android environment variables. lib/real-feel.sh is staged in
+    # $PREFIX/tmp (shared with the guest as /tmp).
+    if [ -f "$PREFIX/tmp/lfa-real-feel.sh" ]; then
         cat << 'EOF' >> "$SETUP_SCRIPT"
-echo " -> Baking '__HOSTNAME__' into shell prompts (proot cannot set UTS hostname)..."
-sed -i 's/\\h/__HOSTNAME__/g' /root/.bashrc /home/__LUSER__/.bashrc 2>/dev/null || true
-printf "%s\n" "export HOSTNAME=__HOSTNAME__" >> /root/.bashrc
-printf "%s\n" "export HOSTNAME=__HOSTNAME__" >> /home/__LUSER__/.bashrc
-chown __LUSER__:__LUSER__ /home/__LUSER__/.bashrc 2>/dev/null || true
+echo " -> Applying Linux polish (prompt, welcome, hostname, environment)..."
+LFA_USER="__LUSER__" LFA_HOSTNAME="__HOSTNAME__" LFA_PSTYLE="__PSTYLE__" bash /tmp/lfa-real-feel.sh || true
 EOF
-    fi
-    if [ "${SETUP_ANSWERED:-}" = "1" ]; then
-    if [ "${PSTYLE:-minimal}" = "informative" ]; then
-        cat << 'EOF' >> "$SETUP_SCRIPT"
-echo " -> Configuring informative shell prompt..."
-printf "%s\n" "PS1='\[\e[32m\]\u@\h\[\e[0m\]:\[\e[34m\]\w\[\e[0m\] [\A] \$ '" >> /root/.bashrc
-printf "%s\n" "PS1='\[\e[32m\]\u@\h\[\e[0m\]:\[\e[34m\]\w\[\e[0m\] [\A] \$ '" >> /home/__LUSER__/.bashrc
-chown __LUSER__:__LUSER__ /home/__LUSER__/.bashrc 2>/dev/null || true
-EOF
-    else
-        cat << 'EOF' >> "$SETUP_SCRIPT"
-echo " -> Configuring minimal shell prompt..."
-printf "%s\n" "PS1='\u@\h:\w\$ '" >> /root/.bashrc
-printf "%s\n" "PS1='\u@\h:\w\$ '" >> /home/__LUSER__/.bashrc
-chown __LUSER__:__LUSER__ /home/__LUSER__/.bashrc 2>/dev/null || true
-EOF
-    fi
     fi
 
     # Substitute setup-chosen values (see comment at first sed call site).
     sed -i "s/__LUSER__/$LINUX_USER/g; s/__UPASS_B64__/$UPASS_B64/g; s/__RPASS_B64__/$RPASS_B64/g; s/__SPASS_B64__/$SPASS_B64/g" "$SETUP_SCRIPT"
-    sed -i "s#__TZ__#${TIMEZONE:-UTC}#g; s#__HOSTNAME__#${HOSTNAME:-localhost}#g" "$SETUP_SCRIPT"
+    sed -i "s#__TZ__#${TIMEZONE:-UTC}#g; s#__HOSTNAME__#${HOSTNAME:-localhost}#g; s/__PSTYLE__/${PSTYLE:-minimal}/g" "$SETUP_SCRIPT"
 
     echo "[*] Executing setup inside $INSTANCE_NAME (this will take a while)..."
     # Alpine base ships busybox sh only: pre-install bash/sudo/shadow via sh
