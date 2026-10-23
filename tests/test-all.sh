@@ -371,6 +371,22 @@ check "N launcher updated" 'command -v dbus-launch' "$T/prefix/bin/start-linux"
 check "N xstartup updated" 'startxfce4' "$NROOT/home/user/.vnc/xstartup"
 [ -f "$T/prefix/tmp/lfa-upgrade.sh" ] && bash -n "$T/prefix/tmp/lfa-upgrade.sh" && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: N upgrade script missing/invalid"; }
 
+echo "===== O: proot-distro v4 containers layout ====="
+fresh_env
+CROOT="$T/prefix/var/lib/proot-distro/containers/newinst/rootfs"
+mkdir -p "$CROOT/etc" "$CROOT/var/lib/dpkg" "$CROOT/usr/local/bin" "$CROOT/home/user"
+printf 'DISTRO="debian"\nDE="none"\nSERVER="none"\nUPDATE_CMD="apt-get update"\nHOSTNAME="v4host"\n' > "$CROOT/etc/termux-linux-manager.conf"
+printf 'root messagebus 4754 /usr/lib/dbus-1.0/dbus-daemon-launch-helper\n' > "$CROOT/var/lib/dpkg/statoverride"
+printf '%s\n' 3 0 '' 13 | bash "$REPO/install_linux.sh" > "$T/o1.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: run o1 exit $rc"; }
+check "O doctor finds v4 rootfs" 'Repair complete!' "$T/o1.log"
+[ -f "$CROOT/usr/local/bin/dpkg-statoverride" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: O shim not written to containers rootfs"; }
+printf '%s\n' 3 12 '' 13 | bash "$REPO/install_linux.sh" > "$T/o2.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: run o2 exit $rc"; }
+check "O migrate v4" 'Latest fixes applied!' "$T/o2.log"
+check "O conf in real rootfs" 'USER_NAME="user"' "$CROOT/etc/termux-linux-manager.conf"
+check "O launcher lib written" 'lfa_conf' "$T/prefix/bin/lfa-lib.sh"
+check "O launcher bootstraps lib" 'lfa-lib.sh' "$T/prefix/bin/start-linux"
+check "O launcher lists containers" 'containers' "$T/prefix/bin/lfa-lib.sh"
+
 echo ""
 echo "PASS=$pass FAIL=$fail"
 [ "$fail" = "0" ]

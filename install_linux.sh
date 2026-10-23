@@ -675,9 +675,51 @@ select_os_flavor() {
     esac
 }
 
+# proot-distro layout compatibility:
+#   v3 and earlier: $PREFIX/var/lib/proot-distro/installed-rootfs/<name>
+#   v4 and later:   $PREFIX/var/lib/proot-distro/containers/<name>/rootfs
+# Always resolve to the real rootfs; fall back to the legacy path.
+pd_rootfs() {
+    local inst="$1"
+    local base="$PREFIX/var/lib/proot-distro"
+    if [ -d "$base/containers/$inst/rootfs" ]; then
+        printf '%s' "$base/containers/$inst/rootfs"
+    else
+        printf '%s' "$base/installed-rootfs/$inst"
+    fi
+}
+
+pd_conf() {
+    local inst="$1"
+    local real legacy
+    real="$(pd_rootfs "$inst")/etc/termux-linux-manager.conf"
+    legacy="$PREFIX/var/lib/proot-distro/installed-rootfs/$inst/etc/termux-linux-manager.conf"
+    if [ -f "$real" ]; then
+        printf '%s' "$real"
+    else
+        printf '%s' "$legacy"
+    fi
+}
+
+pd_instances() {
+    local base="$PREFIX/var/lib/proot-distro"
+    if [ -d "$base/containers" ] && [ -n "$(ls -A "$base/containers" 2>/dev/null)" ]; then
+        ls -1 "$base/containers" 2>/dev/null
+    else
+        ls -1 "$base/installed-rootfs" 2>/dev/null
+    fi
+}
+
+pd_instance_exists() {
+    local inst="$1"
+    local base="$PREFIX/var/lib/proot-distro"
+    [ -d "$base/containers/$inst/rootfs" ] && return 0
+    [ -d "$base/installed-rootfs/$inst/var" ] || [ -d "$base/installed-rootfs/$inst/usr" ]
+}
+
 select_installed_instance() {
     INSTANCE_NAME=""
-    DISTROS=($(ls $PREFIX/var/lib/proot-distro/installed-rootfs/ 2>/dev/null))
+    DISTROS=($(pd_instances))
     if [ ${#DISTROS[@]} -eq 0 ]; then
         echo "No distributions installed."
         read -p "Press Enter to return to menu..."
@@ -700,7 +742,7 @@ select_installed_instance() {
         INSTANCE_NAME=${DISTROS[$idx]}
     fi
     if [ -n "$INSTANCE_NAME" ]; then
-        CONF_FILE="$PREFIX/var/lib/proot-distro/installed-rootfs/$INSTANCE_NAME/etc/termux-linux-manager.conf"
+        CONF_FILE="$(pd_conf "$INSTANCE_NAME")"
         if [ -f "$CONF_FILE" ]; then
             source "$CONF_FILE"
         fi
@@ -802,7 +844,7 @@ REPAIR
 
 # Install the shim host-side (no proot needed) and run the repair script.
 run_guest_repair() {
-    local ROOTFS="$PREFIX/var/lib/proot-distro/installed-rootfs/$INSTANCE_NAME"
+    local ROOTFS="$(pd_rootfs "$INSTANCE_NAME")"
 
     if [ ! -d "$ROOTFS/var/lib/dpkg" ]; then
         echo "[*] $INSTANCE_NAME is not dpkg-based (Alpine/Fedora/...); nothing to repair."
@@ -879,8 +921,18 @@ upgrade_existing() {
     select_installed_instance
     if [ -z "$INSTANCE_NAME" ]; then return; fi
 
-    local ROOTFS="$PREFIX/var/lib/proot-distro/installed-rootfs/$INSTANCE_NAME"
+    local ROOTFS="$(pd_rootfs "$INSTANCE_NAME")"
     local CONF="$ROOTFS/etc/termux-linux-manager.conf"
+    local LEGACY_CONF="$PREFIX/var/lib/proot-distro/installed-rootfs/$INSTANCE_NAME/etc/termux-linux-manager.conf"
+
+    # proot-distro v4 uses containers/<name>/rootfs; older versions of this
+    # manager wrote the conf into installed-rootfs. Move it to the real
+    # rootfs so the guest and future tooling see the same settings.
+    if [ ! -f "$CONF" ] && [ -f "$LEGACY_CONF" ]; then
+        mkdir -p "$ROOTFS/etc"
+        cp "$LEGACY_CONF" "$CONF"
+        echo "[*] Migrated manager config into the real rootfs."
+    fi
 
     # Load what the old install recorded; supply defaults for newer keys.
     USER_NAME="user"; DE="none"; SERVER="none"; RESOLUTION=""
@@ -1164,10 +1216,48 @@ rm -f /usr/local/bin/chromium-browser
 
 write_launchers() {
     mkdir -p ~/.shortcuts
+    cat > "$PREFIX/bin/lfa-lib.sh" << 'EOF'
+#!/bin/bash
+# Shared proot-distro layout helpers.
+#   v3 and earlier: installed-rootfs/<name>
+#   v4 and later:   containers/<name>/rootfs
+PD_BASE="$PREFIX/var/lib/proot-distro"
+lfa_instances() {
+    if [ -d "$PD_BASE/containers" ] && [ -n "$(ls -A "$PD_BASE/containers" 2>/dev/null)" ]; then
+        ls -1 "$PD_BASE/containers" 2>/dev/null
+    else
+        ls -1 "$PD_BASE/installed-rootfs" 2>/dev/null
+    fi
+}
+lfa_rootfs() {
+    if [ -d "$PD_BASE/containers/$1/rootfs" ]; then
+        echo "$PD_BASE/containers/$1/rootfs"
+    else
+        echo "$PD_BASE/installed-rootfs/$1"
+    fi
+}
+lfa_conf() {
+    local r
+    r="$(lfa_rootfs "$1")/etc/termux-linux-manager.conf"
+    if [ -f "$r" ]; then
+        echo "$r"
+    else
+        echo "$PD_BASE/installed-rootfs/$1/etc/termux-linux-manager.conf"
+    fi
+}
+EOF
+    chmod +x "$PREFIX/bin/lfa-lib.sh"
     echo "[*] Generating Universal Quick-Launch Scripts..."
     cat << 'EOF' > $PREFIX/bin/start-linux
 #!/bin/bash
-DISTROS=($(ls $PREFIX/var/lib/proot-distro/installed-rootfs/ 2>/dev/null))
+if [ -f "$PREFIX/bin/lfa-lib.sh" ]; then
+    . "$PREFIX/bin/lfa-lib.sh"
+else
+    lfa_instances() { ls -1 "$PREFIX/var/lib/proot-distro/installed-rootfs" 2>/dev/null; }
+    lfa_rootfs() { echo "$PREFIX/var/lib/proot-distro/installed-rootfs/$1"; }
+    lfa_conf() { echo "$(lfa_rootfs "$1")/etc/termux-linux-manager.conf"; }
+fi
+DISTROS=($(lfa_instances))
 if [ ${#DISTROS[@]} -eq 0 ]; then
     echo "No distributions installed. Please run install_linux.sh first."
     exit 1
@@ -1187,7 +1277,7 @@ else
     DISTRO=${DISTROS[$idx]}
 fi
 
-CONF_FILE="$PREFIX/var/lib/proot-distro/installed-rootfs/$DISTRO/etc/termux-linux-manager.conf"
+CONF_FILE="$(lfa_conf "$DISTRO")"
 INSTANCE_NAME="$DISTRO"
 if [ -f "$CONF_FILE" ]; then
     source "$CONF_FILE"
@@ -1300,7 +1390,14 @@ EOF
     
     cat << 'EOF' > $PREFIX/bin/stop-linux
 #!/bin/bash
-DISTROS=($(ls $PREFIX/var/lib/proot-distro/installed-rootfs/ 2>/dev/null))
+if [ -f "$PREFIX/bin/lfa-lib.sh" ]; then
+    . "$PREFIX/bin/lfa-lib.sh"
+else
+    lfa_instances() { ls -1 "$PREFIX/var/lib/proot-distro/installed-rootfs" 2>/dev/null; }
+    lfa_rootfs() { echo "$PREFIX/var/lib/proot-distro/installed-rootfs/$1"; }
+    lfa_conf() { echo "$(lfa_rootfs "$1")/etc/termux-linux-manager.conf"; }
+fi
+DISTROS=($(lfa_instances))
 if [ ${#DISTROS[@]} -eq 0 ]; then
     echo "No distributions installed."
     exit 1
@@ -1320,7 +1417,7 @@ else
     DISTRO=${DISTROS[$idx]}
 fi
 
-CONF_FILE="$PREFIX/var/lib/proot-distro/installed-rootfs/$DISTRO/etc/termux-linux-manager.conf"
+CONF_FILE="$(lfa_conf "$DISTRO")"
 INSTANCE_NAME="$DISTRO"
 if [ -f "$CONF_FILE" ]; then
     source "$CONF_FILE"
@@ -1361,7 +1458,14 @@ EOF
 #!/bin/bash
 # Open a terminal inside a distro WITHOUT starting any display/audio
 # servers. For GUI installs this is the "just give me a shell" shortcut.
-DISTROS=($(ls $PREFIX/var/lib/proot-distro/installed-rootfs/ 2>/dev/null))
+if [ -f "$PREFIX/bin/lfa-lib.sh" ]; then
+    . "$PREFIX/bin/lfa-lib.sh"
+else
+    lfa_instances() { ls -1 "$PREFIX/var/lib/proot-distro/installed-rootfs" 2>/dev/null; }
+    lfa_rootfs() { echo "$PREFIX/var/lib/proot-distro/installed-rootfs/$1"; }
+    lfa_conf() { echo "$(lfa_rootfs "$1")/etc/termux-linux-manager.conf"; }
+fi
+DISTROS=($(lfa_instances))
 if [ ${#DISTROS[@]} -eq 0 ]; then
     echo "No distributions installed. Please run install_linux.sh first."
     exit 1
@@ -1394,7 +1498,7 @@ echo "2) User terminal ('__LUSER__' account)"
 read -p "Select [1-2, default 1]: " TERM_CHOICE
 if [ "$TERM_CHOICE" == "2" ]; then
     echo "Opening user terminal in $DISTRO..."
-    CONF_FILE="$PREFIX/var/lib/proot-distro/installed-rootfs/$DISTRO/etc/termux-linux-manager.conf"
+    CONF_FILE="$(lfa_conf "$DISTRO")"
     BASE_DISTRO=$(grep '^DISTRO=' "$CONF_FILE" 2>/dev/null | cut -d'"' -f2)
     case "$BASE_DISTRO" in
         ubuntu|debian|kali)
@@ -1592,7 +1696,7 @@ install_linux() {
     read -p "Enter a custom name for this installation (Leave blank for auto-generation): " INSTANCE_NAME
     fi
     if [ -z "$INSTANCE_NAME" ]; then
-        if [ -d "$PREFIX/var/lib/proot-distro/installed-rootfs/$DISTRO" ] || [ -f "$PREFIX/etc/proot-distro/$DISTRO.sh" ]; then
+        if pd_instance_exists "$DISTRO" || [ -f "$PREFIX/etc/proot-distro/$DISTRO.sh" ]; then
             INSTANCE_NAME="${DISTRO}-$(date +%M%S)"
         else
             INSTANCE_NAME="$DISTRO"
@@ -1657,7 +1761,7 @@ install_linux() {
         proot-distro install --override-alias "$INSTANCE_NAME" "$PD_ALIAS" 2>/dev/null || proot-distro install "$PD_ALIAS"
     fi
     
-    ROOTFS="$PREFIX/var/lib/proot-distro/installed-rootfs/$INSTANCE_NAME"
+    ROOTFS="$(pd_rootfs "$INSTANCE_NAME")"
     mkdir -p "$PREFIX/tmp"
     SETUP_SCRIPT="$PREFIX/tmp/gui_setup_$$.sh"
     

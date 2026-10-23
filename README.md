@@ -53,6 +53,7 @@ Currently supported distributions:
   inside proot on Android, so instead of a broken `sudo` you get a small
   ritual-only shim: it asks for the install password, then runs your command
   with the full access you already have. No silent failures, no surprises.
+- **proot-distro v3 + v4 aware:** reads the real rootfs from `installed-rootfs/` (older) or `containers/<name>/rootfs` (v4+), so the Doctor, migration and launchers work on both layouts.
 - **Legacy Android Auto-Support:** Android 5/6 devices are detected and get
   proot-distro v4.2.0 from source, forced VNC, Alpine + Debian-bullseye
   options, and workarounds for old `proot` — all automatically.
@@ -293,7 +294,20 @@ the file in place, and stale rows are pruned during setup and before updates.
 ### 7. Termux:X11 app stays open after running `stop-linux`
 **Fix:** This is normal! `stop-linux` safely shuts down the background Linux servers, but it cannot forcefully close the Android App window itself due to Android security sandboxing. Simply swipe the Termux:X11 app away in your Android "Recent Apps" menu.
 
-### 8. Installation seems frozen at "Setting up elementary-xfce-icon-theme..."
+### 8. `groups: cannot find name for group ID 99909997` in a user terminal
+**Symptom:** after `start-linux` → user terminal, the shell prints this before
+the prompt.
+**Why:** Android passes the app's supplementary groups into proot. Some of
+them (especially the synthesized `99909997`) have no name in the distro's
+`/etc/group`, so `groups`/`id` show a warning and the raw number. Cosmetic.
+**Fix (inside the distro, as root):**
+```bash
+for g in $(id -G); do
+  getent group "$g" >/dev/null 2>&1 || echo "android_$g:x:$g:" >> /etc/group
+done
+```
+
+### 9. Installation seems frozen at "Setting up elementary-xfce-icon-theme..."
 **Fix:** Be patient! This specific package contains tens of thousands of tiny icon files. Because `proot` must translate every single file operation via your phone's CPU, unpacking thousands of files takes significantly longer than on a native PC (sometimes 10 to 20 minutes on mid-range phones). Keep Termux open and let it finish!
 
 ## 🤝 Contributing
@@ -310,7 +324,7 @@ installs; needs only `bash`, `coreutils`, `timeout`, and `python3` (plus
 `script` from util-linux for the pty test, skipped if absent):
 ```bash
 chmod +x tests/test-all.sh
-./tests/test-all.sh   # expect: PASS=112 FAIL=0
+./tests/test-all.sh   # expect: PASS=121 FAIL=0
 ```
 
 ## 📝 License
