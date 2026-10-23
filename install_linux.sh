@@ -8,6 +8,9 @@ if [ -z "$PREFIX" ]; then
     exit 1
 fi
 
+# Directory containing this script (lib/ lives next to it).
+LFA_DIR="$(cd "$(dirname "$0")" && pwd)"
+
 # ============================================================
 # Universal Android compatibility layer (Android 5 -> 15)
 # Oppo A37fw (Android 5.1.1, SDK 22, 32-bit ARM) has a frozen
@@ -623,10 +626,12 @@ show_menu() {
     echo "9) Import Shared Distro"
     echo "10) Uninstall a Distro"
     echo "11) Toggle Browser Hardware Acceleration"
+    echo "0)  Repair a Distro (fix broken apt/dpkg, Doctor)"
     echo "12) Exit"
     echo "========================================="
-    read -p "Select an option [1-12]: " OPTION
+    read -p "Select an option [0-12]: " OPTION
     case $OPTION in
+        0) repair_linux ;;
         1) install_linux ;;
         2) update_linux ;;
         3) start_ssh ;;
@@ -741,30 +746,101 @@ audio_fixer() {
     show_menu
 }
 
+# Guest-side repair script. Staged into the shared /tmp and executed as root
+# inside the distro by run_guest_repair().
+write_guest_repair_script() {
+    cat > "$PREFIX/tmp/lfa-repair.sh" << 'REPAIR'
+#!/bin/bash
+# Staged by install_linux.sh. Fixes common proot/apt breakages in place.
+# Keep this free of fancy quoting: it runs inside arbitrary old guests.
+
+echo " -> Sanitising dpkg statoverride (missing users/groups are fatal to dpkg)..."
+if [ -f /var/lib/dpkg/statoverride ]; then
+    : > /var/lib/dpkg/statoverride.lfa
+    while read -r u g m p; do
+        [ -n "$u" ] || continue
+        [ -n "$p" ] || continue
+        if ! { getent passwd "$u" >/dev/null 2>&1 || grep -q "^$u:" /etc/passwd; }; then
+            echo "    dropped row (missing user $u): $p"
+            continue
+        fi
+        if ! { getent group "$g" >/dev/null 2>&1 || grep -q "^$g:" /etc/group; }; then
+            echo "    dropped row (missing group $g): $p"
+            continue
+        fi
+        printf '%s %s %s %s\n' "$u" "$g" "$m" "$p" >> /var/lib/dpkg/statoverride.lfa
+    done < /var/lib/dpkg/statoverride
+    cat /var/lib/dpkg/statoverride.lfa > /var/lib/dpkg/statoverride
+    rm -f /var/lib/dpkg/statoverride.lfa
+fi
+
+echo " -> Re-applying proot-friendly apt settings..."
+mkdir -p /etc/apt/apt.conf.d
+echo 'APT::Sandbox::User "root";' > /etc/apt/apt.conf.d/99-proot-no-sandbox
+printf '#!/bin/sh\nexit 101\n' > /usr/sbin/policy-rc.d && chmod +x /usr/sbin/policy-rc.d
+rm -f /var/lib/dpkg/statoverride-new /var/lib/dpkg/statoverride-old
+
+echo " -> Finishing half-configured packages (dpkg --configure -a)..."
+DEBIAN_FRONTEND=noninteractive dpkg --configure -a || true
+
+# Re-register dbus's helper ONLY after dbus's own postinst had a chance to
+# create the messagebus group. Seeding it earlier is what used to break apt.
+if dpkg -s dbus-system-bus-common >/dev/null 2>&1 || dpkg -s dbus >/dev/null 2>&1; then
+    if getent group messagebus >/dev/null 2>&1; then
+        /usr/local/bin/dpkg-statoverride --update --add root messagebus 4754 /usr/lib/dbus-1.0/dbus-daemon-launch-helper >/dev/null 2>&1 || true
+    fi
+fi
+
+echo " -> Package database audit:"
+dpkg --audit || true
+echo " -> Doctor finished."
+REPAIR
+    chmod +x "$PREFIX/tmp/lfa-repair.sh"
+}
+
+# Install the shim host-side (no proot needed) and run the repair script.
+run_guest_repair() {
+    local ROOTFS="$PREFIX/var/lib/proot-distro/installed-rootfs/$INSTANCE_NAME"
+
+    if [ ! -d "$ROOTFS/var/lib/dpkg" ]; then
+        echo "[*] $INSTANCE_NAME is not dpkg-based (Alpine/Fedora/...); nothing to repair."
+        return 0
+    fi
+
+    if [ -f "$LFA_DIR/lib/dpkg-statoverride.sh" ]; then
+        mkdir -p "$ROOTFS/usr/local/bin"
+        cp "$LFA_DIR/lib/dpkg-statoverride.sh" "$ROOTFS/usr/local/bin/dpkg-statoverride"
+        chmod 755 "$ROOTFS/usr/local/bin/dpkg-statoverride"
+    fi
+
+    write_guest_repair_script
+    proot-distro login $(pd_login_flags) "$INSTANCE_NAME" --shared-tmp -- bash /tmp/lfa-repair.sh
+}
+
+repair_linux() {
+    require_proot_distro || return
+    select_installed_instance
+    if [ -z "$INSTANCE_NAME" ]; then return; fi
+    echo "[*] Running Doctor on $INSTANCE_NAME..."
+    echo "========================================="
+    if run_guest_repair; then
+        echo "Repair complete!"
+    else
+        echo "[!] Doctor hit an error - review the output above."
+    fi
+    echo "========================================="
+    read -p "Press Enter to continue..."
+    show_menu
+}
+
 update_linux() {
     require_proot_distro || return
     select_installed_instance
     if [ -z "$INSTANCE_NAME" ]; then return; fi
     echo "[*] Updating $INSTANCE_NAME..."
-    # Heal statoverride rows that reference users/groups missing from the
-    # guest: dpkg aborts on them ("unknown system group ..."), which makes
-    # apt unusable. Older versions of this script could seed dbus's group
-    # before it existed.
-    if [ -f "$PREFIX/var/lib/proot-distro/installed-rootfs/$INSTANCE_NAME/var/lib/dpkg/statoverride" ]; then
-        echo "[*] Checking dpkg statoverride integrity..."
-        proot-distro login $(pd_login_flags) "$INSTANCE_NAME" -- bash -c '
-            : > /var/lib/dpkg/statoverride.lfa
-            while read -r u g m p; do
-                [ -n "$u" ] || continue
-                [ -n "$p" ] || continue
-                { getent passwd "$u" >/dev/null 2>&1 || grep -q "^$u:" /etc/passwd; } || continue
-                { getent group "$g" >/dev/null 2>&1 || grep -q "^$g:" /etc/group; } || continue
-                printf "%s %s %s %s\n" "$u" "$g" "$m" "$p" >> /var/lib/dpkg/statoverride.lfa
-            done < /var/lib/dpkg/statoverride
-            cat /var/lib/dpkg/statoverride.lfa > /var/lib/dpkg/statoverride
-            rm -f /var/lib/dpkg/statoverride.lfa
-        ' || true
-    fi
+    # Heal the guest first: stale statoverride rows and half-configured
+    # packages make apt fail, and are repaired automatically here.
+    run_guest_repair || true
     proot-distro login $(pd_login_flags) "$INSTANCE_NAME" --user root -- bash -c "export DEBIAN_FRONTEND=noninteractive; $UPDATE_CMD"
     echo "========================================="
     echo "Update complete!"
@@ -1379,67 +1455,21 @@ EOF
     # unknown users/groups, and sanitise any rows a previous bad state left
     # behind (e.g. our old unconditional dbus pre-seed).
     if [ "$DISTRO" == "ubuntu" ] || [ "$DISTRO" == "debian" ] || [ "$DISTRO" == "kali" ]; then
-        cat << 'EOF' >> "$SETUP_SCRIPT"
+        SHIM_SRC="$LFA_DIR/lib/dpkg-statoverride.sh"
+        if [ -f "$SHIM_SRC" ]; then
+            cat << 'EOF' >> "$SETUP_SCRIPT"
 echo " -> Installing proot-safe dpkg-statoverride shim..."
 cat > /usr/local/bin/dpkg-statoverride << 'LFA_SO'
-#!/bin/sh
-# Linux-for-Android: proot-safe dpkg-statoverride.
-# Why: old proot fails dpkg's atomic rename with EPERM (dbus postinst dies),
-# and a row naming a missing user/group makes every dpkg invocation abort
-# with "unknown ... in statoverride file". Rewrite in place, validate first.
-REAL=${LFA_DPKG_STATOVERRIDE:-/usr/sbin/dpkg-statoverride}
-[ -x "$REAL" ] || REAL=/usr/bin/dpkg-statoverride
-DB=${LFA_STATOVERRIDE_DB:-/var/lib/dpkg/statoverride}
-TMP="$DB.lfa.tmp"
-
-uok() { getent passwd "$1" >/dev/null 2>&1 || grep -q "^$1:" /etc/passwd; }
-gok() { getent group "$1" >/dev/null 2>&1 || grep -q "^$1:" /etc/group; }
-
-sanitize() {
-    [ -f "$DB" ] || return 0
-    : > "$TMP"
-    while read -r u g m p; do
-        [ -n "$u" ] || continue
-        [ -n "$p" ] || continue
-        uok "$u" || continue
-        gok "$g" || continue
-        printf '%s %s %s %s\n' "$u" "$g" "$m" "$p" >> "$TMP"
-    done < "$DB"
-    cat "$TMP" > "$DB"
-    rm -f "$TMP"
-}
-
-case " $* " in
-    *" --list "*) sanitize; exec "$REAL" "$@" ;;
-    *" --add "*|*" --update "*) op=add ;;
-    *" --remove "*) op=remove ;;
-    *) exec "$REAL" "$@" ;;
-esac
-
-while [ $# -gt 0 ]; do
-    case "$1" in
-        --add|--update|--remove|--force|--force-all|--quiet) shift ;;
-        *) break ;;
-    esac
-done
-
-if [ "$op" = "add" ]; then
-    [ $# -ge 4 ] || { echo "dpkg-statoverride: bad usage" >&2; exit 2; }
-    uok "$1" || { echo "dpkg-statoverride: unknown user '$1'; not recording $4" >&2; exit 0; }
-    gok "$2" || { echo "dpkg-statoverride: unknown group '$2'; not recording $4" >&2; exit 0; }
-    sanitize
-    grep -v " $4\$" "$DB" 2>/dev/null > "$TMP" || true
-    printf '%s %s %s %s\n' "$1" "$2" "$3" "$4" >> "$TMP"
-else
-    [ $# -ge 1 ] || { echo "dpkg-statoverride: bad usage" >&2; exit 2; }
-    sanitize
-    grep -v " $1\$" "$DB" 2>/dev/null > "$TMP" || true
-fi
-cat "$TMP" > "$DB"
-rm -f "$TMP"
-exit 0
+EOF
+            cat "$SHIM_SRC" >> "$SETUP_SCRIPT"
+            cat << 'EOF' >> "$SETUP_SCRIPT"
 LFA_SO
 chmod 755 /usr/local/bin/dpkg-statoverride
+EOF
+        else
+            echo "[!] Warning: lib/dpkg-statoverride.sh missing; dbus may not configure on old proot."
+        fi
+        cat << 'EOF' >> "$SETUP_SCRIPT"
 
 echo " -> Sanitising dpkg statoverride (proot-safe)..."
 if [ -f /var/lib/dpkg/statoverride ]; then
@@ -1787,7 +1817,11 @@ EOF
 cat << 'STARTUP' > /home/__LUSER__/.vnc/xstartup
 #!/bin/sh
 export PULSE_SERVER=127.0.0.1
-dbus-launch --exit-with-session mate-session &
+if command -v dbus-launch >/dev/null 2>&1; then
+    dbus-launch --exit-with-session mate-session &
+else
+    mate-session &
+fi
 STARTUP
 EOF
         fi
@@ -1984,14 +2018,13 @@ if [ "$SERVER" == "x11" ]; then
     # session dies instantly and Termux:X11 shows only the root 'X' cursor.
     # Session output goes to ~/start-linux-session.log so failures are
     # visible instead of hidden.
-    X11_USER="$LINUX_USER"
     echo "Starting $DISTRO desktop as '$X11_USER' (session log: ~/start-linux-session.log)..."
     if [ "$DE" == "xfce4" ]; then
-        nohup proot-distro login $NO_SYSVIPC $DISTRO --user "$X11_USER" --shared-tmp -- bash -c "mkdir -p /tmp/.X11-unix /tmp/xdg; chmod 1777 /tmp/.X11-unix /tmp/xdg; export XDG_RUNTIME_DIR=/tmp/xdg; export PULSE_SERVER=127.0.0.1; export DISPLAY=:1; $VIRGL_ENV dbus-launch --exit-with-session startxfce4 > \$HOME/start-linux-session.log 2>&1" &
+        nohup proot-distro login $NO_SYSVIPC $DISTRO --user "$X11_USER" --shared-tmp -- bash -c "mkdir -p /tmp/.X11-unix /tmp/xdg; chmod 1777 /tmp/.X11-unix /tmp/xdg; export XDG_RUNTIME_DIR=/tmp/xdg; export PULSE_SERVER=127.0.0.1; export DISPLAY=:1; $VIRGL_ENV if command -v dbus-launch >/dev/null 2>&1; then dbus-launch --exit-with-session startxfce4 > \$HOME/start-linux-session.log 2>&1; else startxfce4 > \$HOME/start-linux-session.log 2>&1; fi" &
     elif [ "$DE" == "lxde" ]; then
-        nohup proot-distro login $NO_SYSVIPC $DISTRO --user "$X11_USER" --shared-tmp -- bash -c "mkdir -p /tmp/.X11-unix /tmp/xdg; chmod 1777 /tmp/.X11-unix /tmp/xdg; export XDG_RUNTIME_DIR=/tmp/xdg; export PULSE_SERVER=127.0.0.1; export DISPLAY=:1; $VIRGL_ENV dbus-launch --exit-with-session startlxde > \$HOME/start-linux-session.log 2>&1" &
+        nohup proot-distro login $NO_SYSVIPC $DISTRO --user "$X11_USER" --shared-tmp -- bash -c "mkdir -p /tmp/.X11-unix /tmp/xdg; chmod 1777 /tmp/.X11-unix /tmp/xdg; export XDG_RUNTIME_DIR=/tmp/xdg; export PULSE_SERVER=127.0.0.1; export DISPLAY=:1; $VIRGL_ENV if command -v dbus-launch >/dev/null 2>&1; then dbus-launch --exit-with-session startlxde > \$HOME/start-linux-session.log 2>&1; else startlxde > \$HOME/start-linux-session.log 2>&1; fi" &
     elif [ "$DE" == "mate" ]; then
-        nohup proot-distro login $NO_SYSVIPC $DISTRO --user "$X11_USER" --shared-tmp -- bash -c "mkdir -p /tmp/.X11-unix /tmp/xdg; chmod 1777 /tmp/.X11-unix /tmp/xdg; export XDG_RUNTIME_DIR=/tmp/xdg; export PULSE_SERVER=127.0.0.1; export DISPLAY=:1; $VIRGL_ENV dbus-launch --exit-with-session mate-session > \$HOME/start-linux-session.log 2>&1" &
+        nohup proot-distro login $NO_SYSVIPC $DISTRO --user "$X11_USER" --shared-tmp -- bash -c "mkdir -p /tmp/.X11-unix /tmp/xdg; chmod 1777 /tmp/.X11-unix /tmp/xdg; export XDG_RUNTIME_DIR=/tmp/xdg; export PULSE_SERVER=127.0.0.1; export DISPLAY=:1; $VIRGL_ENV if command -v dbus-launch >/dev/null 2>&1; then dbus-launch --exit-with-session mate-session > \$HOME/start-linux-session.log 2>&1; else mate-session > \$HOME/start-linux-session.log 2>&1; fi" &
     fi
     echo "If the screen stays on the X cursor, the desktop failed to start:"
     echo "  cat ~/start-linux-session.log   (inside the distro) for the reason."

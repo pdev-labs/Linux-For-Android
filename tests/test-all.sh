@@ -174,6 +174,7 @@ S=$(setup_sh_of)
 check "D apt mapping" 'apt-get install -y' "$S"
 check "D vscode repo" 'packages.microsoft.com' "$S"
 check "D x11 branch" 'startxfce4' "$T/prefix/bin/start-linux"
+check "D x11 dbus fallback" 'command -v dbus-launch' "$T/prefix/bin/start-linux"
 check_absent "D virgl skipped" 'virglrenderer-android' "$T/d.log"
 check "D x11 pkg" 'x11-repo' "$T/d.log"
 
@@ -258,6 +259,13 @@ printf '%s\n' 3 8 '' 12 | bash "$REPO/install_linux.sh" > "$T/k8.log" 2>&1; rc=$
 check "K export" 'Export Complete!' "$T/k8.log"
 printf '%s\n' 3 9 'shared.tar.gz' 'myimp' 'y' '' '12' | bash "$REPO/install_linux.sh" > "$T/k9.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: run k9 exit $rc"; }
 check "K import" 'Import complete!' "$T/k9.log"
+ROOTFS="$T/prefix/var/lib/proot-distro/installed-rootfs/demoinst"
+mkdir -p "$ROOTFS/var/lib/dpkg" "$ROOTFS/usr/local/bin"
+printf 'root messagebus 4754 /usr/lib/dbus-1.0/dbus-daemon-launch-helper\n' > "$ROOTFS/var/lib/dpkg/statoverride"
+printf '%s\n' 3 0 '' 12 | bash "$REPO/install_linux.sh" > "$T/k0.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: run k0 exit $rc"; }
+check "K repair completes" 'Repair complete!' "$T/k0.log"
+[ -f "$ROOTFS/usr/local/bin/dpkg-statoverride" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: K repair shim not installed"; }
+[ -f "$T/prefix/tmp/lfa-repair.sh" ] && bash -n "$T/prefix/tmp/lfa-repair.sh" && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: K repair script missing/invalid"; }
 printf '%s\n' 3 10 y '' 12 | bash "$REPO/install_linux.sh" > "$T/k10.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: run k10 exit $rc"; }
 check "K uninstall" 'has been removed' "$T/k10.log"
 printf '%s\n' 3 11 2 '' 12 | bash "$REPO/install_linux.sh" > "$T/k11.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: run k11 exit $rc"; }
@@ -299,6 +307,13 @@ assert m, "shim heredoc not found"
 open(sys.argv[2], 'w').write(m.group(1))
 PY
 bash -n "$T/statoverride-shim.sh" && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: M shim syntax"; }
+python3 - "$T/statoverride-shim.sh" "$REPO/lib/dpkg-statoverride.sh" <<'PY2'
+import sys
+a = open(sys.argv[1]).read().rstrip('\n')
+b = open(sys.argv[2]).read().rstrip('\n')
+sys.exit(0 if a == b else 1)
+PY2
+[ $? -eq 0 ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: M embedded shim differs from lib/"; }
 
 mkdir -p "$T/getentbin"
 cat > "$T/getentbin/getent" <<'EOF'
