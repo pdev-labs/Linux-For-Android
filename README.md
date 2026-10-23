@@ -54,6 +54,7 @@ Currently supported distributions:
   inside proot on Android, so instead of a broken `sudo` you get a small
   ritual-only shim: it asks for the install password, then runs your command
   with the full access you already have. No silent failures, no surprises.
+- **Interactive, npm-style UI:** arrow-key menus with descriptions, Enter to choose, space to toggle multiple packages, y/n confirmations and coloured status screens. You can also type an option number (e.g. `10`). When stdin is piped (CI or `curl | bash`), every menu falls back to plain numbered prompts so automation never hangs.
 - **Robust uninstaller:** shows the instance, distro/desktop, rootfs path and size; asks for confirmation; stops active sessions first; verifies removal and cleans up half-deleted containers or legacy ghost entries left by older versions.
 - **proot-distro v3 + v4 aware:** reads the real rootfs from `installed-rootfs/` (older) or `containers/<name>/rootfs` (v4+), so the Doctor, migration and launchers work on both layouts.
 - **Legacy Android Auto-Support:** Android 5/6 devices are detected and get
@@ -95,7 +96,19 @@ chmod +x install_linux.sh
 
 ## 🧭 First-Run Setup
 
-The first screen offers three doors:
+On a real terminal, move with **↑/↓** and press **Enter**; shortcuts are shown at the bottom of every screen:
+
+| Key | Action |
+| --- | --- |
+| `↑` / `↓` | move the highlight |
+| `Enter` | select the highlighted item |
+| `1`…`14` | type a number, then `Enter` (multi-digit works) |
+| `Space` | toggle a package in the multi-select screen |
+| `a` / `n` | select all / none (multi-select) |
+| `q` | go back one screen |
+| `y` / `n` | answer a confirmation |
+
+Colours turn off automatically with `NO_COLOR=1` or when output is not a terminal. The first screen offers a few doors:
 
 - **Quick setup** — every default, no questions. Picks Alpine on Android 5/6
   (Debian elsewhere), CLI-only on small/old phones, `user` / `root` / `root`
@@ -105,7 +118,7 @@ The first screen offers three doors:
   software, instance name, username, user + root passwords (typed blind),
   timezone, hostname, prompt style, autostart, storage, SSH, and widget —
   then shows a summary (passwords masked) and installs without asking twice.
-- **Manager menu** — the classic Install/Update/Backup/… menu, unchanged.
+- **Manager menu** — Install, update, repair (Doctor), backup, restore, export/import, SSH, browser acceleration, migration and uninstall, all in the same arrow-key UI.
 
 Answers are saved to `~/.config/linux-for-android/setup.conf` (`0600`,
 passwords base64-encoded, never plaintext). If the file exists you get a
@@ -335,7 +348,7 @@ installs; needs only `bash`, `coreutils`, `timeout`, and `python3` (plus
 `script` from util-linux for the pty test, skipped if absent):
 ```bash
 chmod +x tests/test-all.sh
-./tests/test-all.sh   # expect: PASS=142 FAIL=0
+./tests/test-all.sh   # expect: PASS=150 FAIL=0
 ```
 
 ## 📝 License

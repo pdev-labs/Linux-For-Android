@@ -10,6 +10,290 @@ fi
 
 # Directory containing this script (lib/ lives next to it).
 LFA_DIR="$(cd "$(dirname "$0")" && pwd)"
+LFA_VERSION="1.5.0"
+
+# ============================================================
+# Interactive UI (npm-style)
+# Arrow keys / Enter / space work on a real terminal. When
+# stdin is piped (CI, `curl | bash`, tests) we fall back to
+# plain numbered prompts so automation keeps working.
+# ============================================================
+UI_TTY=0
+if [ -t 0 ] && [ -t 1 ]; then UI_TTY=1; fi
+
+if [ -t 1 ] && [ -z "${NO_COLOR:-}" ] && [ "${TERM:-dumb}" != "dumb" ]; then
+    C_RESET=$'\033[0m'; C_BOLD=$'\033[1m'; C_DIM=$'\033[2m'
+    C_RED=$'\033[31m'; C_GREEN=$'\033[32m'; C_YELLOW=$'\033[33m'
+    C_BLUE=$'\033[34m'; C_MAGENTA=$'\033[35m'; C_CYAN=$'\033[36m'
+    C_WHITE=$'\033[97m'; C_GRAY=$'\033[90m'
+    C_BGREEN=$'\033[1;32m'; C_BCYAN=$'\033[1;36m'; C_BRED=$'\033[1;31m'
+else
+    C_RESET=""; C_BOLD=""; C_DIM=""
+    C_RED=""; C_GREEN=""; C_YELLOW=""; C_BLUE=""; C_MAGENTA=""
+    C_CYAN=""; C_WHITE=""; C_GRAY=""; C_BGREEN=""; C_BCYAN=""; C_BRED=""
+fi
+
+ui_clear() {
+    if [ "$UI_TTY" = "1" ]; then printf '\033[2J\033[H'; fi
+}
+
+ui_rule() {
+    printf '%s──────────────────────────────────────────────%s\n' "$C_GRAY" "$C_RESET"
+}
+
+ui_banner() {
+    printf '\n  %sLinux for Android%s  %s· installer · v%s%s\n' \
+        "$C_BCYAN" "$C_RESET" "$C_DIM" "$LFA_VERSION" "$C_RESET"
+    ui_rule
+}
+
+ui_ok()   { printf '  %s✓%s %s\n' "$C_BGREEN" "$C_RESET" "$*"; }
+ui_warn() { printf '  %s!%s %s\n' "$C_YELLOW" "$C_RESET" "$*"; }
+ui_err()  { printf '  %s✗%s %s\n' "$C_BRED" "$C_RESET" "$*"; }
+
+# ui_select <title> <default-key> <key|label|description>...
+# Result: UI_SELECTED (the key). Returns 1 on 'q' (back/abort).
+ui_select() {
+    local _title="$1" _def="$2"; shift 2
+    local -a _items=("$@")
+    local _n=$# _i=0 _sel=0 _picked=0 _k _l _d _ans _key _typed=""
+    local _note="${UI_NOTE:-}"
+    UI_NOTE=""
+    for _i in "${!_items[@]}"; do
+        [ "${_items[$_i]%%|*}" = "$_def" ] && _sel=$_i
+    done
+
+    if [ "$UI_TTY" != "1" ]; then
+        ui_banner
+        printf '\n  %s%s%s\n' "$C_BOLD" "$_title" "$C_RESET"
+        [ -n "$_note" ] && printf '  %s%s%s\n' "$C_GRAY" "$_note" "$C_RESET"
+        printf '\n'
+        for _i in "${!_items[@]}"; do
+            IFS='|' read -r _k _l _d <<< "${_items[$_i]}"
+            printf '  %s) %s' "$_k" "$_l"
+            [ -n "$_d" ] && printf '  (%s)' "$_d"
+            printf '\n'
+        done
+        while :; do
+            printf 'Select (default %s): ' "$_def"
+            if ! IFS= read -r _ans; then
+                printf '\n'
+                return 1
+            fi
+            [ -z "$_ans" ] && _ans="$_def"
+            for _i in "${!_items[@]}"; do
+                IFS='|' read -r _k _l _d <<< "${_items[$_i]}"
+                if [ "$_k" = "$_ans" ]; then UI_SELECTED="$_k"; return 0; fi
+            done
+            echo "Invalid choice"
+        done
+    fi
+
+    while :; do
+        ui_clear
+        ui_banner
+        printf '\n  %s%s%s\n' "$C_BOLD$C_WHITE" "$_title" "$C_RESET"
+        [ -n "$_note" ] && printf '  %s%s%s\n' "$C_GRAY" "$_note" "$C_RESET"
+        printf '\n'
+        for _i in "${!_items[@]}"; do
+            IFS='|' read -r _k _l _d <<< "${_items[$_i]}"
+            if [ "$_i" -eq "$_sel" ]; then
+                printf '  %s❯ %s)%s %s%s%s\n' "$C_BCYAN" "$_k" "$C_RESET" "$C_BOLD" "$_l" "$C_RESET"
+                [ -n "$_d" ] && printf '      %s%s%s\n' "$C_GRAY" "$_d" "$C_RESET"
+            else
+                printf '    %s%s)%s %s%s%s\n' "$C_GRAY" "$_k" "$C_RESET" "$C_DIM" "$_l" "$C_RESET"
+                [ -n "$_d" ] && printf '      %s%s%s\n' "$C_GRAY" "$_d" "$C_RESET"
+            fi
+        done
+        printf '\n  %s↑/↓ move  ·  Enter select  ·  q back%s' "$C_DIM" "$C_RESET"
+        [ -n "$_typed" ] && printf '  %s[%s]%s' "$C_CYAN" "$_typed" "$C_RESET"
+        printf '\n'
+        IFS= read -rsn1 _key || true
+        case "$_key" in
+            "") break ;;
+            q|Q) return 1 ;;
+            $'\033')
+                _typed=""
+                IFS= read -rsn2 -t 0.05 _key || true
+                case "$_key" in
+                    '[A'|'OA') _sel=$((_sel-1)) ;;
+                    '[B'|'OB') _sel=$((_sel+1)) ;;
+                esac
+                [ "$_sel" -lt 0 ] && _sel=$((_n-1))
+                [ "$_sel" -ge "$_n" ] && _sel=0
+                ;;
+            [0-9])
+                # Type "10" and press Enter. A single digit only moves the
+                # highlight (no surprise selection before Enter).
+                _typed="${_typed}${_key}"
+                _picked=0
+                for _i in "${!_items[@]}"; do
+                    if [ "${_items[$_i]%%|*}" = "$_typed" ]; then _sel=$_i; _picked=1; break; fi
+                done
+                if [ "$_picked" != "1" ] && [ "${#_typed}" -gt 1 ]; then
+                    _typed="$_key"
+                    for _i in "${!_items[@]}"; do
+                        if [ "${_items[$_i]%%|*}" = "$_typed" ]; then _sel=$_i; break; fi
+                    done
+                fi
+                ;;
+        esac
+    done
+    IFS='|' read -r _k _l _d <<< "${_items[$_sel]}"
+    UI_SELECTED="$_k"
+    return 0
+}
+
+# ui_confirm <question> <y|n default>. Returns 0 for yes, 1 for no.
+ui_confirm() {
+    local _q="$1" _def="$2" _ans _sel _i _key
+    local _keep="${UI_NO_CLEAR:-0}"
+    UI_NO_CLEAR=0
+    if [ "$UI_TTY" != "1" ]; then
+        local _hint='y/N'
+        [ "$_def" = "y" ] && _hint='Y/n'
+        while :; do
+            printf '%s [%s]: ' "$_q" "$_hint"
+            if ! IFS= read -r _ans; then
+                printf '\n'
+                return 1
+            fi
+            _ans="${_ans:-$_def}"
+            case "$_ans" in
+                [Yy]|1|yes|YES) return 0 ;;
+                [Nn]|2|no|NO)  return 1 ;;
+                *) echo "Invalid choice" ;;
+            esac
+        done
+    fi
+
+    _sel=0
+    [ "$_def" = "n" ] && _sel=1
+    while :; do
+        if [ "$_keep" != "1" ]; then
+            ui_clear
+            ui_banner
+        fi
+        printf '\n  %s%s%s\n\n' "$C_BOLD$C_WHITE" "$_q" "$C_RESET"
+        for _i in 0 1; do
+            if [ "$_i" -eq "$_sel" ]; then
+                [ "$_i" = 0 ] && printf '  %s❯ Yes%s\n' "$C_BCYAN" "$C_RESET" || printf '  %s❯ No%s\n' "$C_BCYAN" "$C_RESET"
+            else
+                [ "$_i" = 0 ] && printf '    %sYes%s\n' "$C_DIM" "$C_RESET" || printf '    %sNo%s\n' "$C_DIM" "$C_RESET"
+            fi
+        done
+        printf '\n  %s←/→ or ↑/↓ choose · Enter confirm · y/n shortcut%s\n' "$C_DIM" "$C_RESET"
+        IFS= read -rsn1 _key || true
+        case "$_key" in
+            "") break ;;
+            y|Y) _sel=0; break ;;
+            n|N) _sel=1; break ;;
+            $'\033')
+                IFS= read -rsn2 -t 0.05 _key || true
+                case "$_key" in
+                    '[A'|'OA'|'[D'|'OD') _sel=0 ;;
+                    '[B'|'OB'|'[C'|'OC') _sel=1 ;;
+                esac
+                ;;
+        esac
+    done
+    [ "$_sel" = "0" ]
+}
+
+# ui_multi <title> <key|label|description>...
+# Result: UI_MULTI (space-separated selected keys; empty = none).
+ui_multi() {
+    local _title="$1"; shift
+    local -a _items=("$@") _chosen=()
+    local _n=$# _i=0 _sel=0 _k _l _d _ans _bad _key _mark _c _picked
+
+    if [ "$UI_TTY" != "1" ]; then
+        printf '\n%s\n' "$_title"
+        for _i in "${!_items[@]}"; do
+            IFS='|' read -r _k _l _d <<< "${_items[$_i]}"
+            printf '  %s) %s' "$_k" "$_l"
+            [ -n "$_d" ] && printf '  (%s)' "$_d"
+            printf '\n'
+        done
+        while :; do
+            printf 'Selection (numbers separated by spaces, Enter to skip): '
+            if ! IFS= read -r _ans; then
+                printf '\n'
+                return 1
+            fi
+            _ans="$(echo "${_ans:-}" | xargs)"
+            if [ -z "$_ans" ]; then UI_MULTI=""; return 0; fi
+            if echo "$_ans" | grep -Eq '^[0-9 ]+$'; then
+                _bad=""
+                for _c in $_ans; do
+                    if ! { [ "$_c" -ge 1 ] 2>/dev/null && [ "$_c" -le 14 ] 2>/dev/null; }; then
+                        _bad="$_bad $_c"
+                    fi
+                done
+                if [ -z "$_bad" ]; then UI_MULTI="$_ans"; return 0; fi
+                echo "Invalid numbers:$_bad — use 1-14 separated by spaces."
+            else
+                echo "Use numbers 1-14 separated by spaces (or Enter to skip)."
+            fi
+        done
+    fi
+
+    while :; do
+        ui_clear
+        ui_banner
+        printf '\n  %s%s%s\n\n' "$C_BOLD$C_WHITE" "$_title" "$C_RESET"
+        for _i in "${!_items[@]}"; do
+            IFS='|' read -r _k _l _d <<< "${_items[$_i]}"
+            _mark=" "
+            case " ${_chosen[*]} " in *" $_k "*) _mark="x" ;; esac
+            if [ "$_i" -eq "$_sel" ]; then
+                printf '  %s❯ [%s] %s) %s%s%s\n' "$C_BCYAN" "$_mark" "$_k" "$C_BOLD" "$_l" "$C_RESET"
+                [ -n "$_d" ] && printf '          %s%s%s\n' "$C_GRAY" "$_d" "$C_RESET"
+            else
+                printf '    %s[%s]%s %s%s)%s %s%s%s\n' "$C_GREEN" "$_mark" "$C_RESET" "$C_GRAY" "$_k" "$C_RESET" "$C_DIM" "$_l" "$C_RESET"
+            fi
+        done
+        printf '\n  %s↑/↓ move · space toggle · a all · n none · Enter done%s\n' "$C_DIM" "$C_RESET"
+        _picked=0
+        IFS= read -rsn1 _key || true
+        case "$_key" in
+            "") break ;;
+            q|Q) return 1 ;;
+            ' ')
+                IFS='|' read -r _k _l _d <<< "${_items[$_sel]}"
+                case " ${_chosen[*]} " in
+                    *" $_k "*)
+                        local -a _new=()
+                        for _c in "${_chosen[@]}"; do [ "$_c" != "$_k" ] && _new+=("$_c"); done
+                        _chosen=("${_new[@]}")
+                        ;;
+                    *) _chosen+=("$_k") ;;
+                esac
+                ;;
+            a|A)
+                _chosen=()
+                for _i in "${!_items[@]}"; do _chosen+=("${_items[$_i]%%|*}"); done
+                ;;
+            n|N) _chosen=() ;;
+            $'\033')
+                IFS= read -rsn2 -t 0.05 _key || true
+                case "$_key" in
+                    '[A'|'OA') _sel=$((_sel-1)) ;;
+                    '[B'|'OB') _sel=$((_sel+1)) ;;
+                esac
+                [ "$_sel" -lt 0 ] && _sel=$((_n-1))
+                [ "$_sel" -ge "$_n" ] && _sel=0
+                ;;
+        esac
+    done
+    UI_MULTI="${_chosen[*]}"
+    return 0
+}
+
+ui_pause() {
+    printf '\n  %sPress Enter to continue...%s' "$C_DIM" "$C_RESET"
+    IFS= read -r _ || true
+}
 
 # ============================================================
 # Universal Android compatibility layer (Android 5 -> 15)
@@ -316,28 +600,26 @@ EOF
 }
 
 setup_summary() {
-    echo ""
-    echo "========================================="
-    echo "          Setup Summary                  "
-    echo "========================================="
-    echo "Distribution : $DISTRO"
-    echo "Desktop      : $DE"
-    echo "Server       : $SERVER"
-    [ "$SERVER" = "vnc" ] && echo "Resolution   : $RESOLUTION"
-    echo "Software     : ${APP_CHOICES:-none}"
-    echo "Instance     : ${INSTANCE_NAME:-(auto)}"
-    echo "Username     : $SETUP_USER"
-    echo "Password     : ****"
-    echo "Root passwd  : ****"
-    echo "Timezone     : $TIMEZONE"
-    echo "Hostname     : $HOSTNAME"
-    echo "HW accel     : $([ "$NEED_VIRGL" = "1" ] && echo on || echo off)"
-    echo "Prompt style : $PSTYLE"
-    echo "Autostart    : $([ "$DO_AUTOSTART" = "1" ] && echo yes || echo no)"
-    echo "Storage perm : $([ "$DO_STORAGE" = "1" ] && echo yes || echo no)"
-    echo "SSH server   : $([ "$DO_SSH" = "1" ] && echo yes || echo no)"
-    echo "Widget hint  : $([ "$DO_WIDGET" = "1" ] && echo yes || echo no)"
-    echo "========================================="
+    printf '\n  %sSetup Summary%s\n' "$C_BOLD$C_WHITE" "$C_RESET"
+    ui_rule
+    printf '  %s%-13s%s %s\n' "$C_GRAY" "Distribution" "$C_RESET" "$DISTRO"
+    printf '  %s%-13s%s %s\n' "$C_GRAY" "Desktop" "$C_RESET" "$DE"
+    printf '  %s%-13s%s %s\n' "$C_GRAY" "Server" "$C_RESET" "$SERVER"
+    [ "$SERVER" = "vnc" ] && printf '  %s%-13s%s %s\n' "$C_GRAY" "Resolution" "$C_RESET" "$RESOLUTION"
+    printf '  %s%-13s%s %s\n' "$C_GRAY" "Software" "$C_RESET" "${APP_CHOICES:-none}"
+    printf '  %s%-13s%s %s\n' "$C_GRAY" "Instance" "$C_RESET" "${INSTANCE_NAME:-(auto)}"
+    printf '  %s%-13s%s %s\n' "$C_GRAY" "Username" "$C_RESET" "$SETUP_USER"
+    printf '  %s%-13s%s %s\n' "$C_GRAY" "Password" "$C_RESET" "****"
+    printf '  %s%-13s%s %s\n' "$C_GRAY" "Root passwd" "$C_RESET" "****"
+    printf '  %s%-13s%s %s\n' "$C_GRAY" "Timezone" "$C_RESET" "$TIMEZONE"
+    printf '  %s%-13s%s %s\n' "$C_GRAY" "Hostname" "$C_RESET" "$HOSTNAME"
+    printf '  %s%-13s%s %s\n' "$C_GRAY" "HW accel" "$C_RESET" "$([ "$NEED_VIRGL" = "1" ] && echo on || echo off)"
+    printf '  %s%-13s%s %s\n' "$C_GRAY" "Prompt style" "$C_RESET" "$PSTYLE"
+    printf '  %s%-13s%s %s\n' "$C_GRAY" "Autostart" "$C_RESET" "$([ "$DO_AUTOSTART" = "1" ] && echo yes || echo no)"
+    printf '  %s%-13s%s %s\n' "$C_GRAY" "Storage perm" "$C_RESET" "$([ "$DO_STORAGE" = "1" ] && echo yes || echo no)"
+    printf '  %s%-13s%s %s\n' "$C_GRAY" "SSH server" "$C_RESET" "$([ "$DO_SSH" = "1" ] && echo yes || echo no)"
+    printf '  %s%-13s%s %s\n' "$C_GRAY" "Widget hint" "$C_RESET" "$([ "$DO_WIDGET" = "1" ] && echo yes || echo no)"
+    ui_rule
 }
 
 setup_quick() {
@@ -371,42 +653,52 @@ setup_guided() {
     echo "   Guided Setup (Enter = default)        "
     echo "========================================="
     # 1. Distro
-    if [ "$IS_LEGACY" = "1" ]; then _dd="alpine (option 8)"; else _dd="debian (option 2)"; fi
-    echo ""
-    echo "Choose Linux Distribution (recommended here: $_dd):"
-    echo "1) Ubuntu  2) Debian  3) Kali  4) Fedora"
-    echo "5) OpenSUSE 6) Void   7) Arch   8) Alpine"
+    local _dd _ddef
+    if [ "$IS_LEGACY" = "1" ]; then _dd="Alpine"; _ddef=8; else _dd="Debian"; _ddef=2; fi
     while true; do
-        read -p "Select Distro [1-8]: " DIST_CHOICE || true
-        case "${DIST_CHOICE:-}" in
+        if ! ui_select "Choose Linux Distribution (recommended here: $_dd)" "$_ddef" \
+            "1|Ubuntu|24.04 LTS · APT · widest app support" \
+            "2|Debian|stable · APT · rock solid" \
+            "3|Kali Linux|APT · security tools" \
+            "4|Fedora|DNF · bleeding edge" \
+            "5|OpenSUSE|Zypper · enterprise" \
+            "6|Void Linux|XBPS · lightweight, rolling" \
+            "7|Arch Linux|Pacman · rolling (may be unstable on ARM64)" \
+            "8|Alpine Linux|APK · musl · best for Android 5/6 + low RAM"; then
+            show_menu
+            return
+        fi
+        case "$UI_SELECTED" in
             1) DISTRO="ubuntu"; break ;;
             2) DISTRO="debian"; break ;;
-            3) if [ "$IS_LEGACY" = "1" ]; then echo "ERROR: Kali has no legacy plugin (Android 5/6). Pick Debian (bullseye) or Alpine."; else DISTRO="kali"; break; fi ;;
+            3) if [ "$IS_LEGACY" = "1" ]; then
+                   ui_err "Kali has no legacy plugin (Android 5/6). Pick Debian (bullseye) or Alpine."
+                   continue
+               else DISTRO="kali"; break; fi ;;
             4) DISTRO="fedora"; break ;;
             5) DISTRO="opensuse"; break ;;
             6) DISTRO="void"; break ;;
             7) DISTRO="archlinux"; break ;;
             8) DISTRO="alpine"; break ;;
-            "") if [ "$IS_LEGACY" = "1" ]; then DISTRO="alpine"; else DISTRO="debian"; fi; break ;;
-            *) echo "Invalid choice, try again." ;;
         esac
     done
     # 2. Desktop
-    if [ "$IS_LEGACY" = "1" ] || [ "$(setup_ram_mb)" -le 2048 ]; then _de="None (CLI only)"; else _de="XFCE4"; fi
-    echo ""
-    echo "Choose Desktop Environment (suggested: $_de):"
-    echo "1) XFCE4  2) LXDE  3) MATE  4) None (CLI only)"
-    while true; do
-        read -p "Select DE [1-4]: " DE_CHOICE || true
-        case "${DE_CHOICE:-}" in
-            1) DE="xfce4"; break ;;
-            2) DE="lxde"; break ;;
-            3) DE="mate"; break ;;
-            4) DE="none"; break ;;
-            "") if [ "$IS_LEGACY" = "1" ] || [ "$(setup_ram_mb)" -le 2048 ]; then DE="none"; else DE="xfce4"; fi; break ;;
-            *) echo "Invalid choice, try again." ;;
-        esac
-    done
+    local _de _dedef
+    if [ "$IS_LEGACY" = "1" ] || [ "$(setup_ram_mb)" -le 2048 ]; then _de="None (CLI only)"; _dedef=4; else _de="XFCE4"; _dedef=1; fi
+    if ! ui_select "Choose Desktop Environment (suggested: $_de)" "$_dedef" \
+        "1|XFCE4|light, familiar, great on phones" \
+        "2|LXDE|ultra light, minimal" \
+        "3|MATE|classic GNOME 2 feel" \
+        "4|None (CLI only)|terminal only - lightest and fastest"; then
+        show_menu
+        return
+    fi
+    case "$UI_SELECTED" in
+        1) DE="xfce4" ;;
+        2) DE="lxde" ;;
+        3) DE="mate" ;;
+        4) DE="none" ;;
+    esac
     if [ "$DISTRO" = "alpine" ] && [ "$DE" = "lxde" ]; then
         echo "[*] LXDE is not packaged for Alpine -> using XFCE4 instead."
         DE="xfce4"
@@ -420,63 +712,62 @@ setup_guided() {
             echo "[*] Legacy Android: display server auto-set to VNC, HW acceleration off."
             SERVER="vnc"
         else
-            echo ""
-            echo "Choose Display Server:"
-            echo "1) Termux:X11 (Hardware Acceleration, Faster)"
-            echo "2) VNC (Software Rendering, Slower)"
-            while true; do
-                read -p "Select Server [1-2, default 1]: " SRV_CHOICE || true
-                case "${SRV_CHOICE:-1}" in
-                    1) SERVER="x11"; break ;;
-                    2) SERVER="vnc"; break ;;
-                    *) echo "Invalid choice, try again." ;;
-                esac
-            done
-            echo ""
-            echo "Hardware acceleration (VirGL GPU passthrough)?"
-            echo "1) On (default)  2) Off"
-            while true; do
-                read -p "Select [1-2, default 1]: " HW_CHOICE || true
-                case "${HW_CHOICE:-1}" in
-                    1) NEED_VIRGL=1; break ;;
-                    2) NEED_VIRGL=0; break ;;
-                    *) echo "Invalid choice, try again." ;;
-                esac
-            done
+            if ! ui_select "Choose Display Server" "1" \
+                "1|Termux:X11|hardware acceleration, faster, smoother" \
+                "2|VNC|software rendering, works everywhere, slower"; then
+                show_menu
+                return
+            fi
+            case "$UI_SELECTED" in
+                1) SERVER="x11" ;;
+                2) SERVER="vnc" ;;
+            esac
+            if ! ui_select "Hardware acceleration (VirGL GPU passthrough)?" "1" \
+                "1|On|recommended for X11" \
+                "2|Off|use if the screen is black or glitchy"; then
+                show_menu
+                return
+            fi
+            case "$UI_SELECTED" in
+                1) NEED_VIRGL=1 ;;
+                2) NEED_VIRGL=0 ;;
+            esac
         fi
         if [ "$SERVER" = "vnc" ]; then
-            echo ""
-            echo "Choose Display Resolution:"
-            echo "1) Auto / 720p (default)  2) 1080p  3) Tablet (1440x1080)"
-            while true; do
-                read -p "Select Resolution [1-3, default 1]: " RES_CHOICE || true
-                case "${RES_CHOICE:-1}" in
-                    1) RESOLUTION="1280x720"; break ;;
-                    2) RESOLUTION="1920x1080"; break ;;
-                    3) RESOLUTION="1440x1080"; break ;;
-                    *) echo "Invalid choice, try again." ;;
-                esac
-            done
+            if ! ui_select "Choose Display Resolution" "1" \
+                "1|Auto / 720p|recommended, works on most phones" \
+                "2|1080p|sharper, needs more RAM" \
+                "3|Tablet (1440x1080)|large screen / tablet layout"; then
+                show_menu
+                return
+            fi
+            case "$UI_SELECTED" in
+                1) RESOLUTION="1280x720" ;;
+                2) RESOLUTION="1920x1080" ;;
+                3) RESOLUTION="1440x1080" ;;
+            esac
         fi
     fi
     # 4. Software
-    echo ""
-    echo "Software (numbers separated by spaces, Enter to skip):"
-    echo "Dev: 1)Python 2)Git 3)Node.js 4)curl 5)wget 6)Antigravity IDE 14)VS Code"
-    echo "Web: 7)Firefox 8)Chromium   Office: 9)LibreOffice"
-    echo "Media: 10)VLC 11)GIMP   Sys: 12)htop 13)neofetch"
-    while true; do
-        read -p "Selection: " APP_CHOICES || true
-        APP_CHOICES="$(echo "${APP_CHOICES:-}" | xargs)"
-        if [ -z "$APP_CHOICES" ]; then break; fi
-        if echo "$APP_CHOICES" | grep -Eq '^[0-9 ]+$'; then
-            _bad=$(for n in $APP_CHOICES; do [ "$n" -ge 1 ] 2>/dev/null && [ "$n" -le 14 ] 2>/dev/null || echo "$n"; done)
-            if [ -z "$_bad" ]; then break; fi
-            echo "Invalid numbers: $_bad — use 1-14 separated by spaces."
-        else
-            echo "Use numbers 1-14 separated by spaces (or Enter to skip)."
-        fi
-    done
+    if ! ui_multi "Extra software (space toggles, Enter when done)" \
+        "1|Python|python3 + pip" \
+        "2|Git|version control" \
+        "3|Node.js|npm and JS tooling" \
+        "4|curl|HTTP client" \
+        "5|wget|download tool" \
+        "6|Antigravity IDE|AI-first editor" \
+        "7|Firefox|web browser" \
+        "8|Chromium|web browser" \
+        "9|LibreOffice|office suite" \
+        "10|VLC|media player" \
+        "11|GIMP|image editor" \
+        "12|htop|process monitor" \
+        "13|neofetch|system info" \
+        "14|VS Code|Microsoft editor"; then
+        show_menu
+        return
+    fi
+    APP_CHOICES="$UI_MULTI"
     # 5. Instance name
     echo ""
     while true; do
@@ -519,33 +810,29 @@ setup_guided() {
         echo "Letters, digits and dashes only."
     done
     # 11. Prompt style
-    echo ""
-    echo "Shell prompt style:"
-    echo "1) Minimal (default)  2) Informative (colors, time, exit status)"
-    while true; do
-        read -p "Select [1-2, default 1]: " PSTYLE_CHOICE || true
-        case "${PSTYLE_CHOICE:-1}" in
-            1) PSTYLE="minimal"; break ;;
-            2) PSTYLE="informative"; break ;;
-            *) echo "Invalid choice, try again." ;;
-        esac
-    done
+    if ! ui_select "Shell prompt style" "1" \
+        "1|Minimal|clean colored user@host prompt (recommended)" \
+        "2|Informative|adds time and last exit status"; then
+        show_menu
+        return
+    fi
+    case "$UI_SELECTED" in
+        1) PSTYLE="minimal" ;;
+        2) PSTYLE="informative" ;;
+    esac
     # 12-14. Autostart / storage / SSH / widget
-    echo ""
-    read -p "Autostart at boot via Termux:Boot? (needs the Termux:Boot app) [y/N]: " _a || true
-    case "$_a" in [Yy]*) DO_AUTOSTART=1 ;; *) DO_AUTOSTART=0 ;; esac
-    read -p "Request Android storage access now? [Y/n]: " _a || true
-    case "$_a" in [Nn]*) DO_STORAGE=0 ;; *) DO_STORAGE=1 ;; esac
-    read -p "Start an SSH server after install? [y/N]: " _a || true
-    case "$_a" in [Yy]*) DO_SSH=1 ;; *) DO_SSH=0 ;; esac
-    read -p "Show Termux:Widget shortcut instructions? [y/N]: " _a || true
-    case "$_a" in [Yy]*) DO_WIDGET=1 ;; *) DO_WIDGET=0 ;; esac
+    if ui_confirm "Autostart at boot via Termux:Boot? (needs the Termux:Boot app)" n; then DO_AUTOSTART=1; else DO_AUTOSTART=0; fi
+    if ui_confirm "Request Android storage access now? (Downloads/Documents)" y; then DO_STORAGE=1; else DO_STORAGE=0; fi
+    if ui_confirm "Start an SSH server after install? (port 8022)" n; then DO_SSH=1; else DO_SSH=0; fi
+    if ui_confirm "Show Termux:Widget shortcut instructions?" n; then DO_WIDGET=1; else DO_WIDGET=0; fi
     # Summary + save + go
     setup_summary
-    read -p "Proceed with installation? [Y/n]: " _ok || true
-    case "$_ok" in
-        [Nn]*) echo "Setup cancelled."; show_menu; return ;;
-    esac
+    UI_NO_CLEAR=1
+    if ! ui_confirm "Proceed with installation?" y; then
+        echo "Setup cancelled."
+        show_menu
+        return
+    fi
     SETUP_ANSWERED=1
     setup_save
     install_linux
@@ -574,25 +861,28 @@ setup_load_saved() {
 }
 
 setup_entry() {
-    echo ""
-    echo "========================================="
-    echo "   Linux for Android - Setup             "
-    echo "========================================="
-    print_device_info
-    echo ""
-    echo "1) Quick setup (all defaults, fastest)"
-    echo "2) Guided setup (answer questions)"
-    echo "3) Manager menu (install/update/backup/...)"
-    if [ -f "$SETUP_CONF" ]; then
-        echo "4) Re-install with saved answers"
+    detect_environment
+    if [ "$UI_TTY" = "1" ]; then
+        UI_NOTE="$ARCH · Android SDK ${ANDROID_SDK:-0} · legacy=${IS_LEGACY:-0}"
+    else
+        print_device_info
     fi
-    read -p "Select: " ENTRY_CHOICE || true
-    case "${ENTRY_CHOICE:-}" in
+    local -a _entry=(
+        "1|Quick setup|all defaults, zero questions"
+        "2|Guided setup|choose distro, desktop, user, passwords, ..."
+        "3|Manager menu|install / update / repair / uninstall"
+    )
+    [ -f "$SETUP_CONF" ] && _entry+=("4|Re-install with saved answers|uses ~/.config/linux-for-android/setup.conf")
+
+    if ! ui_select "Linux for Android - Setup" "1" "${_entry[@]}"; then
+        show_menu
+        return
+    fi
+    case "$UI_SELECTED" in
         1) setup_quick ;;
         2) setup_guided ;;
-        3|"") show_menu ;;
+        3) show_menu ;;
         4) if [ -f "$SETUP_CONF" ]; then setup_load_saved; else echo "No saved setup found."; show_menu; fi ;;
-        *) echo "Invalid choice"; sleep 1; setup_entry ;;
     esac
 }
 
@@ -605,33 +895,34 @@ require_proot_distro() {
         return 0
     fi
     echo "ERROR: proot-distro is required for this operation."
-    read -p "Press Enter to return to menu..."
+    ui_pause
     show_menu
     return 1
 }
 
 show_menu() {
-    clear 2>/dev/null || true
-    echo "========================================="
-    echo "        Linux for Termux Manager         "
-    echo "========================================="
-    echo "1) Install / Re-install Linux Distro"
-    echo "2) Update a Distro (1-Click Updater)"
-    echo "3) Start SSH Server"
-    echo "4) System Dashboard"
-    echo "5) Audio Debugger / Fixer"
-    echo "6) Backup a Distro (Internal)"
-    echo "7) Restore a Distro (Internal)"
-    echo "8) Export Distro (Share to Downloads)"
-    echo "9) Import Shared Distro"
-    echo "10) Uninstall a Distro"
-    echo "11) Toggle Browser Hardware Acceleration"
-    echo "12) Apply Latest Fixes to an Installed Distro"
-    echo "0)  Repair a Distro (fix broken apt/dpkg, Doctor)"
-    echo "13) Exit"
-    echo "========================================="
-    read -p "Select an option [0-13]: " OPTION
-    case $OPTION in
+    local -a _menu=(
+        "1|Install / Re-install Linux Distro|pick a distro, desktop and apps"
+        "2|Update a Distro|1-click updater, heals apt/dpkg first"
+        "3|Start SSH Server|connect from another device, port 8022"
+        "4|System Dashboard|RAM, storage and installed distros"
+        "5|Audio Debugger / Fixer|PulseAudio checks and repair"
+        "6|Backup a Distro|internal TAR archive in your home"
+        "7|Restore a Distro|restore an internal backup"
+        "8|Export Distro|copy a TAR to Downloads for sharing"
+        "9|Import Shared Distro|restore a TAR from Downloads"
+        "10|Uninstall a Distro|delete a rootfs permanently"
+        "11|Toggle Browser Hardware Acceleration|GPU on/off for Chromium"
+        "12|Apply Latest Fixes|migrate an older install in place"
+        "0|Repair a Distro (Doctor)|fix broken apt/dpkg, missing users"
+        "13|Exit|close the manager"
+    )
+    if ! ui_select "Linux for Termux Manager" "1" "${_menu[@]}"; then
+        printf '  %sBye.%s
+' "$C_DIM" "$C_RESET"
+        exit 0
+    fi
+    case "$UI_SELECTED" in
         0) repair_linux ;;
         1) install_linux ;;
         2) update_linux ;;
@@ -646,32 +937,30 @@ show_menu() {
         11) optimize_browser ;;
         12) upgrade_existing ;;
         13) exit 0 ;;
-        *) echo "Invalid option"; sleep 1; show_menu ;;
     esac
 }
 
 select_os_flavor() {
-    echo ""
-    echo "Choose Linux Distribution:"
-    echo "1) Ubuntu (apt)"
-    echo "2) Debian (apt)"
-    echo "3) Kali Linux (apt)"
-    echo "4) Fedora (dnf)"
-    echo "5) OpenSUSE (zypper)"
-    echo "6) Void Linux (xbps)"
-    echo "7) Arch Linux (pacman) [May be unstable on ARM64]"
-    echo "8) Alpine Linux (apk, musl - BEST for Android 5/6, tiny & fast)"
-    read -p "Select Distro [1-8]: " DIST_CHOICE
-    case $DIST_CHOICE in
-        1) DISTRO="ubuntu";;
-        2) DISTRO="debian";;
-        3) DISTRO="kali";;
-        4) DISTRO="fedora";;
-        5) DISTRO="opensuse";;
-        6) DISTRO="void";;
-        7) DISTRO="archlinux";;
-        8) DISTRO="alpine";;
-        *) echo "Invalid choice"; exit 1 ;;
+    if ! ui_select "Choose Linux Distribution" "2" \
+        "1|Ubuntu|24.04 LTS · APT" \
+        "2|Debian|stable · APT" \
+        "3|Kali Linux|APT · security tools" \
+        "4|Fedora|DNF" \
+        "5|OpenSUSE|Zypper" \
+        "6|Void Linux|XBPS" \
+        "7|Arch Linux|Pacman · may be unstable on ARM64" \
+        "8|Alpine Linux|APK · musl · best for Android 5/6"; then
+        return 1
+    fi
+    case "$UI_SELECTED" in
+        1) DISTRO="ubuntu" ;;
+        2) DISTRO="debian" ;;
+        3) DISTRO="kali" ;;
+        4) DISTRO="fedora" ;;
+        5) DISTRO="opensuse" ;;
+        6) DISTRO="void" ;;
+        7) DISTRO="archlinux" ;;
+        8) DISTRO="alpine" ;;
     esac
 }
 
@@ -732,24 +1021,20 @@ select_installed_instance() {
     DISTROS=($(pd_instances))
     if [ ${#DISTROS[@]} -eq 0 ]; then
         echo "No distributions installed."
-        read -p "Press Enter to return to menu..."
+        ui_pause
         show_menu
     elif [ ${#DISTROS[@]} -eq 1 ]; then
         INSTANCE_NAME=${DISTROS[0]}
     else
-        echo "Multiple distributions found. Select one:"
+        local -a _inst=()
         for i in "${!DISTROS[@]}"; do
-            echo "$((i+1))) ${DISTROS[$i]}"
+            _inst+=("$((i+1))|${DISTROS[$i]}|$([ -x "$(pd_rootfs "${DISTROS[$i]}")/bin/sh" ] && echo ready || echo incomplete)")
         done
-        read -p "Select an instance [1-${#DISTROS[@]}]: " choice
-        if [[ ! "$choice" =~ ^[0-9]+$ ]] || [ "$choice" -lt 1 ] || [ "$choice" -gt "${#DISTROS[@]}" ]; then
-            echo "Invalid selection."
-            read -p "Press Enter to return to menu..."
+        if ! ui_select "Multiple distributions found - pick one" "1" "${_inst[@]}"; then
             show_menu
             return
         fi
-        idx=$((choice-1))
-        INSTANCE_NAME=${DISTROS[$idx]}
+        INSTANCE_NAME="${DISTROS[$((UI_SELECTED-1))]}"
     fi
     if [ -n "$INSTANCE_NAME" ]; then
         CONF_FILE="$(pd_conf "$INSTANCE_NAME")"
@@ -775,7 +1060,7 @@ system_dashboard() {
     echo "Available Phone Storage:"
     df -h /data 2>/dev/null | awk 'NR==2 {print $4}'
     echo "========================================="
-    read -p "Press Enter to continue..."
+    ui_pause
     show_menu
 }
 
@@ -787,7 +1072,7 @@ audio_fixer() {
     if ! command -v pulseaudio >/dev/null 2>&1; then
         echo "ERROR: pulseaudio unavailable on this Termux repo (common on Android 5)."
         echo "Audio inside Linux will be silent, but the desktop itself still works."
-        read -p "Press Enter to continue..."
+        ui_pause
         show_menu
         return
     fi
@@ -796,7 +1081,7 @@ audio_fixer() {
     rm -rf /data/data/com.termux/files/usr/tmp/pulse-* 2>/dev/null || true
     pulseaudio --start --load="module-native-protocol-tcp auth-ip-acl=127.0.0.1 auth-anonymous=1" --exit-idle-time=-1
     echo "Audio server forcefully bound to TCP protocol!"
-    read -p "Press Enter to continue..."
+    ui_pause
     show_menu
 }
 
@@ -883,7 +1168,7 @@ repair_linux() {
         echo "[!] Doctor hit an error - review the output above."
     fi
     echo "========================================="
-    read -p "Press Enter to continue..."
+    ui_pause
     show_menu
 }
 
@@ -1036,7 +1321,7 @@ EOF
     echo "========================================="
     echo "Latest fixes applied!"
     echo "========================================="
-    read -p "Press Enter to continue..."
+    ui_pause
     show_menu
 }
 
@@ -1050,9 +1335,9 @@ update_linux() {
     run_guest_repair || true
     proot-distro login $(pd_login_flags) "$INSTANCE_NAME" --user root -- bash -c "export DEBIAN_FRONTEND=noninteractive; $UPDATE_CMD"
     echo "========================================="
-    echo "Update complete!"
+    ui_ok "Update complete!"
     echo "========================================="
-    read -p "Press Enter to continue..."
+    ui_pause
     show_menu
 }
 
@@ -1063,7 +1348,7 @@ start_ssh() {
     fi
     if ! command -v sshd >/dev/null 2>&1; then
         echo "ERROR: openssh unavailable on this repo."
-        read -p "Press Enter to continue..."
+        ui_pause
         show_menu
         return
     fi
@@ -1079,7 +1364,7 @@ start_ssh() {
     echo ""
     echo "Note: If you have never set a Termux password, type 'passwd' right now to create one."
     echo "========================================="
-    read -p "Press Enter to continue..."
+    ui_pause
     show_menu
 }
 
@@ -1089,8 +1374,8 @@ backup_linux() {
     if [ -z "$INSTANCE_NAME" ]; then return; fi
     echo "[*] Backing up $INSTANCE_NAME (Internal)..."
     proot-distro backup "$INSTANCE_NAME" --output ~/${INSTANCE_NAME}-backup.tar.gz
-    echo "Backup saved to ~/${INSTANCE_NAME}-backup.tar.gz"
-    read -p "Press Enter to continue..."
+    ui_ok "Backup saved to ~/${INSTANCE_NAME}-backup.tar.gz"
+    ui_pause
     show_menu
 }
 
@@ -1102,18 +1387,17 @@ restore_linux() {
         echo "Error: No internal backup found at ~/${INSTANCE_NAME}-backup.tar.gz"
     else
         echo "[*] Restoring $INSTANCE_NAME..."
-        read -p "Are you sure? This overwrites current data [y/N]: " CONFIRM
-        if [[ "$CONFIRM" =~ ^[Yy]$ ]]; then
+        if ui_confirm "Restore $INSTANCE_NAME? This overwrites current data" n; then
             if pd_is_v4; then
                 echo "[*] (v4 build: restores the instance name stored in the backup)"
                 proot-distro restore ~/${INSTANCE_NAME}-backup.tar.gz
             else
                 proot-distro restore "$INSTANCE_NAME" --input ~/${INSTANCE_NAME}-backup.tar.gz
             fi
-            echo "Restore complete!"
+            ui_ok "Restore complete!"
         fi
     fi
-    read -p "Press Enter to continue..."
+    ui_pause
     show_menu
 }
 
@@ -1130,11 +1414,11 @@ export_distro() {
     echo "[*] Exporting $INSTANCE_NAME to Android Downloads folder (This may take a while)..."
     proot-distro backup "$INSTANCE_NAME" --output ~/storage/downloads/${INSTANCE_NAME}-shared.tar.gz
     echo "========================================="
-    echo "Export Complete!"
+    ui_ok "Export Complete!"
     echo "File saved to: Downloads/${INSTANCE_NAME}-shared.tar.gz"
     echo "You can now share this file with your friends via Google Drive or USB!"
     echo "========================================="
-    read -p "Press Enter to continue..."
+    ui_pause
     show_menu
 }
 
@@ -1155,8 +1439,7 @@ import_distro() {
     else
         if pd_is_v4; then
             echo "[*] (v4 build: imports under the instance name stored in the file)"
-            read -p "Are you sure? This overwrites that instance [y/N]: " CONFIRM
-            if [[ "$CONFIRM" =~ ^[Yy]$ ]]; then
+            if ui_confirm "Import $IMPORT_FILE? This overwrites that instance" n; then
                 proot-distro restore ~/storage/downloads/$IMPORT_FILE
                 echo "========================================="
                 echo "Import complete! You can now use start-linux to boot it."
@@ -1165,8 +1448,7 @@ import_distro() {
         else
             read -p "Enter new instance name for this import (e.g. my-ubuntu): " INSTANCE_NAME
             echo "[*] Importing $INSTANCE_NAME from Downloads..."
-            read -p "Are you sure? This will completely overwrite any current $INSTANCE_NAME installation [y/N]: " CONFIRM
-            if [[ "$CONFIRM" =~ ^[Yy]$ ]]; then
+            if ui_confirm "Overwrite the current $INSTANCE_NAME installation?" n; then
                 proot-distro restore "$INSTANCE_NAME" --input ~/storage/downloads/$IMPORT_FILE
                 echo "========================================="
                 echo "Import complete! You can now use start-linux to boot your friend's setup."
@@ -1174,7 +1456,7 @@ import_distro() {
             fi
         fi
     fi
-    read -p "Press Enter to continue..."
+    ui_pause
     show_menu
 }
 
@@ -1182,12 +1464,14 @@ optimize_browser() {
     require_proot_distro || return
     select_installed_instance
     if [ -z "$INSTANCE_NAME" ]; then return; fi
-    echo ""
-    echo "Browser Optimization Menu:"
-    echo "1) Enable Hardware Acceleration (VirGL - Smooth YouTube)"
-    echo "2) Disable Hardware Acceleration (Revert to Default)"
-    read -p "Select an option [1-2]: " OPT_CHOICE
-    
+    if ! ui_select "Browser hardware acceleration" "1" \
+        "1|Enable VirGL|smooth YouTube and GPU rendering" \
+        "2|Disable|revert to Chromium defaults"; then
+        show_menu
+        return
+    fi
+    OPT_CHOICE="$UI_SELECTED"
+
     if [ "$OPT_CHOICE" == "1" ]; then
         echo "[*] Optimizing Chromium for Hardware Accelerated Video Decoding..."
         proot-distro login $(pd_login_flags) "$INSTANCE_NAME" -- bash -c '
@@ -1204,7 +1488,7 @@ EOF
 chmod +x /usr/local/bin/chromium-browser
 '
         echo "========================================="
-        echo "Optimization complete! Chromium will now render using VirGL!"
+        ui_ok "Optimization complete! Chromium will now render using VirGL!"
         echo "========================================="
     elif [ "$OPT_CHOICE" == "2" ]; then
         echo "[*] Removing Hardware Acceleration Overrides..."
@@ -1213,12 +1497,12 @@ rm -f /usr/local/bin/chromium
 rm -f /usr/local/bin/chromium-browser
 '
         echo "========================================="
-        echo "Hardware Acceleration disabled. Restored to default!"
+        ui_ok "Hardware Acceleration disabled. Restored to default!"
         echo "========================================="
     else
         echo "Invalid selection."
     fi
-    read -p "Press Enter to continue..."
+    ui_pause
     show_menu
 }
 
@@ -1540,10 +1824,10 @@ uninstall_linux() {
     echo " Status   : $STATE"
     echo " Backups in $HOME are kept."
     echo "========================================="
-    read -p "Delete $INSTANCE_NAME permanently? [y/N]: " CONFIRM
-    if [[ ! "$CONFIRM" =~ ^[Yy]$ ]]; then
+    UI_NO_CLEAR=1
+    if ! ui_confirm "Delete $INSTANCE_NAME permanently?" n; then
         echo "Cancelled."
-        read -p "Press Enter to continue..."
+        ui_pause
         show_menu
         return
     fi
@@ -1572,15 +1856,16 @@ uninstall_linux() {
        [ -e "$PREFIX/var/lib/proot-distro/installed-rootfs/$INSTANCE_NAME" ]; then
         echo "[!] Could not fully remove $INSTANCE_NAME - check permissions."
     else
-        echo "$INSTANCE_NAME has been removed."
+        ui_ok "$INSTANCE_NAME has been removed."
         echo "Backups, if any, were left in $HOME."
     fi
 
-    read -p "Press Enter to continue..."
+    ui_pause
     show_menu
 }
 
 install_linux() {
+    local INSTALL_START="$(date +%s)"
     echo ""
     echo "========================================="
     echo "   Linux Installation Wizard             "
@@ -1594,7 +1879,10 @@ install_linux() {
     print_device_info
     echo ""
     if [ "$SETUP_ANSWERED" != "1" ]; then
-        select_os_flavor
+        if ! select_os_flavor; then
+            show_menu
+            return
+        fi
     fi
     # 32-bit ARM warning (Oppo A37fw and similar): some images lack armv7 builds
     if [ "$IS_32BIT_ARM" = "1" ]; then
@@ -1621,7 +1909,7 @@ install_linux() {
             kali)
                 echo "ERROR: Kali has no plugin in legacy proot-distro (Android 5/6)."
                 echo "Please re-run and choose Debian (bullseye) or Alpine instead."
-                read -p "Press Enter to return to menu..."
+                ui_pause
                 show_menu
                 return
                 ;;
@@ -1629,7 +1917,12 @@ install_linux() {
                 echo "[!] Warning: $DISTRO uses modern glibc which fails on the"
                 echo "    Android 5/6 (3.10) kernel at the first guest command."
                 echo "    Debian (auto-switches to bullseye) or Alpine (option 8) work here."
-                read -p "Press Enter to continue anyway, or Ctrl+C to abort and pick another..." dummy || true
+                if [ "$SETUP_ANSWERED" != "1" ]; then
+                    if ! ui_confirm "Continue anyway? ($DISTRO may fail on this kernel)" n; then
+                        show_menu
+                        return
+                    fi
+                fi
                 ;;
         esac
     fi
@@ -1639,14 +1932,20 @@ install_linux() {
     SERVER="none"
     RESOLUTION="1280x720"
 
-    echo ""
-    echo "Choose Desktop Environment:"
-    echo "1) XFCE4 (Recommended, Lightweight GUI)"
-    echo "2) LXDE (Very Lightweight GUI)"
-    echo "3) MATE (Classic GNOME, Stable)"
-    echo "4) None (CLI only)"
-    read -p "Select DE [1-4]: " DE_CHOICE
-    if [ "$DE_CHOICE" == "1" ]; then DE="xfce4"; elif [ "$DE_CHOICE" == "2" ]; then DE="lxde"; elif [ "$DE_CHOICE" == "3" ]; then DE="mate"; else DE="none"; fi
+    if ! ui_select "Choose Desktop Environment" "1" \
+        "1|XFCE4|recommended, light GUI" \
+        "2|LXDE|very light GUI" \
+        "3|MATE|classic GNOME, stable" \
+        "4|None (CLI only)|terminal only"; then
+        show_menu
+        return
+    fi
+    case "$UI_SELECTED" in
+        1) DE="xfce4" ;;
+        2) DE="lxde" ;;
+        3) DE="mate" ;;
+        4) DE="none" ;;
+    esac
     fi
     # Alpine repos ship no LXDE meta-package (and no startlxde). Fall back
     # to XFCE4 rather than installing a desktop that cannot start.
@@ -1663,22 +1962,31 @@ install_linux() {
             echo "[*] Legacy Android detected: Termux:X11 unavailable -> using VNC."
             SERVER="vnc"
         else
-            echo ""
-            echo "Choose Display Server:"
-            echo "1) Termux:X11 (Hardware Acceleration, Faster)"
-            echo "2) VNC (Software Rendering, Slower)"
-            read -p "Select Server [1-2]: " SRV_CHOICE
-            if [ "$SRV_CHOICE" == "1" ]; then SERVER="x11"; else SERVER="vnc"; fi
+            if ! ui_select "Choose Display Server" "1" \
+                "1|Termux:X11|hardware acceleration, faster" \
+                "2|VNC|software rendering, slower"; then
+                show_menu
+                return
+            fi
+            case "$UI_SELECTED" in
+                1) SERVER="x11" ;;
+                2) SERVER="vnc" ;;
+            esac
         fi
         
         if [ "$SERVER" == "vnc" ]; then
-            echo ""
-            echo "Choose Display Resolution / UI Scaling:"
-            echo "1) Auto / 720p (Lightweight - Recommended)"
-            echo "2) 1080p (HD)"
-            echo "3) iPad / Tablet Ratio (1440x1080)"
-            read -p "Select Resolution [1-3]: " RES_CHOICE
-            if [ "$RES_CHOICE" == "2" ]; then RESOLUTION="1920x1080"; elif [ "$RES_CHOICE" == "3" ]; then RESOLUTION="1440x1080"; else RESOLUTION="1280x720"; fi
+            if ! ui_select "Choose Display Resolution / UI Scaling" "1" \
+                "1|Auto / 720p|lightweight, recommended" \
+                "2|1080p|HD" \
+                "3|Tablet (1440x1080)|iPad / tablet ratio"; then
+                show_menu
+                return
+            fi
+            case "$UI_SELECTED" in
+                1) RESOLUTION="1280x720" ;;
+                2) RESOLUTION="1920x1080" ;;
+                3) RESOLUTION="1440x1080" ;;
+            esac
         fi
     fi
     # Safety clamp for answered setups replayed on legacy hardware (e.g. a
@@ -1691,25 +1999,25 @@ install_linux() {
 
     # SOFTWARE SELECTOR
     if [ "$SETUP_ANSWERED" != "1" ]; then
-    echo ""
-    echo "========================================="
-    echo "      Software Selector (Optional)       "
-    echo "========================================="
-    echo "Development Tools:"
-    echo "  1) Python       2) Git         3) Node.js"
-    echo "  4) curl         5) wget        6) Google Antigravity IDE"
-    echo " 14) VS Code"
-    echo "Web Browsers:"
-    echo "  7) Firefox      8) Chromium"
-    echo "Office Suite:"
-    echo "  9) LibreOffice"
-    echo "Media Tools:"
-    echo " 10) VLC         11) GIMP"
-    echo "System Utilities:"
-    echo " 12) htop        13) neofetch"
-    echo "========================================="
-    echo "Enter numbers separated by spaces (e.g. 1 2 7 12), or press Enter to skip."
-    read -p "Selection: " APP_CHOICES
+    if ! ui_multi "Software Selector (optional)" \
+        "1|Python|python3 + pip" \
+        "2|Git|version control" \
+        "3|Node.js|npm and JS tooling" \
+        "4|curl|HTTP client" \
+        "5|wget|download tool" \
+        "6|Antigravity IDE|AI-first editor" \
+        "7|Firefox|web browser" \
+        "8|Chromium|web browser" \
+        "9|LibreOffice|office suite" \
+        "10|VLC|media player" \
+        "11|GIMP|image editor" \
+        "12|htop|process monitor" \
+        "13|neofetch|system info" \
+        "14|VS Code|Microsoft editor"; then
+        show_menu
+        return
+    fi
+    APP_CHOICES="$UI_MULTI"
     fi
 
     INSTALL_PYTHON=0; INSTALL_GIT=0; INSTALL_NODEJS=0; INSTALL_CURL=0; INSTALL_WGET=0; INSTALL_IDE=0
@@ -1770,7 +2078,7 @@ install_linux() {
         echo "[!] proot-distro predates --override-alias; upgrading to v4.2.0..."
         install_proot_distro_from_source || {
             echo "FATAL: proot-distro upgrade failed. Cannot continue."
-            read -p "Press Enter to return to menu..."
+            ui_pause
             show_menu
             return
         }
@@ -1779,7 +2087,7 @@ install_linux() {
 
     echo "[*] Installing $DISTRO (as $INSTANCE_NAME)..."
     verify_proot_distro_plugin "$PD_ALIAS" || {
-        read -p "Press Enter to return to menu..."
+        ui_pause
         show_menu
         return
     }
@@ -2485,18 +2793,20 @@ EOF
         echo "    Boot script written to ~/.termux/boot/start-linux-services.sh"
     fi
 
+    local _elapsed=$(( $(date +%s) - INSTALL_START ))
+    local _mins=$((_elapsed / 60)) _secs=$((_elapsed % 60)) _dur
+    if [ "$_mins" -gt 0 ]; then _dur="${_mins}m ${_secs}s"; else _dur="${_secs}s"; fi
     echo ""
     echo "========================================="
-    echo "Installation complete!"
+    ui_ok "Installation complete! (${_dur})"
     echo "start-linux / terminal-linux ask each boot: root terminal"
     echo "(default, full admin) or user terminal. Install packages directly"
-    echo "(apk add / apt install ...). sudo does NOT work inside proot on"
-    echo "Android (NO_NEW_PRIVS) and is not needed - you own every file."
+    echo "with apk add / apt install / dnf install ..."
     echo "GUI sessions run as '$LINUX_USER' (VNC password: the one you chose in setup)."
     echo "Use commands: start-linux / terminal-linux (shell only) / stop-linux"
     echo "If you installed the Termux:Widget app, a shortcut is on your home screen!"
     echo "========================================="
-    read -p "Press Enter to return to menu..."
+    ui_pause
     show_menu
 }
 

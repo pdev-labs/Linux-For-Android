@@ -300,6 +300,22 @@ else
     echo "SKIP: L (no 'script' for pty test)"; pass=$((pass+2))
 fi
 
+echo "===== L2: arrow-key UI over a real pty ====="
+fresh_env
+if command -v script >/dev/null 2>&1; then
+    # Typing "3" + Enter opens the manager; "13" + Enter exits.
+    printf '3\n13\n' | TERM=xterm-256color timeout 15 script -qec "bash '$REPO/install_linux.sh'" /dev/null > "$T/tty-digits.log" 2>&1
+    rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: L2 pty digit ui exit $rc"; }
+    check "L2 digit menu" 'Linux for Termux Manager' "$T/tty-digits.log"
+    # Two Down arrows + Enter pick "Manager"; q goes back and exits.
+    printf '\033[B\033[B\nq' | TERM=xterm-256color timeout 15 script -qec "bash '$REPO/install_linux.sh'" /dev/null > "$T/tty-arrows.log" 2>&1
+    rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: L2 pty arrow ui exit $rc"; }
+    check "L2 arrows navigate" 'Bye.' "$T/tty-arrows.log"
+    grep -q $'\033\[' "$T/tty-arrows.log" && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: L2 no ANSI colours"; }
+else
+    echo "SKIP: L2 (no 'script' for pty test)"; pass=$((pass+4))
+fi
+
 echo "===== M: dpkg statoverride shim ====="
 fresh_env
 printf '%s\n' 1 '' 13 | bash "$REPO/install_linux.sh" > "$T/m.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: run m exit $rc"; }
@@ -416,6 +432,16 @@ grep -q '^kill broken$' "$T/home/pd-calls.log" && pass=$((pass+1)) || { fail=$((
 check "P removes broken" 'has been removed' "$T/p.log"
 [ ! -e "$T/prefix/var/lib/proot-distro/containers/broken" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: P broken container left behind"; }
 [ -d "$T/prefix/var/lib/proot-distro/installed-rootfs/ghost" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: P ghost stub was touched"; }
+
+echo "===== Q: EOF on stdin exits cleanly (no infinite loop) ====="
+fresh_env
+if printf '' | timeout 10 bash "$REPO/install_linux.sh" > "$T/q.log" 2>&1; then
+    pass=$((pass+1))
+else
+    fail=$((fail+1)); echo "FAIL: Q EOF did not exit cleanly"
+fi
+check "Q manager shown" 'Linux for Termux Manager' "$T/q.log"
+check "Q clean bye" 'Bye.' "$T/q.log"
 
 echo ""
 echo "PASS=$pass FAIL=$fail"
