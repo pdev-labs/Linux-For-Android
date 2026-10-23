@@ -746,6 +746,25 @@ update_linux() {
     select_installed_instance
     if [ -z "$INSTANCE_NAME" ]; then return; fi
     echo "[*] Updating $INSTANCE_NAME..."
+    # Heal statoverride rows that reference users/groups missing from the
+    # guest: dpkg aborts on them ("unknown system group ..."), which makes
+    # apt unusable. Older versions of this script could seed dbus's group
+    # before it existed.
+    if [ -f "$PREFIX/var/lib/proot-distro/installed-rootfs/$INSTANCE_NAME/var/lib/dpkg/statoverride" ]; then
+        echo "[*] Checking dpkg statoverride integrity..."
+        proot-distro login $(pd_login_flags) "$INSTANCE_NAME" -- bash -c '
+            : > /var/lib/dpkg/statoverride.lfa
+            while read -r u g m p; do
+                [ -n "$u" ] || continue
+                [ -n "$p" ] || continue
+                { getent passwd "$u" >/dev/null 2>&1 || grep -q "^$u:" /etc/passwd; } || continue
+                { getent group "$g" >/dev/null 2>&1 || grep -q "^$g:" /etc/group; } || continue
+                printf "%s %s %s %s\n" "$u" "$g" "$m" "$p" >> /var/lib/dpkg/statoverride.lfa
+            done < /var/lib/dpkg/statoverride
+            cat /var/lib/dpkg/statoverride.lfa > /var/lib/dpkg/statoverride
+            rm -f /var/lib/dpkg/statoverride.lfa
+        ' || true
+    fi
     proot-distro login $(pd_login_flags) "$INSTANCE_NAME" --user root -- bash -c "export DEBIAN_FRONTEND=noninteractive; $UPDATE_CMD"
     echo "========================================="
     echo "Update complete!"
@@ -1350,24 +1369,104 @@ echo 'Acquire::Check-Valid-Until "false";' > /etc/apt/apt.conf.d/99-no-check-val
 EOF
     fi
 
+    # dpkg-statoverride under proot:
+    #  * old proot cannot do the atomic rename dance (EPERM), which leaves
+    #    dbus half-configured;
+    #  * a statoverride row naming a user/group that does not exist makes
+    #    dpkg abort every later run ("unknown system group 'messagebus' in
+    #    statoverride file"), bricking apt.
+    # Install a shim that rewrites the file in place and refuses to record
+    # unknown users/groups, and sanitise any rows a previous bad state left
+    # behind (e.g. our old unconditional dbus pre-seed).
+    if [ "$DISTRO" == "ubuntu" ] || [ "$DISTRO" == "debian" ] || [ "$DISTRO" == "kali" ]; then
+        cat << 'EOF' >> "$SETUP_SCRIPT"
+echo " -> Installing proot-safe dpkg-statoverride shim..."
+cat > /usr/local/bin/dpkg-statoverride << 'LFA_SO'
+#!/bin/sh
+# Linux-for-Android: proot-safe dpkg-statoverride.
+# Why: old proot fails dpkg's atomic rename with EPERM (dbus postinst dies),
+# and a row naming a missing user/group makes every dpkg invocation abort
+# with "unknown ... in statoverride file". Rewrite in place, validate first.
+REAL=${LFA_DPKG_STATOVERRIDE:-/usr/sbin/dpkg-statoverride}
+[ -x "$REAL" ] || REAL=/usr/bin/dpkg-statoverride
+DB=${LFA_STATOVERRIDE_DB:-/var/lib/dpkg/statoverride}
+TMP="$DB.lfa.tmp"
+
+uok() { getent passwd "$1" >/dev/null 2>&1 || grep -q "^$1:" /etc/passwd; }
+gok() { getent group "$1" >/dev/null 2>&1 || grep -q "^$1:" /etc/group; }
+
+sanitize() {
+    [ -f "$DB" ] || return 0
+    : > "$TMP"
+    while read -r u g m p; do
+        [ -n "$u" ] || continue
+        [ -n "$p" ] || continue
+        uok "$u" || continue
+        gok "$g" || continue
+        printf '%s %s %s %s\n' "$u" "$g" "$m" "$p" >> "$TMP"
+    done < "$DB"
+    cat "$TMP" > "$DB"
+    rm -f "$TMP"
+}
+
+case " $* " in
+    *" --list "*) sanitize; exec "$REAL" "$@" ;;
+    *" --add "*|*" --update "*) op=add ;;
+    *" --remove "*) op=remove ;;
+    *) exec "$REAL" "$@" ;;
+esac
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --add|--update|--remove|--force|--force-all|--quiet) shift ;;
+        *) break ;;
+    esac
+done
+
+if [ "$op" = "add" ]; then
+    [ $# -ge 4 ] || { echo "dpkg-statoverride: bad usage" >&2; exit 2; }
+    uok "$1" || { echo "dpkg-statoverride: unknown user '$1'; not recording $4" >&2; exit 0; }
+    gok "$2" || { echo "dpkg-statoverride: unknown group '$2'; not recording $4" >&2; exit 0; }
+    sanitize
+    grep -v " $4\$" "$DB" 2>/dev/null > "$TMP" || true
+    printf '%s %s %s %s\n' "$1" "$2" "$3" "$4" >> "$TMP"
+else
+    [ $# -ge 1 ] || { echo "dpkg-statoverride: bad usage" >&2; exit 2; }
+    sanitize
+    grep -v " $1\$" "$DB" 2>/dev/null > "$TMP" || true
+fi
+cat "$TMP" > "$DB"
+rm -f "$TMP"
+exit 0
+LFA_SO
+chmod 755 /usr/local/bin/dpkg-statoverride
+
+echo " -> Sanitising dpkg statoverride (proot-safe)..."
+if [ -f /var/lib/dpkg/statoverride ]; then
+    : > /var/lib/dpkg/statoverride.lfa
+    while read -r _u _g _m _p; do
+        [ -n "$_u" ] || continue
+        [ -n "$_p" ] || continue
+        if ! { getent passwd "$_u" >/dev/null 2>&1 || grep -q "^$_u:" /etc/passwd; }; then
+            echo "    dropping statoverride row (missing user $_u): $_p"
+            continue
+        fi
+        if ! { getent group "$_g" >/dev/null 2>&1 || grep -q "^$_g:" /etc/group; }; then
+            echo "    dropping statoverride row (missing group $_g): $_p"
+            continue
+        fi
+        printf '%s %s %s %s\n' "$_u" "$_g" "$_m" "$_p" >> /var/lib/dpkg/statoverride.lfa
+    done < /var/lib/dpkg/statoverride
+    cat /var/lib/dpkg/statoverride.lfa > /var/lib/dpkg/statoverride
+    rm -f /var/lib/dpkg/statoverride.lfa
+fi
+EOF
+    fi
+
     cat << EOF >> "$SETUP_SCRIPT"
 echo " -> Updating repositories..."
 $UPDATE_CMD
 EOF
-
-    # dbus's postinst registers its setuid helper via dpkg-statoverride,
-    # whose atomic file-replace dance fails under old proot (EPERM creating
-    # the backup). Pre-seed the exact entry it wants: its own
-    # '--list path' check then skips the failing call entirely and the
-    # package configures cleanly. (Helper setuid bits are meaningless in
-    # proot anyway.)
-    if [ "$DISTRO" == "ubuntu" ] || [ "$DISTRO" == "debian" ] || [ "$DISTRO" == "kali" ]; then
-        cat << 'EOF' >> "$SETUP_SCRIPT"
-echo " -> Pre-seeding dpkg-statoverride entry for dbus..."
-rm -f /var/lib/dpkg/statoverride-new /var/lib/dpkg/statoverride-old
-grep -q "dbus-daemon-launch-helper" /var/lib/dpkg/statoverride 2>/dev/null || echo "root messagebus 4754 /usr/lib/dbus-1.0/dbus-daemon-launch-helper" >> /var/lib/dpkg/statoverride
-EOF
-    fi
     
     APT_PKGS="$SUDO_PKG"
     if [ "$DE" == "xfce4" ]; then APT_PKGS="$APT_PKGS $XFCE_PKG"; fi

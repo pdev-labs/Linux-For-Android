@@ -162,8 +162,9 @@ This configuration was tested end-to-end on Android 5.1.1 (kernel 3.10, aarch64)
   account keeps its own setup while running the same binaries.
 - Ignore `apt`/`dpkg` warnings about hardware, `systemd`, or `dbus` hooks
   failing — post-install hooks can't reach real hardware from proot and fail
-  safely. (Fresh installs pre-seed dbus's `statoverride` entry and ship a
-  `policy-rc.d`, so dbus configures cleanly instead of ending half-done.)
+  safely. Fresh installs ship a proot-safe `dpkg-statoverride` shim (rewrites
+  the file in place, never records a missing user/group) plus a `policy-rc.d`,
+  so dbus configures cleanly instead of ending half-done or breaking apt.
 
 ## 💻 Usage Guide
 
@@ -255,14 +256,31 @@ shim emulates uid 0) or re-open the distro as a **root** terminal
 (`start-linux` / `terminal-linux` → root) and install there. (On Alpine
 this never happens: `apk` performs no uid check.)
 
-### 5. "Cannot establish any listening sockets - Make sure an X server isn't already running"
+### 5. `dpkg: unrecoverable fatal error ... unknown system group 'messagebus' in statoverride file`
+**Symptom:** every `apt install` / `apt upgrade` aborts with this message,
+even as root, while `apt update` still works.
+**Why:** `/var/lib/dpkg/statoverride` contains a row naming a user or group
+that does not exist in this guest. `dpkg` validates those rows on **every**
+run and treats a missing group as fatal. Older versions of this installer
+pre-seeded dbus's `messagebus` row before the group existed (for example on
+CLI-only installs, where dbus is never installed).
+**Fix (one line, inside the distro):**
+```bash
+sudo sed -i '/dbus-daemon-launch-helper/d' /var/lib/dpkg/statoverride
+```
+Then retry `apt install`. New installs cannot hit this: setup installs a
+proot-safe `dpkg-statoverride` shim that validates users/groups and rewrites
+the file in place, and stale rows are pruned during setup and before every
+**Update a Distro** run.
+
+### 6. "Cannot establish any listening sockets - Make sure an X server isn't already running"
 **Symptom:** You type `start-linux` but it immediately fails with this error.
 **Fix:** The Termux:X11 display server is stuck running in the background from a previous session. Simply run `stop-linux` in your terminal to easily clean up the ghost processes, then run `start-linux` again.
 
-### 6. Termux:X11 app stays open after running `stop-linux`
+### 7. Termux:X11 app stays open after running `stop-linux`
 **Fix:** This is normal! `stop-linux` safely shuts down the background Linux servers, but it cannot forcefully close the Android App window itself due to Android security sandboxing. Simply swipe the Termux:X11 app away in your Android "Recent Apps" menu.
 
-### 7. Installation seems frozen at "Setting up elementary-xfce-icon-theme..."
+### 8. Installation seems frozen at "Setting up elementary-xfce-icon-theme..."
 **Fix:** Be patient! This specific package contains tens of thousands of tiny icon files. Because `proot` must translate every single file operation via your phone's CPU, unpacking thousands of files takes significantly longer than on a native PC (sometimes 10 to 20 minutes on mid-range phones). Keep Termux open and let it finish!
 
 ## 🤝 Contributing
@@ -279,7 +297,7 @@ installs; needs only `bash`, `coreutils`, `timeout`, and `python3` (plus
 `script` from util-linux for the pty test, skipped if absent):
 ```bash
 chmod +x tests/test-all.sh
-./tests/test-all.sh   # expect: PASS=83 FAIL=0
+./tests/test-all.sh   # expect: PASS=96 FAIL=0
 ```
 
 ## 📝 License

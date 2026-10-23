@@ -283,6 +283,59 @@ else
     echo "SKIP: L (no 'script' for pty test)"; pass=$((pass+2))
 fi
 
+echo "===== M: dpkg statoverride shim ====="
+fresh_env
+printf '%s\n' 1 '' 12 | bash "$REPO/install_linux.sh" > "$T/m.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: run m exit $rc"; }
+S=$(setup_sh_of)
+check "M shim embedded" 'proot-safe dpkg-statoverride' "$S"
+check "M sanitizer embedded" 'Sanitising dpkg statoverride' "$S"
+check_absent "M no blind dbus seed" 'root messagebus 4754' "$S"
+
+python3 - "$S" "$T/statoverride-shim.sh" <<'PY'
+import re, sys
+src = open(sys.argv[1]).read()
+m = re.search(r"<< 'LFA_SO'\n(.*?)\nLFA_SO\n", src, re.S)
+assert m, "shim heredoc not found"
+open(sys.argv[2], 'w').write(m.group(1))
+PY
+bash -n "$T/statoverride-shim.sh" && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: M shim syntax"; }
+
+mkdir -p "$T/getentbin"
+cat > "$T/getentbin/getent" <<'EOF'
+#!/bin/sh
+case "$1:$2" in
+    passwd:root|passwd:pdev|group:root|group:pdev) exit 0 ;;
+esac
+exit 1
+EOF
+chmod +x "$T/getentbin/getent"
+cat > "$T/fake-realso" <<'EOF'
+#!/bin/sh
+echo "REAL-CALLED: $*"
+exit 0
+EOF
+chmod +x "$T/fake-realso"
+printf 'root root 4755 /usr/bin/good\nroot ghost 4755 /usr/bin/ghosty\n' > "$T/so.db"
+run_shim() { PATH="$T/getentbin:$PATH" LFA_STATOVERRIDE_DB="$T/so.db" LFA_DPKG_STATOVERRIDE="$T/fake-realso" sh "$T/statoverride-shim.sh" "$@"; }
+
+run_shim --list /usr/bin/good > "$T/m-list.log" 2>&1
+check "M list delegates" 'REAL-CALLED' "$T/m-list.log"
+check "M valid row kept" '/usr/bin/good' "$T/so.db"
+check_absent "M invalid row pruned" 'ghosty' "$T/so.db"
+
+run_shim --add root messagebus 4754 /usr/lib/dbus-1.0/dbus-daemon-launch-helper > "$T/m-add-bad.log" 2>&1
+check "M unknown group skipped" 'unknown group' "$T/m-add-bad.log"
+check_absent "M unknown group not recorded" 'messagebus' "$T/so.db"
+
+run_shim --add root root 4754 /usr/lib/dbus-1.0/dbus-daemon-launch-helper > "$T/m-add.log" 2>&1
+check "M add recorded" 'dbus-daemon-launch-helper' "$T/so.db"
+
+run_shim --remove /usr/lib/dbus-1.0/dbus-daemon-launch-helper > "$T/m-rm.log" 2>&1
+check_absent "M remove applied" 'dbus-daemon-launch-helper' "$T/so.db"
+
+run_shim --version > "$T/m-ver.log" 2>&1
+check "M passthrough" 'REAL-CALLED' "$T/m-ver.log"
+
 echo ""
 echo "PASS=$pass FAIL=$fail"
 [ "$fail" = "0" ]
