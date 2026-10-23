@@ -131,14 +131,15 @@ setup_sh_of() { # newest generated guest setup script
 # ============================================================
 echo "===== A: invalid entry -> menu -> exit ====="
 fresh_env
-printf '%s\n' 9 3 12 | bash "$REPO/install_linux.sh" > "$T/a.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: run a exit $rc"; }
+printf '%s\n' 9 3 13 | bash "$REPO/install_linux.sh" > "$T/a.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: run a exit $rc"; }
 [ "$?" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: A exit code"; }
 check "A reprompt" 'Invalid choice' "$T/a.log"
 check "A menu shown" 'Linux for Termux Manager' "$T/a.log"
+check "A migrate menu" 'Apply Latest Fixes' "$T/a.log"
 
 echo "===== B: quick mode ====="
 fresh_env
-printf '%s\n' 1 '' 12 | bash "$REPO/install_linux.sh" > "$T/b.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: run b exit $rc"; }
+printf '%s\n' 1 '' 13 | bash "$REPO/install_linux.sh" > "$T/b.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: run b exit $rc"; }
 check "B summary" 'Setup Summary' "$T/b.log"
 check "B distro" 'DISTRO="debian"' "$T/home/.config/linux-for-android/setup.conf"
 [ "$(stat -c %a "$T/home/.config/linux-for-android/setup.conf")" = "600" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: B conf perms"; }
@@ -146,7 +147,7 @@ check "B install done" 'Installation complete!' "$T/b.log"
 
 echo "===== C: guided debian CLI, custom user, validation loops ====="
 fresh_env
-printf '%s\n' 2 9 2 4 99 'x y' '' '' 'Bad Name!' 'dev' '' 's3cret' '' 'oppo-test' 5 2 'y' '' 'n' 'n' '' '' '12' \
+printf '%s\n' 2 9 2 4 99 'x y' '' '' 'Bad Name!' 'dev' '' 's3cret' '' 'oppo-test' 5 2 'y' '' 'n' 'n' '' '' '13' \
 | bash "$REPO/install_linux.sh" > "$T/c.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: run c exit $rc"; }
 S=$(setup_sh_of)
 check "C user" 'useradd -m -s /bin/bash dev' "$S"
@@ -168,7 +169,7 @@ bash -n "$T/prefix/bin/start-linux" && bash -n "$T/prefix/bin/stop-linux" && bas
 
 echo "===== D: guided ubuntu xfce x11, hw off, software set ====="
 fresh_env
-printf '%s\n' 2 1 1 1 2 '2 12 14' '' '' '' '' '' '' 1 'n' '' 'n' 'n' '' '' '12' \
+printf '%s\n' 2 1 1 1 2 '2 12 14' '' '' '' '' '' '' 1 'n' '' 'n' 'n' '' '' '13' \
 | bash "$REPO/install_linux.sh" > "$T/d.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: run d exit $rc"; }
 S=$(setup_sh_of)
 check "D apt mapping" 'apt-get install -y' "$S"
@@ -180,7 +181,7 @@ check "D x11 pkg" 'x11-repo' "$T/d.log"
 
 echo "===== E: guided fedora mate ====="
 fresh_env
-printf '%s\n' 2 4 3 1 1 '' '' '' '' '' '' '' 1 'n' '' 'n' 'n' '' '' '12' \
+printf '%s\n' 2 4 3 1 1 '' '' '' '' '' '' '' 1 'n' '' 'n' 'n' '' '' '13' \
 | bash "$REPO/install_linux.sh" > "$T/e.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: run e exit $rc"; }
 S=$(setup_sh_of)
 check "E dnf" 'dnf install' "$S"
@@ -189,7 +190,7 @@ check "E mate template" 'mate-session' "$T/prefix/bin/start-linux"
 
 echo "===== F: guided alpine vnc (lxde remap) ====="
 fresh_env
-printf '%s\n' 2 8 2 2 1 1 '' 'myalpine' '' '' '' '' '' 1 'n' '' 'n' 'n' '' '' '12' \
+printf '%s\n' 2 8 2 2 1 1 '' 'myalpine' '' '' '' '' '' 1 'n' '' 'n' 'n' '' '' '13' \
 | bash "$REPO/install_linux.sh" > "$T/f.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: run f exit $rc"; }
 check "F remap" 'DE="xfce4"' "$T/home/.config/linux-for-android/setup.conf"
 S=$(setup_sh_of)
@@ -201,7 +202,7 @@ bash -n "$S" && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: F setup synt
 echo "===== G: legacy debian -> bullseye ====="
 fresh_env
 export GETPROP_SDK=22 PD_V4=1 FREE_MB=1024
-printf '%s\n' 2 2 4 '' '' '' '' '' '' '' 1 'n' '' 'n' 'n' '' '' '12' \
+printf '%s\n' 2 2 4 '' '' '' '' '' '' '' 1 'n' '' 'n' 'n' '' '' '13' \
 | bash "$REPO/install_linux.sh" > "$T/g.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: run g exit $rc"; }
 check "G legacy banner" 'LEGACY MODE' "$T/g.log"
 check "G bullseye notice" 'bullseye' "$T/g.log"
@@ -212,7 +213,7 @@ unset GETPROP_SDK PD_V4 FREE_MB
 echo "===== H: legacy kali rejected, repick alpine ====="
 fresh_env
 export GETPROP_SDK=22 PD_V4=1 FREE_MB=1024
-printf '%s\n' 2 3 8 4 '' '' '' '' '' '' '' 1 'n' '' 'n' 'n' '' '' '12' \
+printf '%s\n' 2 3 8 4 '' '' '' '' '' '' '' 1 'n' '' 'n' 'n' '' '' '13' \
 | bash "$REPO/install_linux.sh" > "$T/h.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: run h exit $rc"; }
 check "H kali blocked" 'no legacy plugin' "$T/h.log"
 check "H completes" 'Installation complete!' "$T/h.log"
@@ -221,7 +222,7 @@ unset GETPROP_SDK PD_V4 FREE_MB
 echo "===== I: legacy ubuntu glibc warning ====="
 fresh_env
 export GETPROP_SDK=22 PD_V4=1 FREE_MB=1024
-printf '%s\n' 2 1 4 '' '' '' '' '' '' '' 1 'n' '' 'n' 'n' '' '' '' '12' \
+printf '%s\n' 2 1 4 '' '' '' '' '' '' '' 1 'n' '' 'n' 'n' '' '' '' '13' \
 | bash "$REPO/install_linux.sh" > "$T/i.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: run i exit $rc"; }
 check "I warning" 'modern glibc' "$T/i.log"
 check "I completes" 'Installation complete!' "$T/i.log"
@@ -229,13 +230,13 @@ unset GETPROP_SDK PD_V4 FREE_MB
 
 echo "===== J: replay saved + corrupt fallback ====="
 fresh_env
-printf '%s\n' 2 2 4 '' '' '' '' '' '' '' 1 'n' '' 'n' 'n' '' '' '12' \
+printf '%s\n' 2 2 4 '' '' '' '' '' '' '' 1 'n' '' 'n' 'n' '' '' '13' \
 | bash "$REPO/install_linux.sh" > "$T/j1.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: run j1 exit $rc"; }
-printf '%s\n' 4 '' '12' | bash "$REPO/install_linux.sh" > "$T/j2.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: run j2 exit $rc"; }
+printf '%s\n' 4 '' '13' | bash "$REPO/install_linux.sh" > "$T/j2.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: run j2 exit $rc"; }
 check "J replay" 'Loaded saved answers' "$T/j2.log"
 if grep -q "Select Distro" "$T/j2.log"; then fail=$((fail+1)); echo "FAIL: J reprompted"; else pass=$((pass+1)); fi
 echo "garbage" > "$T/home/.config/linux-for-android/setup.conf"
-printf '%s\n' 4 2 4 '' '' '' '' '' '' '' 1 'n' '' 'n' 'n' '' '' '12' \
+printf '%s\n' 4 2 4 '' '' '' '' '' '' '' 1 'n' '' 'n' 'n' '' '' '13' \
 | bash "$REPO/install_linux.sh" > "$T/j3.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: run j3 exit $rc"; }
 check "J corrupt fallback" 'incomplete' "$T/j3.log"
 check "J corrupt completes" 'Installation complete!' "$T/j3.log"
@@ -245,37 +246,37 @@ fresh_env
 mkdir -p "$T/prefix/var/lib/proot-distro/installed-rootfs/demoinst/etc" "$T/home/storage/downloads"
 printf 'DISTRO="debian"\nDE="none"\nSERVER="none"\nUPDATE_CMD="apt-get update"\n' > "$T/prefix/var/lib/proot-distro/installed-rootfs/demoinst/etc/termux-linux-manager.conf"
 touch "$T/home/demoinst-backup.tar.gz" "$T/home/storage/downloads/shared.tar.gz"
-printf '%s\n' 3 2 '' 12 | bash "$REPO/install_linux.sh" > "$T/k2.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: run k2 exit $rc"; }
+printf '%s\n' 3 2 '' 13 | bash "$REPO/install_linux.sh" > "$T/k2.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: run k2 exit $rc"; }
 check "K update" 'Update complete!' "$T/k2.log"
-printf '%s\n' 3 4 '' 12 | bash "$REPO/install_linux.sh" > "$T/k4.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: run k4 exit $rc"; }
+printf '%s\n' 3 4 '' 13 | bash "$REPO/install_linux.sh" > "$T/k4.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: run k4 exit $rc"; }
 check "K dashboard" 'SYSTEM DASHBOARD' "$T/k4.log"
-printf '%s\n' 3 5 '' 12 | bash "$REPO/install_linux.sh" > "$T/k5.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: run k5 exit $rc"; }
+printf '%s\n' 3 5 '' 13 | bash "$REPO/install_linux.sh" > "$T/k5.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: run k5 exit $rc"; }
 check "K audio" 'forcefully bound' "$T/k5.log"
-printf '%s\n' 3 6 '' 12 | bash "$REPO/install_linux.sh" > "$T/k6.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: run k6 exit $rc"; }
+printf '%s\n' 3 6 '' 13 | bash "$REPO/install_linux.sh" > "$T/k6.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: run k6 exit $rc"; }
 check "K backup" 'Backup saved' "$T/k6.log"
-printf '%s\n' 3 7 y '' 12 | bash "$REPO/install_linux.sh" > "$T/k7.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: run k7 exit $rc"; }
+printf '%s\n' 3 7 y '' 13 | bash "$REPO/install_linux.sh" > "$T/k7.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: run k7 exit $rc"; }
 check "K restore" 'Restore complete!' "$T/k7.log"
-printf '%s\n' 3 8 '' 12 | bash "$REPO/install_linux.sh" > "$T/k8.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: run k8 exit $rc"; }
+printf '%s\n' 3 8 '' 13 | bash "$REPO/install_linux.sh" > "$T/k8.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: run k8 exit $rc"; }
 check "K export" 'Export Complete!' "$T/k8.log"
-printf '%s\n' 3 9 'shared.tar.gz' 'myimp' 'y' '' '12' | bash "$REPO/install_linux.sh" > "$T/k9.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: run k9 exit $rc"; }
+printf '%s\n' 3 9 'shared.tar.gz' 'myimp' 'y' '' '13' | bash "$REPO/install_linux.sh" > "$T/k9.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: run k9 exit $rc"; }
 check "K import" 'Import complete!' "$T/k9.log"
 ROOTFS="$T/prefix/var/lib/proot-distro/installed-rootfs/demoinst"
 mkdir -p "$ROOTFS/var/lib/dpkg" "$ROOTFS/usr/local/bin"
 printf 'root messagebus 4754 /usr/lib/dbus-1.0/dbus-daemon-launch-helper\n' > "$ROOTFS/var/lib/dpkg/statoverride"
-printf '%s\n' 3 0 '' 12 | bash "$REPO/install_linux.sh" > "$T/k0.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: run k0 exit $rc"; }
+printf '%s\n' 3 0 '' 13 | bash "$REPO/install_linux.sh" > "$T/k0.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: run k0 exit $rc"; }
 check "K repair completes" 'Repair complete!' "$T/k0.log"
 [ -f "$ROOTFS/usr/local/bin/dpkg-statoverride" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: K repair shim not installed"; }
 [ -f "$T/prefix/tmp/lfa-repair.sh" ] && bash -n "$T/prefix/tmp/lfa-repair.sh" && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: K repair script missing/invalid"; }
-printf '%s\n' 3 10 y '' 12 | bash "$REPO/install_linux.sh" > "$T/k10.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: run k10 exit $rc"; }
+printf '%s\n' 3 10 y '' 13 | bash "$REPO/install_linux.sh" > "$T/k10.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: run k10 exit $rc"; }
 check "K uninstall" 'has been removed' "$T/k10.log"
-printf '%s\n' 3 11 2 '' 12 | bash "$REPO/install_linux.sh" > "$T/k11.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: run k11 exit $rc"; }
+printf '%s\n' 3 11 2 '' 13 | bash "$REPO/install_linux.sh" > "$T/k11.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: run k11 exit $rc"; }
 check "K browser" 'Hardware Acceleration disabled' "$T/k11.log"
-printf '%s\n' 3 3 '' 12 | bash "$REPO/install_linux.sh" > "$T/k3.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: run k3 exit $rc"; }
+printf '%s\n' 3 3 '' 13 | bash "$REPO/install_linux.sh" > "$T/k3.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: run k3 exit $rc"; }
 check "K ssh" 'SSH Server is running!' "$T/k3.log"
 
 echo "===== L: shim password ritual over pty ====="
 fresh_env
-printf '%s\n' 2 2 4 '' '' '' '' '' '' '' 1 'n' '' 'n' 'n' '' '' '12' \
+printf '%s\n' 2 2 4 '' '' '' '' '' '' '' 1 'n' '' 'n' 'n' '' '' '13' \
 | bash "$REPO/install_linux.sh" > "$T/l.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: run l exit $rc"; }
 S=$(setup_sh_of)
 python3 - "$S" <<'EOF'
@@ -293,7 +294,7 @@ fi
 
 echo "===== M: dpkg statoverride shim ====="
 fresh_env
-printf '%s\n' 1 '' 12 | bash "$REPO/install_linux.sh" > "$T/m.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: run m exit $rc"; }
+printf '%s\n' 1 '' 13 | bash "$REPO/install_linux.sh" > "$T/m.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: run m exit $rc"; }
 S=$(setup_sh_of)
 check "M shim embedded" 'proot-safe dpkg-statoverride' "$S"
 check "M sanitizer embedded" 'Sanitising dpkg statoverride' "$S"
@@ -350,6 +351,25 @@ check_absent "M remove applied" 'dbus-daemon-launch-helper' "$T/so.db"
 
 run_shim --version > "$T/m-ver.log" 2>&1
 check "M passthrough" 'REAL-CALLED' "$T/m-ver.log"
+
+echo "===== N: apply latest fixes to an older distro ====="
+fresh_env
+NROOT="$T/prefix/var/lib/proot-distro/installed-rootfs/oldinst"
+mkdir -p "$NROOT/etc" "$NROOT/var/lib/dpkg" "$NROOT/home/user/.vnc" "$NROOT/root"
+printf 'DISTRO="debian"\nDE="xfce4"\nSERVER="vnc"\nRESOLUTION="1280x720"\nUPDATE_CMD="apt-get update"\nHOSTNAME="oldphone"\n' > "$NROOT/etc/termux-linux-manager.conf"
+cat > "$NROOT/home/user/.bashrc" <<'EOF'
+PS1='\u@\h:\w\$ '
+EOF
+printf 'root messagebus 4754 /usr/lib/dbus-1.0/dbus-daemon-launch-helper\n' > "$NROOT/var/lib/dpkg/statoverride"
+printf '%s\n' 3 12 '' 13 | bash "$REPO/install_linux.sh" > "$T/n.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: run n exit $rc"; }
+check "N completes" 'Latest fixes applied!' "$T/n.log"
+check "N adds user key" 'USER_NAME="user"' "$NROOT/etc/termux-linux-manager.conf"
+check "N adds virgl key" 'NEED_VIRGL="1"' "$NROOT/etc/termux-linux-manager.conf"
+check "N keeps hostname" 'HOSTNAME="oldphone"' "$NROOT/etc/termux-linux-manager.conf"
+check "N bakes hostname" 'oldphone' "$NROOT/home/user/.bashrc"
+check "N launcher updated" 'command -v dbus-launch' "$T/prefix/bin/start-linux"
+check "N xstartup updated" 'startxfce4' "$NROOT/home/user/.vnc/xstartup"
+[ -f "$T/prefix/tmp/lfa-upgrade.sh" ] && bash -n "$T/prefix/tmp/lfa-upgrade.sh" && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: N upgrade script missing/invalid"; }
 
 echo ""
 echo "PASS=$pass FAIL=$fail"

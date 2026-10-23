@@ -63,6 +63,7 @@ Currently supported distributions:
 ### Automation & Management
 - **1-Click Universal Updater:** Never manually type update commands again! The Manager Menu automatically detects your distro and updates it in the background.
 - **Doctor / Repair (menu → 0):** One key fixes the usual proot breakages inside an existing distro — sanitises `dpkg`'s `statoverride`, reinstalls the proot-safe `dpkg-statoverride` shim, re-applies apt hardening, finishes half-configured packages with `dpkg --configure -a`, and audits the package database. Safe to run any time.
+- **Apply Latest Fixes (menu → 12):** Bring a distro installed by an older Linux-for-Android up to date without reinstalling. It runs the Doctor, adds new config keys (`USER_NAME`, `TIMEZONE`, `HOSTNAME`, `NEED_VIRGL`), bakes the hostname into the shell prompt, refreshes the VNC `xstartup`, regenerates `start-linux` / `terminal-linux` / `stop-linux` from the current templates, updates the legacy bullseye plugin, rebuilds `libuid0` if missing, and repairs EOL apt sources.
 - **System Dashboard:** Instantly view your Android phone's RAM availability, Termux storage consumption, and CPU architecture right from the manager menu.
 - **Advanced Audio Fixer:** A built-in debugger that dynamically restarts PulseAudio and forcefully binds it to TCP protocols to instantly resolve any audio crackling issues.
 - **Hardware Accelerated Web Browsing:** Easily optimize Chromium directly from the menu to force hardware-accelerated video decoding (`--enable-gpu-rasterization`, `--use-gl=egl`), giving you silky smooth YouTube playback over VirGL.
@@ -169,7 +170,12 @@ This configuration was tested end-to-end on Android 5.1.1 (kernel 3.10, aarch64)
 
 ## 💻 Usage Guide
 
-When you run `./install_linux.sh`, it will launch the interactive Manager Menu where you can Install, Update, SSH, view the Dashboard, Export, Import, Backup, Restore, or Uninstall any supported distribution. Option **0) Repair a Distro** runs the Doctor against an existing install (broken `dpkg`/`apt`, half-configured packages, stale `statoverride` rows) — it is safe to run at any time and is also invoked automatically before every distro update.
+When you run `./install_linux.sh`, it will launch the interactive Manager Menu where you can Install, Update, SSH, view the Dashboard, Export, Import, Backup, Restore, or Uninstall any supported distribution.
+
+Two maintenance options keep old installs healthy without reinstalling:
+
+- **0) Repair a Distro** — Doctor for broken `dpkg`/`apt`, half-configured packages and stale `statoverride` rows. Safe any time, and also runs automatically before every distro update.
+- **12) Apply Latest Fixes** — migration for a distro created by an older version of this script: refreshes launchers/`xstartup`, adds new config keys, fixes the hostname prompt, updates the legacy plugin, and rebuilds the uid0 helper if needed.
 
 ### Starting your Linux Desktop
 Once installed, you never need to run the setup script again. Just type this anywhere in Termux:
@@ -266,10 +272,11 @@ run and treats a missing group as fatal. Older versions of this installer
 pre-seeded dbus's `messagebus` row before the group existed (for example on
 CLI-only installs, where dbus is never installed).
 **Easiest fix:** update the manager (`git pull`) and run
-`./install_linux.sh` → **3) Manager** → **0) Repair a Distro**. The Doctor
-prunes the bad rows, installs the proot-safe shim, finishes half-configured
-packages, and audits the database. It also runs automatically before every
-**Update a Distro**.
+`./install_linux.sh` → **3) Manager** → **0) Repair a Distro** (or **12) Apply
+Latest Fixes** for a full migration of an older install). The Doctor prunes
+the bad rows, installs the proot-safe shim, finishes half-configured packages,
+and audits the database. It also runs automatically before every **Update a
+Distro**.
 
 **Manual one-liner** (inside the distro, as root):
 ```bash
@@ -303,7 +310,7 @@ installs; needs only `bash`, `coreutils`, `timeout`, and `python3` (plus
 `script` from util-linux for the pty test, skipped if absent):
 ```bash
 chmod +x tests/test-all.sh
-./tests/test-all.sh   # expect: PASS=102 FAIL=0
+./tests/test-all.sh   # expect: PASS=112 FAIL=0
 ```
 
 ## 📝 License

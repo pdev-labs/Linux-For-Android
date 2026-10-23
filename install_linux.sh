@@ -626,10 +626,11 @@ show_menu() {
     echo "9) Import Shared Distro"
     echo "10) Uninstall a Distro"
     echo "11) Toggle Browser Hardware Acceleration"
+    echo "12) Apply Latest Fixes to an Installed Distro"
     echo "0)  Repair a Distro (fix broken apt/dpkg, Doctor)"
-    echo "12) Exit"
+    echo "13) Exit"
     echo "========================================="
-    read -p "Select an option [0-12]: " OPTION
+    read -p "Select an option [0-13]: " OPTION
     case $OPTION in
         0) repair_linux ;;
         1) install_linux ;;
@@ -643,7 +644,8 @@ show_menu() {
         9) import_distro ;;
         10) uninstall_linux ;;
         11) optimize_browser ;;
-        12) exit 0 ;;
+        12) upgrade_existing ;;
+        13) exit 0 ;;
         *) echo "Invalid option"; sleep 1; show_menu ;;
     esac
 }
@@ -833,6 +835,151 @@ repair_linux() {
     show_menu
 }
 
+# Guest-side migration tweaks for an already-installed distro.
+write_guest_upgrade_script() {
+    cat > "$PREFIX/tmp/lfa-upgrade.sh" << 'UPGRADE'
+#!/bin/bash
+# Staged by install_linux.sh. Applies fixes that older installs miss.
+
+# 1. EOL Debian bullseye: -security moved to archive.debian.org.
+if [ -f /etc/apt/sources.list ] && grep -q 'deb.debian.org/debian-security bullseye-security' /etc/apt/sources.list 2>/dev/null; then
+    sed -i 's|^deb http://deb.debian.org/debian-security bullseye-security |deb http://archive.debian.org/debian-security bullseye-security/updates |' /etc/apt/sources.list || true
+    echo 'Acquire::Check-Valid-Until "false";' > /etc/apt/apt.conf.d/99-no-check-valid-until
+    echo "    repointed EOL bullseye-security at archive.debian.org"
+fi
+
+# 2. uid0 emulation library (only when missing; needs a transient gcc).
+if [ -d /var/lib/dpkg ] && [ ! -f /usr/local/lib/libuid0.so ] && [ -f /tmp/uid0.c ]; then
+    echo " -> Rebuilding uid0 emulation library (one-time)..."
+    apt-get update -qq >/dev/null 2>&1 || true
+    apt-get install -y gcc >/dev/null 2>&1 || true
+    if command -v gcc >/dev/null 2>&1; then
+        gcc -shared -nostdlib -O2 -o /usr/local/lib/libuid0.so /tmp/uid0.c             && chmod 644 /usr/local/lib/libuid0.so             && echo "    uid0 library rebuilt."
+    else
+        echo "    [!] gcc unavailable; sudo stays ritual-only."
+    fi
+    apt-get purge -y gcc >/dev/null 2>&1 || true
+    apt-get autoremove -y >/dev/null 2>&1 || true
+fi
+rm -f /tmp/uid0.c
+
+# 3. Sanity: the sudo shim must still exist for user shells.
+if [ -d /var/lib/dpkg ] && [ ! -x /usr/local/bin/sudo ]; then
+    echo "    [!] sudo shim missing - reinstall the distro to restore it."
+fi
+echo " -> Guest tweaks applied."
+UPGRADE
+    chmod +x "$PREFIX/tmp/lfa-upgrade.sh"
+}
+
+# Option 12: bring a distro created by an older Linux-for-Android up to date
+# with the current installer's tweaks, without reinstalling it.
+upgrade_existing() {
+    require_proot_distro || return
+    select_installed_instance
+    if [ -z "$INSTANCE_NAME" ]; then return; fi
+
+    local ROOTFS="$PREFIX/var/lib/proot-distro/installed-rootfs/$INSTANCE_NAME"
+    local CONF="$ROOTFS/etc/termux-linux-manager.conf"
+
+    # Load what the old install recorded; supply defaults for newer keys.
+    USER_NAME="user"; DE="none"; SERVER="none"; RESOLUTION=""
+    HOSTNAME="localhost"; TIMEZONE="UTC"; NEED_VIRGL="1"
+    if [ -f "$CONF" ]; then
+        # shellcheck disable=SC1090
+        source "$CONF" 2>/dev/null || true
+    fi
+    LINUX_USER="${USER_NAME:-user}"
+    if ! echo "$LINUX_USER" | grep -Eq '^[a-z_][a-z0-9_-]*$'; then LINUX_USER="user"; fi
+
+    echo "========================================="
+    echo " Applying latest fixes to $INSTANCE_NAME"
+    echo "========================================="
+    echo "  user:     $LINUX_USER"
+    echo "  desktop:  $DE ($SERVER)"
+    echo "  hostname: ${HOSTNAME:-localhost}"
+    echo ""
+
+    # 1. Heal dpkg/apt and refresh the statoverride shim.
+    run_guest_repair || true
+
+    # 2. Add settings keys introduced by newer versions.
+    if [ -f "$CONF" ]; then
+        grep -q '^USER_NAME=' "$CONF" || echo "USER_NAME=\"$LINUX_USER\"" >> "$CONF"
+        grep -q '^TIMEZONE=' "$CONF" || echo 'TIMEZONE="UTC"' >> "$CONF"
+        grep -q '^HOSTNAME=' "$CONF" || echo 'HOSTNAME="localhost"' >> "$CONF"
+        grep -q '^NEED_VIRGL=' "$CONF" || echo 'NEED_VIRGL="1"' >> "$CONF"
+    fi
+
+    # 3. proot cannot change the UTS hostname: bake it into the prompt.
+    if [ -n "${HOSTNAME:-}" ] && [ "$HOSTNAME" != "localhost" ]; then
+        local rc
+        for rc in "$ROOTFS/root/.bashrc" "$ROOTFS/home/$LINUX_USER/.bashrc"; do
+            [ -f "$rc" ] || continue
+            sed -i "s/\\\\h/$HOSTNAME/g" "$rc" 2>/dev/null || true
+            grep -q '^export HOSTNAME=' "$rc" || printf 'export HOSTNAME=%s\n' "$HOSTNAME" >> "$rc"
+        done
+        echo "[*] Hostname '$HOSTNAME' baked into shell prompts."
+    fi
+
+    # 4. Refresh the VNC xstartup (newer versions tolerate missing dbus).
+    local XSTART="$ROOTFS/home/$LINUX_USER/.vnc/xstartup"
+    if [ -f "$XSTART" ] || [ "$SERVER" = "vnc" ]; then
+        local SES=""
+        case "$DE" in
+            xfce4|xfce) SES="startxfce4" ;;
+            lxde)       SES="startlxde" ;;
+            mate)       SES="mate-session" ;;
+        esac
+        if [ -n "$SES" ]; then
+            mkdir -p "$(dirname "$XSTART")"
+            if [ "$DE" = "mate" ]; then
+                cat > "$XSTART" <<EOF
+#!/bin/sh
+export PULSE_SERVER=127.0.0.1
+if command -v dbus-launch >/dev/null 2>&1; then
+    dbus-launch --exit-with-session $SES &
+else
+    $SES &
+fi
+EOF
+            else
+                cat > "$XSTART" <<EOF
+#!/bin/sh
+export PULSE_SERVER=127.0.0.1
+$SES &
+EOF
+            fi
+            chmod 755 "$XSTART"
+            echo "[*] Refreshed VNC xstartup."
+        fi
+    fi
+
+    # 5. Regenerate Termux launchers/shortcuts from current templates.
+    write_launchers
+    echo "[*] Launchers regenerated (start-linux / terminal-linux / stop-linux)."
+
+    # 6. Refresh the legacy bullseye plugin, if this device uses it.
+    if [ -f "$PREFIX/etc/proot-distro/bullseye.sh" ] && [ -f "$LFA_DIR/plugins/bullseye.sh" ]; then
+        cp "$LFA_DIR/plugins/bullseye.sh" "$PREFIX/etc/proot-distro/bullseye.sh"
+        chmod +x "$PREFIX/etc/proot-distro/bullseye.sh"
+        echo "[*] Refreshed legacy bullseye plugin."
+    fi
+
+    # 7. Guest-side tweaks (uid0 rebuild, EOL sources) on dpkg distros.
+    if [ -d "$ROOTFS/var/lib/dpkg" ] && [ -f "$LFA_DIR/lib/uid0.c" ]; then
+        cp "$LFA_DIR/lib/uid0.c" "$PREFIX/tmp/uid0.c"
+        write_guest_upgrade_script
+        proot-distro login $(pd_login_flags) "$INSTANCE_NAME" --shared-tmp -- bash /tmp/lfa-upgrade.sh || true
+    fi
+
+    echo "========================================="
+    echo "Latest fixes applied!"
+    echo "========================================="
+    read -p "Press Enter to continue..."
+    show_menu
+}
+
 update_linux() {
     require_proot_distro || return
     select_installed_instance
@@ -1013,6 +1160,261 @@ rm -f /usr/local/bin/chromium-browser
     fi
     read -p "Press Enter to continue..."
     show_menu
+}
+
+write_launchers() {
+    mkdir -p ~/.shortcuts
+    echo "[*] Generating Universal Quick-Launch Scripts..."
+    cat << 'EOF' > $PREFIX/bin/start-linux
+#!/bin/bash
+DISTROS=($(ls $PREFIX/var/lib/proot-distro/installed-rootfs/ 2>/dev/null))
+if [ ${#DISTROS[@]} -eq 0 ]; then
+    echo "No distributions installed. Please run install_linux.sh first."
+    exit 1
+elif [ ${#DISTROS[@]} -eq 1 ]; then
+    DISTRO=${DISTROS[0]}
+else
+    echo "Multiple distributions found. Please choose one to start:"
+    for i in "${!DISTROS[@]}"; do
+        echo "$((i+1))) ${DISTROS[$i]}"
+    done
+    read -p "Select a distro [1-${#DISTROS[@]}]: " choice
+    if [[ ! "$choice" =~ ^[0-9]+$ ]] || [ "$choice" -lt 1 ] || [ "$choice" -gt "${#DISTROS[@]}" ]; then
+        echo "Invalid selection."
+        exit 1
+    fi
+    idx=$((choice-1))
+    DISTRO=${DISTROS[$idx]}
+fi
+
+CONF_FILE="$PREFIX/var/lib/proot-distro/installed-rootfs/$DISTRO/etc/termux-linux-manager.conf"
+INSTANCE_NAME="$DISTRO"
+if [ -f "$CONF_FILE" ]; then
+    source "$CONF_FILE"
+else
+    DE="none"
+    SERVER="none"
+fi
+# The conf stores the BASE distro name in $DISTRO; restore the instance
+# (directory) name or every login targets a non-installed alias.
+DISTRO="$INSTANCE_NAME"
+X11_USER="$LINUX_USER"
+
+# Old proot (frozen Android 5 repos) has no --sysvipc, but proot-distro
+# login passes it by default -> opt out when the combination requires it.
+NO_SYSVIPC=""
+if ! proot --help 2>&1 | grep -q "sysvipc"; then
+    if [ -f "$PREFIX/bin/proot-distro" ] && grep -q "no-sysvipc" "$PREFIX/bin/proot-distro" 2>/dev/null; then
+        NO_SYSVIPC="--no-sysvipc"
+    fi
+fi
+
+# GUI installs can boot the full desktop or drop straight to a shell.
+# CLI-only installs go directly to a root terminal.
+MODE="desktop"
+if [ "$SERVER" == "x11" ] || [ "$SERVER" == "vnc" ]; then
+    echo ""
+    echo "Desktop available: $DE via $SERVER."
+    echo "1) Start full desktop (default)"
+    echo "2) Root terminal only (no display/audio servers)"
+    echo "3) User terminal only (no display/audio servers)"
+    read -p "Select [1-3]: " MODE_CHOICE
+    if [ "$MODE_CHOICE" == "2" ]; then MODE="root"
+    elif [ "$MODE_CHOICE" == "3" ]; then MODE="user"
+    fi
+else
+    echo ""
+    echo "No desktop installed (CLI only)."
+    echo "1) Root terminal (default, admin)"
+    echo "2) User terminal ('__LUSER__' account)"
+    read -p "Select [1-2]: " MODE_CHOICE
+    if [ "$MODE_CHOICE" == "2" ]; then MODE="user"; else MODE="root"; fi
+fi
+
+if [ "$MODE" == "root" ]; then
+    echo "Opening root terminal in $DISTRO (sudo does not work inside proot, and is not needed)..."
+    proot-distro login $NO_SYSVIPC $DISTRO --shared-tmp
+    exit 0
+elif [ "$MODE" == "user" ]; then
+    echo "Opening user terminal in $DISTRO (no display/audio servers)..."
+    BASE_DISTRO=$(grep '^DISTRO=' "$CONF_FILE" 2>/dev/null | cut -d'"' -f2)
+    case "$BASE_DISTRO" in
+        ubuntu|debian|kali)
+            echo "[!] Note: plain 'apt install' needs the ROOT terminal (dpkg requires uid 0)."
+            echo "    From here, use 'sudo apt install' instead (shim emulates uid 0)."
+            ;;
+    esac
+    proot-distro login $NO_SYSVIPC $DISTRO --user __LUSER__ --shared-tmp
+    exit 0
+fi
+
+echo "Starting PulseAudio..."
+if command -v pulseaudio >/dev/null 2>&1; then
+    pulseaudio --start --load="module-native-protocol-tcp auth-ip-acl=127.0.0.1 auth-anonymous=1" --exit-idle-time=-1 2>/dev/null || echo "[!] PulseAudio not available on this device, continuing without audio."
+else
+    echo "[!] pulseaudio not installed, skipping audio (legacy device OK)."
+fi
+
+echo "Starting VirGL Server..."
+VIRGL_ENV=""
+if command -v virgl_test_server_android >/dev/null 2>&1 && [ "${NEED_VIRGL:-1}" = "1" ]; then
+    virgl_test_server_android &
+    VIRGL_ENV="export GALLIUM_DRIVER=virpipe; export MESA_GL_VERSION_OVERRIDE=4.0;"
+elif [ "${NEED_VIRGL:-1}" != "1" ]; then
+    echo "[*] Hardware acceleration disabled by setup choice."
+else
+    echo "[!] virgl_test_server_android not found, continuing with software rendering (expected on Android 5/6)."
+fi
+
+if [ "$SERVER" == "x11" ]; then
+    if ! command -v termux-x11 >/dev/null 2>&1; then
+        echo "ERROR: Termux:X11 backend requested but 'termux-x11' not installed."
+        echo "This backend requires Android 8+. Re-install with VNC instead."
+        exit 1
+    fi
+    echo "Starting Termux:X11..."
+    termux-x11 :1 &
+    sleep 2
+    # XDG_RUNTIME_DIR is required by xfce4-session/dbus; without it the
+    # session dies instantly and Termux:X11 shows only the root 'X' cursor.
+    # Session output goes to ~/start-linux-session.log so failures are
+    # visible instead of hidden.
+    echo "Starting $DISTRO desktop as '$X11_USER' (session log: ~/start-linux-session.log)..."
+    if [ "$DE" == "xfce4" ]; then
+        nohup proot-distro login $NO_SYSVIPC $DISTRO --user "$X11_USER" --shared-tmp -- bash -c "mkdir -p /tmp/.X11-unix /tmp/xdg; chmod 1777 /tmp/.X11-unix /tmp/xdg; export XDG_RUNTIME_DIR=/tmp/xdg; export PULSE_SERVER=127.0.0.1; export DISPLAY=:1; $VIRGL_ENV if command -v dbus-launch >/dev/null 2>&1; then dbus-launch --exit-with-session startxfce4 > \$HOME/start-linux-session.log 2>&1; else startxfce4 > \$HOME/start-linux-session.log 2>&1; fi" &
+    elif [ "$DE" == "lxde" ]; then
+        nohup proot-distro login $NO_SYSVIPC $DISTRO --user "$X11_USER" --shared-tmp -- bash -c "mkdir -p /tmp/.X11-unix /tmp/xdg; chmod 1777 /tmp/.X11-unix /tmp/xdg; export XDG_RUNTIME_DIR=/tmp/xdg; export PULSE_SERVER=127.0.0.1; export DISPLAY=:1; $VIRGL_ENV if command -v dbus-launch >/dev/null 2>&1; then dbus-launch --exit-with-session startlxde > \$HOME/start-linux-session.log 2>&1; else startlxde > \$HOME/start-linux-session.log 2>&1; fi" &
+    elif [ "$DE" == "mate" ]; then
+        nohup proot-distro login $NO_SYSVIPC $DISTRO --user "$X11_USER" --shared-tmp -- bash -c "mkdir -p /tmp/.X11-unix /tmp/xdg; chmod 1777 /tmp/.X11-unix /tmp/xdg; export XDG_RUNTIME_DIR=/tmp/xdg; export PULSE_SERVER=127.0.0.1; export DISPLAY=:1; $VIRGL_ENV if command -v dbus-launch >/dev/null 2>&1; then dbus-launch --exit-with-session mate-session > \$HOME/start-linux-session.log 2>&1; else mate-session > \$HOME/start-linux-session.log 2>&1; fi" &
+    fi
+    echo "If the screen stays on the X cursor, the desktop failed to start:"
+    echo "  cat ~/start-linux-session.log   (inside the distro) for the reason."
+elif [ "$SERVER" == "vnc" ]; then
+    echo "Starting VNC Server..."
+    if [ -z "$RESOLUTION" ]; then RESOLUTION="1280x720"; fi
+    proot-distro login $NO_SYSVIPC $DISTRO --user "$X11_USER" --shared-tmp -- bash -c "export PULSE_SERVER=127.0.0.1; $VIRGL_ENV vncserver -geometry $RESOLUTION :1"
+fi
+EOF
+    chmod +x $PREFIX/bin/start-linux
+    sed -i "s/__LUSER__/$LINUX_USER/g" $PREFIX/bin/start-linux
+    
+    cat << 'EOF' > $PREFIX/bin/stop-linux
+#!/bin/bash
+DISTROS=($(ls $PREFIX/var/lib/proot-distro/installed-rootfs/ 2>/dev/null))
+if [ ${#DISTROS[@]} -eq 0 ]; then
+    echo "No distributions installed."
+    exit 1
+elif [ ${#DISTROS[@]} -eq 1 ]; then
+    DISTRO=${DISTROS[0]}
+else
+    echo "Multiple distributions found. Which one do you want to stop?"
+    for i in "${!DISTROS[@]}"; do
+        echo "$((i+1))) ${DISTROS[$i]}"
+    done
+    read -p "Select a distro [1-${#DISTROS[@]}]: " choice
+    if [[ ! "$choice" =~ ^[0-9]+$ ]] || [ "$choice" -lt 1 ] || [ "$choice" -gt "${#DISTROS[@]}" ]; then
+        echo "Invalid selection."
+        exit 1
+    fi
+    idx=$((choice-1))
+    DISTRO=${DISTROS[$idx]}
+fi
+
+CONF_FILE="$PREFIX/var/lib/proot-distro/installed-rootfs/$DISTRO/etc/termux-linux-manager.conf"
+INSTANCE_NAME="$DISTRO"
+if [ -f "$CONF_FILE" ]; then
+    source "$CONF_FILE"
+else
+    SERVER="none"
+fi
+DISTRO="$INSTANCE_NAME"
+
+NO_SYSVIPC=""
+if ! proot --help 2>&1 | grep -q "sysvipc"; then
+    if [ -f "$PREFIX/bin/proot-distro" ] && grep -q "no-sysvipc" "$PREFIX/bin/proot-distro" 2>/dev/null; then
+        NO_SYSVIPC="--no-sysvipc"
+    fi
+fi
+
+echo "Stopping PulseAudio..."
+if command -v pulseaudio >/dev/null 2>&1; then
+    pulseaudio -k 2>/dev/null || true
+fi
+
+echo "Stopping VirGL Server..."
+if command -v virgl_test_server_android >/dev/null 2>&1; then
+    killall virgl_test_server_android 2>/dev/null || pkill -f virgl_test_server 2>/dev/null || true
+fi
+
+if [ "$SERVER" == "x11" ]; then
+    echo "Stopping Termux:X11..."
+    pkill -f termux-x11 2>/dev/null || true
+elif [ "$SERVER" == "vnc" ]; then
+    echo "Stopping VNC Server..."
+    proot-distro login $NO_SYSVIPC $DISTRO --user __LUSER__ --shared-tmp -- bash -c "vncserver -kill :1" 2>/dev/null || true
+fi
+EOF
+    chmod +x $PREFIX/bin/stop-linux
+    sed -i "s/__LUSER__/$LINUX_USER/g" $PREFIX/bin/stop-linux
+
+    cat << 'EOF' > $PREFIX/bin/terminal-linux
+#!/bin/bash
+# Open a terminal inside a distro WITHOUT starting any display/audio
+# servers. For GUI installs this is the "just give me a shell" shortcut.
+DISTROS=($(ls $PREFIX/var/lib/proot-distro/installed-rootfs/ 2>/dev/null))
+if [ ${#DISTROS[@]} -eq 0 ]; then
+    echo "No distributions installed. Please run install_linux.sh first."
+    exit 1
+elif [ ${#DISTROS[@]} -eq 1 ]; then
+    DISTRO=${DISTROS[0]}
+else
+    echo "Multiple distributions found. Open a terminal in which one?"
+    for i in "${!DISTROS[@]}"; do
+        echo "$((i+1))) ${DISTROS[$i]}"
+    done
+    read -p "Select a distro [1-${#DISTROS[@]}]: " choice
+    if [[ ! "$choice" =~ ^[0-9]+$ ]] || [ "$choice" -lt 1 ] || [ "$choice" -gt "${#DISTROS[@]}" ]; then
+        echo "Invalid selection."
+        exit 1
+    fi
+    idx=$((choice-1))
+    DISTRO=${DISTROS[$idx]}
+fi
+
+NO_SYSVIPC=""
+if ! proot --help 2>&1 | grep -q "sysvipc"; then
+    if [ -f "$PREFIX/bin/proot-distro" ] && grep -q "no-sysvipc" "$PREFIX/bin/proot-distro" 2>/dev/null; then
+        NO_SYSVIPC="--no-sysvipc"
+    fi
+fi
+
+echo ""
+echo "1) Root terminal (admin - sudo does not work inside proot, and is not needed)"
+echo "2) User terminal ('__LUSER__' account)"
+read -p "Select [1-2, default 1]: " TERM_CHOICE
+if [ "$TERM_CHOICE" == "2" ]; then
+    echo "Opening user terminal in $DISTRO..."
+    CONF_FILE="$PREFIX/var/lib/proot-distro/installed-rootfs/$DISTRO/etc/termux-linux-manager.conf"
+    BASE_DISTRO=$(grep '^DISTRO=' "$CONF_FILE" 2>/dev/null | cut -d'"' -f2)
+    case "$BASE_DISTRO" in
+        ubuntu|debian|kali)
+            echo "[!] Note: plain 'apt install' needs the ROOT terminal (dpkg requires uid 0)."
+            echo "    From here, use 'sudo apt install' instead (shim emulates uid 0)."
+            ;;
+    esac
+    proot-distro login $NO_SYSVIPC $DISTRO --user __LUSER__ --shared-tmp
+else
+    echo "Opening root terminal in $DISTRO..."
+    proot-distro login $NO_SYSVIPC $DISTRO --shared-tmp
+fi
+EOF
+    chmod +x $PREFIX/bin/terminal-linux
+    sed -i "s/__LUSER__/$LINUX_USER/g" $PREFIX/bin/terminal-linux
+    cat << 'EOF' > ~/.shortcuts/Terminal-Linux
+#!/bin/bash
+terminal-linux
+EOF
+    chmod +x ~/.shortcuts/Terminal-Linux 2>/dev/null || true
 }
 
 uninstall_linux() {
@@ -1903,257 +2305,7 @@ start-linux
 EOF
     chmod +x ~/.shortcuts/Start-Linux
     
-    echo "[*] Generating Universal Quick-Launch Scripts..."
-    cat << 'EOF' > $PREFIX/bin/start-linux
-#!/bin/bash
-DISTROS=($(ls $PREFIX/var/lib/proot-distro/installed-rootfs/ 2>/dev/null))
-if [ ${#DISTROS[@]} -eq 0 ]; then
-    echo "No distributions installed. Please run install_linux.sh first."
-    exit 1
-elif [ ${#DISTROS[@]} -eq 1 ]; then
-    DISTRO=${DISTROS[0]}
-else
-    echo "Multiple distributions found. Please choose one to start:"
-    for i in "${!DISTROS[@]}"; do
-        echo "$((i+1))) ${DISTROS[$i]}"
-    done
-    read -p "Select a distro [1-${#DISTROS[@]}]: " choice
-    if [[ ! "$choice" =~ ^[0-9]+$ ]] || [ "$choice" -lt 1 ] || [ "$choice" -gt "${#DISTROS[@]}" ]; then
-        echo "Invalid selection."
-        exit 1
-    fi
-    idx=$((choice-1))
-    DISTRO=${DISTROS[$idx]}
-fi
-
-CONF_FILE="$PREFIX/var/lib/proot-distro/installed-rootfs/$DISTRO/etc/termux-linux-manager.conf"
-INSTANCE_NAME="$DISTRO"
-if [ -f "$CONF_FILE" ]; then
-    source "$CONF_FILE"
-else
-    DE="none"
-    SERVER="none"
-fi
-# The conf stores the BASE distro name in $DISTRO; restore the instance
-# (directory) name or every login targets a non-installed alias.
-DISTRO="$INSTANCE_NAME"
-X11_USER="$LINUX_USER"
-
-# Old proot (frozen Android 5 repos) has no --sysvipc, but proot-distro
-# login passes it by default -> opt out when the combination requires it.
-NO_SYSVIPC=""
-if ! proot --help 2>&1 | grep -q "sysvipc"; then
-    if [ -f "$PREFIX/bin/proot-distro" ] && grep -q "no-sysvipc" "$PREFIX/bin/proot-distro" 2>/dev/null; then
-        NO_SYSVIPC="--no-sysvipc"
-    fi
-fi
-
-# GUI installs can boot the full desktop or drop straight to a shell.
-# CLI-only installs go directly to a root terminal.
-MODE="desktop"
-if [ "$SERVER" == "x11" ] || [ "$SERVER" == "vnc" ]; then
-    echo ""
-    echo "Desktop available: $DE via $SERVER."
-    echo "1) Start full desktop (default)"
-    echo "2) Root terminal only (no display/audio servers)"
-    echo "3) User terminal only (no display/audio servers)"
-    read -p "Select [1-3]: " MODE_CHOICE
-    if [ "$MODE_CHOICE" == "2" ]; then MODE="root"
-    elif [ "$MODE_CHOICE" == "3" ]; then MODE="user"
-    fi
-else
-    echo ""
-    echo "No desktop installed (CLI only)."
-    echo "1) Root terminal (default, admin)"
-    echo "2) User terminal ('__LUSER__' account)"
-    read -p "Select [1-2]: " MODE_CHOICE
-    if [ "$MODE_CHOICE" == "2" ]; then MODE="user"; else MODE="root"; fi
-fi
-
-if [ "$MODE" == "root" ]; then
-    echo "Opening root terminal in $DISTRO (sudo does not work inside proot, and is not needed)..."
-    proot-distro login $NO_SYSVIPC $DISTRO --shared-tmp
-    exit 0
-elif [ "$MODE" == "user" ]; then
-    echo "Opening user terminal in $DISTRO (no display/audio servers)..."
-    BASE_DISTRO=$(grep '^DISTRO=' "$CONF_FILE" 2>/dev/null | cut -d'"' -f2)
-    case "$BASE_DISTRO" in
-        ubuntu|debian|kali)
-            echo "[!] Note: plain 'apt install' needs the ROOT terminal (dpkg requires uid 0)."
-            echo "    From here, use 'sudo apt install' instead (shim emulates uid 0)."
-            ;;
-    esac
-    proot-distro login $NO_SYSVIPC $DISTRO --user __LUSER__ --shared-tmp
-    exit 0
-fi
-
-echo "Starting PulseAudio..."
-if command -v pulseaudio >/dev/null 2>&1; then
-    pulseaudio --start --load="module-native-protocol-tcp auth-ip-acl=127.0.0.1 auth-anonymous=1" --exit-idle-time=-1 2>/dev/null || echo "[!] PulseAudio not available on this device, continuing without audio."
-else
-    echo "[!] pulseaudio not installed, skipping audio (legacy device OK)."
-fi
-
-echo "Starting VirGL Server..."
-VIRGL_ENV=""
-if command -v virgl_test_server_android >/dev/null 2>&1 && [ "${NEED_VIRGL:-1}" = "1" ]; then
-    virgl_test_server_android &
-    VIRGL_ENV="export GALLIUM_DRIVER=virpipe; export MESA_GL_VERSION_OVERRIDE=4.0;"
-elif [ "${NEED_VIRGL:-1}" != "1" ]; then
-    echo "[*] Hardware acceleration disabled by setup choice."
-else
-    echo "[!] virgl_test_server_android not found, continuing with software rendering (expected on Android 5/6)."
-fi
-
-if [ "$SERVER" == "x11" ]; then
-    if ! command -v termux-x11 >/dev/null 2>&1; then
-        echo "ERROR: Termux:X11 backend requested but 'termux-x11' not installed."
-        echo "This backend requires Android 8+. Re-install with VNC instead."
-        exit 1
-    fi
-    echo "Starting Termux:X11..."
-    termux-x11 :1 &
-    sleep 2
-    # XDG_RUNTIME_DIR is required by xfce4-session/dbus; without it the
-    # session dies instantly and Termux:X11 shows only the root 'X' cursor.
-    # Session output goes to ~/start-linux-session.log so failures are
-    # visible instead of hidden.
-    echo "Starting $DISTRO desktop as '$X11_USER' (session log: ~/start-linux-session.log)..."
-    if [ "$DE" == "xfce4" ]; then
-        nohup proot-distro login $NO_SYSVIPC $DISTRO --user "$X11_USER" --shared-tmp -- bash -c "mkdir -p /tmp/.X11-unix /tmp/xdg; chmod 1777 /tmp/.X11-unix /tmp/xdg; export XDG_RUNTIME_DIR=/tmp/xdg; export PULSE_SERVER=127.0.0.1; export DISPLAY=:1; $VIRGL_ENV if command -v dbus-launch >/dev/null 2>&1; then dbus-launch --exit-with-session startxfce4 > \$HOME/start-linux-session.log 2>&1; else startxfce4 > \$HOME/start-linux-session.log 2>&1; fi" &
-    elif [ "$DE" == "lxde" ]; then
-        nohup proot-distro login $NO_SYSVIPC $DISTRO --user "$X11_USER" --shared-tmp -- bash -c "mkdir -p /tmp/.X11-unix /tmp/xdg; chmod 1777 /tmp/.X11-unix /tmp/xdg; export XDG_RUNTIME_DIR=/tmp/xdg; export PULSE_SERVER=127.0.0.1; export DISPLAY=:1; $VIRGL_ENV if command -v dbus-launch >/dev/null 2>&1; then dbus-launch --exit-with-session startlxde > \$HOME/start-linux-session.log 2>&1; else startlxde > \$HOME/start-linux-session.log 2>&1; fi" &
-    elif [ "$DE" == "mate" ]; then
-        nohup proot-distro login $NO_SYSVIPC $DISTRO --user "$X11_USER" --shared-tmp -- bash -c "mkdir -p /tmp/.X11-unix /tmp/xdg; chmod 1777 /tmp/.X11-unix /tmp/xdg; export XDG_RUNTIME_DIR=/tmp/xdg; export PULSE_SERVER=127.0.0.1; export DISPLAY=:1; $VIRGL_ENV if command -v dbus-launch >/dev/null 2>&1; then dbus-launch --exit-with-session mate-session > \$HOME/start-linux-session.log 2>&1; else mate-session > \$HOME/start-linux-session.log 2>&1; fi" &
-    fi
-    echo "If the screen stays on the X cursor, the desktop failed to start:"
-    echo "  cat ~/start-linux-session.log   (inside the distro) for the reason."
-elif [ "$SERVER" == "vnc" ]; then
-    echo "Starting VNC Server..."
-    if [ -z "$RESOLUTION" ]; then RESOLUTION="1280x720"; fi
-    proot-distro login $NO_SYSVIPC $DISTRO --user "$X11_USER" --shared-tmp -- bash -c "export PULSE_SERVER=127.0.0.1; $VIRGL_ENV vncserver -geometry $RESOLUTION :1"
-fi
-EOF
-    chmod +x $PREFIX/bin/start-linux
-    sed -i "s/__LUSER__/$LINUX_USER/g" $PREFIX/bin/start-linux
-    
-    cat << 'EOF' > $PREFIX/bin/stop-linux
-#!/bin/bash
-DISTROS=($(ls $PREFIX/var/lib/proot-distro/installed-rootfs/ 2>/dev/null))
-if [ ${#DISTROS[@]} -eq 0 ]; then
-    echo "No distributions installed."
-    exit 1
-elif [ ${#DISTROS[@]} -eq 1 ]; then
-    DISTRO=${DISTROS[0]}
-else
-    echo "Multiple distributions found. Which one do you want to stop?"
-    for i in "${!DISTROS[@]}"; do
-        echo "$((i+1))) ${DISTROS[$i]}"
-    done
-    read -p "Select a distro [1-${#DISTROS[@]}]: " choice
-    if [[ ! "$choice" =~ ^[0-9]+$ ]] || [ "$choice" -lt 1 ] || [ "$choice" -gt "${#DISTROS[@]}" ]; then
-        echo "Invalid selection."
-        exit 1
-    fi
-    idx=$((choice-1))
-    DISTRO=${DISTROS[$idx]}
-fi
-
-CONF_FILE="$PREFIX/var/lib/proot-distro/installed-rootfs/$DISTRO/etc/termux-linux-manager.conf"
-INSTANCE_NAME="$DISTRO"
-if [ -f "$CONF_FILE" ]; then
-    source "$CONF_FILE"
-else
-    SERVER="none"
-fi
-DISTRO="$INSTANCE_NAME"
-
-NO_SYSVIPC=""
-if ! proot --help 2>&1 | grep -q "sysvipc"; then
-    if [ -f "$PREFIX/bin/proot-distro" ] && grep -q "no-sysvipc" "$PREFIX/bin/proot-distro" 2>/dev/null; then
-        NO_SYSVIPC="--no-sysvipc"
-    fi
-fi
-
-echo "Stopping PulseAudio..."
-if command -v pulseaudio >/dev/null 2>&1; then
-    pulseaudio -k 2>/dev/null || true
-fi
-
-echo "Stopping VirGL Server..."
-if command -v virgl_test_server_android >/dev/null 2>&1; then
-    killall virgl_test_server_android 2>/dev/null || pkill -f virgl_test_server 2>/dev/null || true
-fi
-
-if [ "$SERVER" == "x11" ]; then
-    echo "Stopping Termux:X11..."
-    pkill -f termux-x11 2>/dev/null || true
-elif [ "$SERVER" == "vnc" ]; then
-    echo "Stopping VNC Server..."
-    proot-distro login $NO_SYSVIPC $DISTRO --user __LUSER__ --shared-tmp -- bash -c "vncserver -kill :1" 2>/dev/null || true
-fi
-EOF
-    chmod +x $PREFIX/bin/stop-linux
-    sed -i "s/__LUSER__/$LINUX_USER/g" $PREFIX/bin/stop-linux
-
-    cat << 'EOF' > $PREFIX/bin/terminal-linux
-#!/bin/bash
-# Open a terminal inside a distro WITHOUT starting any display/audio
-# servers. For GUI installs this is the "just give me a shell" shortcut.
-DISTROS=($(ls $PREFIX/var/lib/proot-distro/installed-rootfs/ 2>/dev/null))
-if [ ${#DISTROS[@]} -eq 0 ]; then
-    echo "No distributions installed. Please run install_linux.sh first."
-    exit 1
-elif [ ${#DISTROS[@]} -eq 1 ]; then
-    DISTRO=${DISTROS[0]}
-else
-    echo "Multiple distributions found. Open a terminal in which one?"
-    for i in "${!DISTROS[@]}"; do
-        echo "$((i+1))) ${DISTROS[$i]}"
-    done
-    read -p "Select a distro [1-${#DISTROS[@]}]: " choice
-    if [[ ! "$choice" =~ ^[0-9]+$ ]] || [ "$choice" -lt 1 ] || [ "$choice" -gt "${#DISTROS[@]}" ]; then
-        echo "Invalid selection."
-        exit 1
-    fi
-    idx=$((choice-1))
-    DISTRO=${DISTROS[$idx]}
-fi
-
-NO_SYSVIPC=""
-if ! proot --help 2>&1 | grep -q "sysvipc"; then
-    if [ -f "$PREFIX/bin/proot-distro" ] && grep -q "no-sysvipc" "$PREFIX/bin/proot-distro" 2>/dev/null; then
-        NO_SYSVIPC="--no-sysvipc"
-    fi
-fi
-
-echo ""
-echo "1) Root terminal (admin - sudo does not work inside proot, and is not needed)"
-echo "2) User terminal ('__LUSER__' account)"
-read -p "Select [1-2, default 1]: " TERM_CHOICE
-if [ "$TERM_CHOICE" == "2" ]; then
-    echo "Opening user terminal in $DISTRO..."
-    CONF_FILE="$PREFIX/var/lib/proot-distro/installed-rootfs/$DISTRO/etc/termux-linux-manager.conf"
-    BASE_DISTRO=$(grep '^DISTRO=' "$CONF_FILE" 2>/dev/null | cut -d'"' -f2)
-    case "$BASE_DISTRO" in
-        ubuntu|debian|kali)
-            echo "[!] Note: plain 'apt install' needs the ROOT terminal (dpkg requires uid 0)."
-            echo "    From here, use 'sudo apt install' instead (shim emulates uid 0)."
-            ;;
-    esac
-    proot-distro login $NO_SYSVIPC $DISTRO --user __LUSER__ --shared-tmp
-else
-    echo "Opening root terminal in $DISTRO..."
-    proot-distro login $NO_SYSVIPC $DISTRO --shared-tmp
-fi
-EOF
-    chmod +x $PREFIX/bin/terminal-linux
-    sed -i "s/__LUSER__/$LINUX_USER/g" $PREFIX/bin/terminal-linux
-    cat << 'EOF' > ~/.shortcuts/Terminal-Linux
-#!/bin/bash
-terminal-linux
-EOF
-    chmod +x ~/.shortcuts/Terminal-Linux 2>/dev/null || true
+    write_launchers
 
     # Post-install extras chosen in guided setup (all optional, all safe to
     # skip: every block tolerates missing pieces).
