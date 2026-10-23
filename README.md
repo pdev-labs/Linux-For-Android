@@ -54,6 +54,7 @@ Currently supported distributions:
   inside proot on Android, so instead of a broken `sudo` you get a small
   ritual-only shim: it asks for the install password, then runs your command
   with the full access you already have. No silent failures, no surprises.
+- **Robust uninstaller:** shows the instance, distro/desktop, rootfs path and size; asks for confirmation; stops active sessions first; verifies removal and cleans up half-deleted containers or legacy ghost entries left by older versions.
 - **proot-distro v3 + v4 aware:** reads the real rootfs from `installed-rootfs/` (older) or `containers/<name>/rootfs` (v4+), so the Doctor, migration and launchers work on both layouts.
 - **Legacy Android Auto-Support:** Android 5/6 devices are detected and get
   proot-distro v4.2.0 from source, forced VNC, Alpine + Debian-bullseye
@@ -308,7 +309,16 @@ for g in $(id -G); do
 done
 ```
 
-### 9. Installation seems frozen at "Setting up elementary-xfce-icon-theme..."
+### 9. Uninstall says the distro is gone but it still appears / "incomplete"
+**Why:** an older uninstall could stop half-way if a login session was
+still running or the rootfs was already damaged, leaving a ghost container
+that `proot-distro list` still shows.
+**Fix:** update the manager (`git pull`) and run **3) Manager → 10) Uninstall**
+on that instance. It now kills sessions, finishes the deletion and removes
+legacy `installed-rootfs` stubs. If it still cannot remove the directory,
+check permissions under `$PREFIX/var/lib/proot-distro`.
+
+### 10. Installation seems frozen at "Setting up elementary-xfce-icon-theme..."
 **Fix:** Be patient! This specific package contains tens of thousands of tiny icon files. Because `proot` must translate every single file operation via your phone's CPU, unpacking thousands of files takes significantly longer than on a native PC (sometimes 10 to 20 minutes on mid-range phones). Keep Termux open and let it finish!
 
 ## 🤝 Contributing
@@ -325,7 +335,7 @@ installs; needs only `bash`, `coreutils`, `timeout`, and `python3` (plus
 `script` from util-linux for the pty test, skipped if absent):
 ```bash
 chmod +x tests/test-all.sh
-./tests/test-all.sh   # expect: PASS=130 FAIL=0
+./tests/test-all.sh   # expect: PASS=142 FAIL=0
 ```
 
 ## 📝 License

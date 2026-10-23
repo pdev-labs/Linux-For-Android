@@ -40,6 +40,7 @@ EOF
 cat > "$T/fakebin/proot-distro" <<'EOF'
 #!/bin/bash
 echo "STUB-PD: $*" >&2
+echo "$*" >> "$HOME/pd-calls.log" 2>/dev/null || true
 case "$1" in
     list) printf 'Available distributions:\n  * Debian\n    Alias: debian\n  * Alpine Linux\n    Alias: alpine\n  * Debian (bullseye)\n    Alias: bullseye\n  * Ubuntu\n    Alias: ubuntu\n  * Fedora\n    Alias: fedora\n' ;;
     install)
@@ -48,6 +49,7 @@ case "$1" in
             else echo "Usage: install ALIAS"; fi
         else echo "STUB-PD-INSTALL-OK"; fi ;;
     login|backup|remove|restore) echo "STUB-PD-$1-OK" ;;
+    kill) echo "STUB-PD-KILL: $*" >&2 ;;
     *) echo "STUB-PD-OK" ;;
 esac
 exit 0
@@ -247,7 +249,7 @@ check "J corrupt completes" 'Installation complete!' "$T/j3.log"
 
 echo "===== K: manager menu smoke (all ops) ====="
 fresh_env
-mkdir -p "$T/prefix/var/lib/proot-distro/installed-rootfs/demoinst/etc" "$T/home/storage/downloads"
+mkdir -p "$T/prefix/var/lib/proot-distro/installed-rootfs/demoinst/etc" "$T/prefix/var/lib/proot-distro/installed-rootfs/demoinst/var" "$T/home/storage/downloads"
 printf 'DISTRO="debian"\nDE="none"\nSERVER="none"\nUPDATE_CMD="apt-get update"\n' > "$T/prefix/var/lib/proot-distro/installed-rootfs/demoinst/etc/termux-linux-manager.conf"
 touch "$T/home/demoinst-backup.tar.gz" "$T/home/storage/downloads/shared.tar.gz"
 printf '%s\n' 3 2 '' 13 | bash "$REPO/install_linux.sh" > "$T/k2.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: run k2 exit $rc"; }
@@ -271,12 +273,14 @@ printf '%s\n' 3 0 '' 13 | bash "$REPO/install_linux.sh" > "$T/k0.log" 2>&1; rc=$
 check "K repair completes" 'Repair complete!' "$T/k0.log"
 [ -f "$ROOTFS/usr/local/bin/dpkg-statoverride" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: K repair shim not installed"; }
 [ -f "$T/prefix/tmp/lfa-repair.sh" ] && bash -n "$T/prefix/tmp/lfa-repair.sh" && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: K repair script missing/invalid"; }
-printf '%s\n' 3 10 y '' 13 | bash "$REPO/install_linux.sh" > "$T/k10.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: run k10 exit $rc"; }
-check "K uninstall" 'has been removed' "$T/k10.log"
 printf '%s\n' 3 11 2 '' 13 | bash "$REPO/install_linux.sh" > "$T/k11.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: run k11 exit $rc"; }
 check "K browser" 'Hardware Acceleration disabled' "$T/k11.log"
 printf '%s\n' 3 3 '' 13 | bash "$REPO/install_linux.sh" > "$T/k3.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: run k3 exit $rc"; }
 check "K ssh" 'SSH Server is running!' "$T/k3.log"
+printf '%s\n' 3 10 y '' 13 | bash "$REPO/install_linux.sh" > "$T/k10.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: run k10 exit $rc"; }
+check "K uninstall" 'has been removed' "$T/k10.log"
+[ ! -e "$T/prefix/var/lib/proot-distro/installed-rootfs/demoinst" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: K uninstall left the rootfs behind"; }
+grep -q '^kill demoinst$' "$T/home/pd-calls.log" && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: K uninstall did not kill sessions"; }
 
 echo "===== L: shim password ritual over pty ====="
 fresh_env
@@ -395,6 +399,23 @@ check "O conf in real rootfs" 'USER_NAME="user"' "$CROOT/etc/termux-linux-manage
 check "O launcher lib written" 'lfa_conf' "$T/prefix/bin/lfa-lib.sh"
 check "O launcher bootstraps lib" 'lfa-lib.sh' "$T/prefix/bin/start-linux"
 check "O launcher lists containers" 'containers' "$T/prefix/bin/lfa-lib.sh"
+
+echo "===== P: uninstall cleanup (broken/ghost) ====="
+fresh_env
+BROKEN="$T/prefix/var/lib/proot-distro/containers/broken/rootfs"
+mkdir -p "$BROKEN/etc" "$T/prefix/var/lib/proot-distro/installed-rootfs/ghost/etc"
+printf 'DISTRO="debian"\nDE="none"\nSERVER="none"\nUPDATE_CMD="true"\n' > "$BROKEN/etc/termux-linux-manager.conf"
+printf 'DISTRO="debian"\n' > "$T/prefix/var/lib/proot-distro/installed-rootfs/ghost/etc/termux-linux-manager.conf"
+printf '%s\n' 3 10 n '' 13 | bash "$REPO/install_linux.sh" > "$T/p-cancel.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: run p-cancel exit $rc"; }
+check "P cancel works" 'Cancelled.' "$T/p-cancel.log"
+[ -d "$BROKEN" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: P cancel still deleted data"; }
+printf '%s\n' 3 10 y '' 13 | bash "$REPO/install_linux.sh" > "$T/p.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: run p exit $rc"; }
+check "P broken instance shown" 'Uninstall: broken' "$T/p.log"
+check "P status warns" 'incomplete' "$T/p.log"
+grep -q '^kill broken$' "$T/home/pd-calls.log" && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: P did not kill sessions"; }
+check "P removes broken" 'has been removed' "$T/p.log"
+[ ! -e "$T/prefix/var/lib/proot-distro/containers/broken" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: P broken container left behind"; }
+[ -d "$T/prefix/var/lib/proot-distro/installed-rootfs/ghost" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: P ghost stub was touched"; }
 
 echo ""
 echo "PASS=$pass FAIL=$fail"

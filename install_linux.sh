@@ -702,12 +702,22 @@ pd_conf() {
 }
 
 pd_instances() {
-    local base="$PREFIX/var/lib/proot-distro"
-    if [ -d "$base/containers" ] && [ -n "$(ls -A "$base/containers" 2>/dev/null)" ]; then
-        ls -1 "$base/containers" 2>/dev/null
-    else
-        ls -1 "$base/installed-rootfs" 2>/dev/null
-    fi
+    local base="$PREFIX/var/lib/proot-distro" d
+    {
+        if [ -d "$base/containers" ]; then
+            for d in "$base/containers"/*; do
+                [ -d "$d" ] && basename "$d"
+            done
+        fi
+        # Legacy layout: only count entries that actually contain a rootfs.
+        # Old versions of this manager left conf-only stubs there; listing
+        # those made uninstall/start show ghost distros.
+        for d in "$base/installed-rootfs"/*; do
+            [ -d "$d" ] || continue
+            { [ -d "$d/var" ] || [ -d "$d/usr" ] || [ -d "$d/bin" ]; } || continue
+            basename "$d"
+        done
+    } | awk '!seen[$0]++'
 }
 
 pd_instance_exists() {
@@ -1221,11 +1231,20 @@ write_launchers() {
 #   v4 and later:   containers/<name>/rootfs
 PD_BASE="$PREFIX/var/lib/proot-distro"
 lfa_instances() {
-    if [ -d "$PD_BASE/containers" ] && [ -n "$(ls -A "$PD_BASE/containers" 2>/dev/null)" ]; then
-        ls -1 "$PD_BASE/containers" 2>/dev/null
-    else
-        ls -1 "$PD_BASE/installed-rootfs" 2>/dev/null
-    fi
+    _d=""
+    {
+        if [ -d "$PD_BASE/containers" ]; then
+            for _d in "$PD_BASE/containers"/*; do
+                [ -d "$_d" ] && basename "$_d"
+            done
+        fi
+        for _d in "$PD_BASE/installed-rootfs"/*; do
+            [ -d "$_d" ] || continue
+            { [ -d "$_d/var" ] || [ -d "$_d/usr" ] || [ -d "$_d/bin" ]; } || continue
+            basename "$_d"
+        done
+    } | awk '!seen[$0]++'
+    unset _d
 }
 lfa_rootfs() {
     if [ -d "$PD_BASE/containers/$1/rootfs" ]; then
@@ -1504,12 +1523,59 @@ uninstall_linux() {
     require_proot_distro || return
     select_installed_instance
     if [ -z "$INSTANCE_NAME" ]; then return; fi
-    read -p "Are you sure you want to uninstall $INSTANCE_NAME? [y/N]: " CONFIRM
-    if [[ "$CONFIRM" =~ ^[Yy]$ ]]; then
-        echo "[*] Uninstalling $INSTANCE_NAME..."
-        proot-distro remove "$INSTANCE_NAME" || true
-        echo "$INSTANCE_NAME has been removed."
+
+    local ROOTFS="$(pd_rootfs "$INSTANCE_NAME")"
+    local SIZE=""
+    [ -d "$ROOTFS" ] && SIZE="$(du -sh "$ROOTFS" 2>/dev/null | awk '{print $1}')"
+    local STATE="ok"
+    [ -x "$ROOTFS/bin/sh" ] || [ -L "$ROOTFS/bin/sh" ] || [ -e "$ROOTFS/bin/sh" ] || STATE="incomplete (partial removal?)"
+
+    echo "========================================="
+    echo " Uninstall: $INSTANCE_NAME"
+    echo "========================================="
+    echo " Distro   : ${DISTRO:-unknown}"
+    [ -n "${DE:-}" ] && [ "$DE" != "none" ] && echo " Desktop  : $DE ($SERVER)"
+    echo " Rootfs   : $ROOTFS"
+    [ -n "$SIZE" ] && echo " Size     : $SIZE"
+    echo " Status   : $STATE"
+    echo " Backups in $HOME are kept."
+    echo "========================================="
+    read -p "Delete $INSTANCE_NAME permanently? [y/N]: " CONFIRM
+    if [[ ! "$CONFIRM" =~ ^[Yy]$ ]]; then
+        echo "Cancelled."
+        read -p "Press Enter to continue..."
+        show_menu
+        return
     fi
+
+    # A running login keeps files open and makes proot-distro remove stop
+    # half-way, leaving a ghost container. Stop sessions first.
+    echo "[*] Stopping any running sessions for $INSTANCE_NAME..."
+    proot-distro kill "$INSTANCE_NAME" >/dev/null 2>&1 || true
+
+    echo "[*] Removing $INSTANCE_NAME (this can take a moment)..."
+    proot-distro remove "$INSTANCE_NAME" >/dev/null 2>&1 || true
+
+    # Clean leftovers: proot-distro can abort mid-delete on a busy or
+    # already-broken rootfs. Removal was confirmed, so finish the job.
+    local leftover
+    for leftover in \
+        "$PREFIX/var/lib/proot-distro/containers/$INSTANCE_NAME" \
+        "$PREFIX/var/lib/proot-distro/installed-rootfs/$INSTANCE_NAME"; do
+        if [ -e "$leftover" ]; then
+            echo "[*] Cleaning leftover: $leftover"
+            rm -rf "$leftover" 2>/dev/null || true
+        fi
+    done
+
+    if [ -e "$PREFIX/var/lib/proot-distro/containers/$INSTANCE_NAME" ] || \
+       [ -e "$PREFIX/var/lib/proot-distro/installed-rootfs/$INSTANCE_NAME" ]; then
+        echo "[!] Could not fully remove $INSTANCE_NAME - check permissions."
+    else
+        echo "$INSTANCE_NAME has been removed."
+        echo "Backups, if any, were left in $HOME."
+    fi
+
     read -p "Press Enter to continue..."
     show_menu
 }
