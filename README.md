@@ -56,7 +56,7 @@ Currently supported distributions:
   with the full access you already have. No silent failures, no surprises.
 - **Interactive, npm-style UI:** arrow-key menus with descriptions, Enter to choose, space to toggle multiple packages, y/n confirmations and coloured status screens. You can also type an option number (e.g. `10`). When stdin is piped (CI or `curl | bash`), every menu falls back to plain numbered prompts so automation never hangs.
 - **Robust uninstaller:** shows the instance, distro/desktop, rootfs path and size; asks for confirmation; stops active sessions first; verifies removal and cleans up half-deleted containers or legacy ghost entries left by older versions.
-- **proot-distro v3 + v4 aware:** reads the real rootfs from `installed-rootfs/` (older) or `containers/<name>/rootfs` (v4+), so the Doctor, migration and launchers work on both layouts.
+- **proot-distro v3 / v4 / v5 aware:** reads the real rootfs from `installed-rootfs/` (older) or `containers/<name>/rootfs` (v4+), and understands v5's OCI image installs (`alpine:latest`, etc.) plus its `restore FILE` interface. Doctor, migration, backup/restore and the launchers work on all layouts.
 - **Legacy Android Auto-Support:** Android 5/6 devices are detected and get
   proot-distro v4.2.0 from source, forced VNC, Alpine + Debian-bullseye
   options, and workarounds for old `proot` — all automatically.
@@ -348,7 +348,7 @@ installs; needs only `bash`, `coreutils`, `timeout`, and `python3` (plus
 `script` from util-linux for the pty test, skipped if absent):
 ```bash
 chmod +x tests/test-all.sh
-./tests/test-all.sh   # expect: PASS=150 FAIL=0
+./tests/test-all.sh   # expect: PASS=158 FAIL=0
 ```
 
 ## 📝 License

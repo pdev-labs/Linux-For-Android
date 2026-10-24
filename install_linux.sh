@@ -10,7 +10,7 @@ fi
 
 # Directory containing this script (lib/ lives next to it).
 LFA_DIR="$(cd "$(dirname "$0")" && pwd)"
-LFA_VERSION="1.5.0"
+LFA_VERSION="1.5.1"
 
 # ============================================================
 # Interactive UI (npm-style)
@@ -414,6 +414,13 @@ install_proot_distro_from_source() {
 # just show 'proot-distro list' and stop.
 verify_proot_distro_plugin() {
     WANT="$1"
+    # proot-distro v5+ installs OCI images directly. Its `list` command only
+    # shows created containers, not available distro plugins, so checking it
+    # would reject every not-yet-installed image (e.g. alpine:latest).
+    if command -v proot-distro >/dev/null 2>&1 && \
+       proot-distro install --help 2>&1 | grep -iqE "(IMAGE:TAG|Docker image|registry)"; then
+        return 0
+    fi
     # NOTE: proot-distro prints EVERYTHING (including 'list' results)
     # to stderr via msg(), so capture 2>&1 here, not 2>/dev/null.
     set +e
@@ -510,7 +517,11 @@ pd_login_flags() {
 # backup/restore CLI: v4 'restore' takes a tarball PATH and restores the
 # embedded instance name; only v5 understands '--input <file>' + rename.
 pd_is_v4() {
-    [ -f "$PREFIX/bin/proot-distro" ] && grep -q "DISTRO_PLUGINS_DIR" "$PREFIX/bin/proot-distro" 2>/dev/null
+    # v4.2 source builds keep the legacy plugin layout; v5+ installs OCI
+    # images and restores from a single archive argument (`restore FILE`).
+    [ -f "$PREFIX/bin/proot-distro" ] || return 1
+    grep -q "DISTRO_PLUGINS_DIR" "$PREFIX/bin/proot-distro" 2>/dev/null && return 0
+    proot-distro restore --help 2>&1 | grep -q "BACKUP_FILE"
 }
 
 # Legacy devices need the bullseye plug-in (shipped in ./plugins), which
@@ -1264,7 +1275,17 @@ upgrade_existing() {
         LFA_ROOT="$ROOTFS" LFA_USER="$LINUX_USER" \
             LFA_HOSTNAME="${HOSTNAME:-localhost}" LFA_PSTYLE="${PSTYLE:-minimal}" \
             sh "$LFA_DIR/lib/real-feel.sh" || true
-        echo "[*] Shell polished (prompt, banner, hostname, environment)."
+        # Name proot-mapped Android GIDs inside the guest so `groups` stops
+        # warning "cannot find name for group ID N" on every login.
+        proot-distro login $(pd_login_flags) "$INSTANCE_NAME" -- sh -c '
+            gids="$(awk "/^Groups:/{for(i=2;i<=NF;i++) print \$i}" /proc/self/status 2>/dev/null)"
+            for u in root "$1"; do gids="$gids $(id -G "$u" 2>/dev/null)"; done
+            for g in $gids; do
+                grep -q "^[^:]*:[^:]*:$g:" /etc/group 2>/dev/null || \
+                    echo "lfa_gid_$g:x:$g:" >> /etc/group
+            done
+        ' sh "$LINUX_USER" >/dev/null 2>&1 || true
+        echo "[*] Shell polished (prompt, banner, hostname, environment, gids)."
     fi
 
     # 4. Refresh the VNC xstartup (newer versions tolerate missing dbus).
@@ -1389,7 +1410,7 @@ restore_linux() {
         echo "[*] Restoring $INSTANCE_NAME..."
         if ui_confirm "Restore $INSTANCE_NAME? This overwrites current data" n; then
             if pd_is_v4; then
-                echo "[*] (v4 build: restores the instance name stored in the backup)"
+                echo "[*] (modern proot-distro: restores the instance stored in the backup)"
                 proot-distro restore ~/${INSTANCE_NAME}-backup.tar.gz
             else
                 proot-distro restore "$INSTANCE_NAME" --input ~/${INSTANCE_NAME}-backup.tar.gz
@@ -1438,7 +1459,7 @@ import_distro() {
         echo "========================================="
     else
         if pd_is_v4; then
-            echo "[*] (v4 build: imports under the instance name stored in the file)"
+            echo "[*] (modern proot-distro: imports the instance stored in the file)"
             if ui_confirm "Import $IMPORT_FILE? This overwrites that instance" n; then
                 proot-distro restore ~/storage/downloads/$IMPORT_FILE
                 echo "========================================="
@@ -1589,7 +1610,7 @@ fi
 # The conf stores the BASE distro name in $DISTRO; restore the instance
 # (directory) name or every login targets a non-installed alias.
 DISTRO="$INSTANCE_NAME"
-X11_USER="$LINUX_USER"
+X11_USER="${USER_NAME:-${LINUX_USER:-user}}"
 
 # Old proot (frozen Android 5 repos) has no --sysvipc, but proot-distro
 # login passes it by default -> opt out when the combination requires it.
@@ -1640,7 +1661,7 @@ fi
 echo "Starting VirGL Server..."
 VIRGL_ENV=""
 if command -v virgl_test_server_android >/dev/null 2>&1 && [ "${NEED_VIRGL:-1}" = "1" ]; then
-    virgl_test_server_android &
+    nohup virgl_test_server_android >/dev/null 2>&1 &
     VIRGL_ENV="export GALLIUM_DRIVER=virpipe; export MESA_GL_VERSION_OVERRIDE=4.0;"
 elif [ "${NEED_VIRGL:-1}" != "1" ]; then
     echo "[*] Hardware acceleration disabled by setup choice."
@@ -1655,7 +1676,11 @@ if [ "$SERVER" == "x11" ]; then
         exit 1
     fi
     echo "Starting Termux:X11..."
-    termux-x11 :1 &
+    # /tmp is shared with the guest. Pre-create the ICE socket directory as
+    # root-owned 1777; the unprivileged desktop user cannot create it.
+    mkdir -p "$PREFIX/tmp/.X11-unix" "$PREFIX/tmp/.ICE-unix" 2>/dev/null || true
+    chmod 1777 "$PREFIX/tmp/.X11-unix" "$PREFIX/tmp/.ICE-unix" 2>/dev/null || true
+    nohup termux-x11 :1 >/dev/null 2>&1 &
     sleep 2
     # XDG_RUNTIME_DIR is required by xfce4-session/dbus; without it the
     # session dies instantly and Termux:X11 shows only the root 'X' cursor.
@@ -1663,11 +1688,11 @@ if [ "$SERVER" == "x11" ]; then
     # visible instead of hidden.
     echo "Starting $DISTRO desktop as '$X11_USER' (session log: ~/start-linux-session.log)..."
     if [ "$DE" == "xfce4" ]; then
-        nohup proot-distro login $NO_SYSVIPC $DISTRO --user "$X11_USER" --shared-tmp -- bash -c "mkdir -p /tmp/.X11-unix /tmp/xdg; chmod 1777 /tmp/.X11-unix /tmp/xdg; export XDG_RUNTIME_DIR=/tmp/xdg; export PULSE_SERVER=127.0.0.1; export DISPLAY=:1; $VIRGL_ENV if command -v dbus-launch >/dev/null 2>&1; then dbus-launch --exit-with-session startxfce4 > \$HOME/start-linux-session.log 2>&1; else startxfce4 > \$HOME/start-linux-session.log 2>&1; fi" &
+        nohup proot-distro login $NO_SYSVIPC $DISTRO --user "$X11_USER" --shared-tmp -- bash -c "mkdir -p /tmp/.X11-unix; chmod 1777 /tmp/.X11-unix; export XDG_RUNTIME_DIR=/tmp/xdg-\$USER; mkdir -p "\$XDG_RUNTIME_DIR"; chmod 700 "\$XDG_RUNTIME_DIR"; export PULSE_SERVER=127.0.0.1; export DISPLAY=:1; $VIRGL_ENV if command -v dbus-launch >/dev/null 2>&1; then dbus-launch --exit-with-session startxfce4 > \$HOME/start-linux-session.log 2>&1; else startxfce4 > \$HOME/start-linux-session.log 2>&1; fi" &
     elif [ "$DE" == "lxde" ]; then
-        nohup proot-distro login $NO_SYSVIPC $DISTRO --user "$X11_USER" --shared-tmp -- bash -c "mkdir -p /tmp/.X11-unix /tmp/xdg; chmod 1777 /tmp/.X11-unix /tmp/xdg; export XDG_RUNTIME_DIR=/tmp/xdg; export PULSE_SERVER=127.0.0.1; export DISPLAY=:1; $VIRGL_ENV if command -v dbus-launch >/dev/null 2>&1; then dbus-launch --exit-with-session startlxde > \$HOME/start-linux-session.log 2>&1; else startlxde > \$HOME/start-linux-session.log 2>&1; fi" &
+        nohup proot-distro login $NO_SYSVIPC $DISTRO --user "$X11_USER" --shared-tmp -- bash -c "mkdir -p /tmp/.X11-unix; chmod 1777 /tmp/.X11-unix; export XDG_RUNTIME_DIR=/tmp/xdg-\$USER; mkdir -p "\$XDG_RUNTIME_DIR"; chmod 700 "\$XDG_RUNTIME_DIR"; export PULSE_SERVER=127.0.0.1; export DISPLAY=:1; $VIRGL_ENV if command -v dbus-launch >/dev/null 2>&1; then dbus-launch --exit-with-session startlxde > \$HOME/start-linux-session.log 2>&1; else startlxde > \$HOME/start-linux-session.log 2>&1; fi" &
     elif [ "$DE" == "mate" ]; then
-        nohup proot-distro login $NO_SYSVIPC $DISTRO --user "$X11_USER" --shared-tmp -- bash -c "mkdir -p /tmp/.X11-unix /tmp/xdg; chmod 1777 /tmp/.X11-unix /tmp/xdg; export XDG_RUNTIME_DIR=/tmp/xdg; export PULSE_SERVER=127.0.0.1; export DISPLAY=:1; $VIRGL_ENV if command -v dbus-launch >/dev/null 2>&1; then dbus-launch --exit-with-session mate-session > \$HOME/start-linux-session.log 2>&1; else mate-session > \$HOME/start-linux-session.log 2>&1; fi" &
+        nohup proot-distro login $NO_SYSVIPC $DISTRO --user "$X11_USER" --shared-tmp -- bash -c "mkdir -p /tmp/.X11-unix; chmod 1777 /tmp/.X11-unix; export XDG_RUNTIME_DIR=/tmp/xdg-\$USER; mkdir -p "\$XDG_RUNTIME_DIR"; chmod 700 "\$XDG_RUNTIME_DIR"; export PULSE_SERVER=127.0.0.1; export DISPLAY=:1; $VIRGL_ENV if command -v dbus-launch >/dev/null 2>&1; then dbus-launch --exit-with-session mate-session > \$HOME/start-linux-session.log 2>&1; else mate-session > \$HOME/start-linux-session.log 2>&1; fi" &
     fi
     echo "If the screen stays on the X cursor, the desktop failed to start:"
     echo "  cat ~/start-linux-session.log   (inside the distro) for the reason."
@@ -1732,12 +1757,12 @@ fi
 
 echo "Stopping VirGL Server..."
 if command -v virgl_test_server_android >/dev/null 2>&1; then
-    killall virgl_test_server_android 2>/dev/null || pkill -f virgl_test_server 2>/dev/null || true
+    pkill -f "^virgl_test_server" 2>/dev/null || true
 fi
 
 if [ "$SERVER" == "x11" ]; then
     echo "Stopping Termux:X11..."
-    pkill -f termux-x11 2>/dev/null || true
+    pkill -f "^termux-x11" 2>/dev/null || true
 elif [ "$SERVER" == "vnc" ]; then
     echo "Stopping VNC Server..."
     proot-distro login $NO_SYSVIPC $DISTRO --user __LUSER__ --shared-tmp -- bash -c "vncserver -kill :1" 2>/dev/null || true
@@ -2099,6 +2124,7 @@ install_linux() {
             fedora) IMAGE="fedora:latest" ;;
             opensuse) IMAGE="opensuse/tumbleweed:latest" ;;
             void) IMAGE="ghcr.io/void-linux/void-musl:latest" ;;
+            alpine) IMAGE="alpine:latest" ;;
             archlinux)
                 CPU_ARCH=$(uname -m)
                 if [[ "$CPU_ARCH" == *"aarch64"* || "$CPU_ARCH" == *"arm64"* || "$CPU_ARCH" == *"armv8"* ]]; then

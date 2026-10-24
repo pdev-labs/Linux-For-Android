@@ -54,6 +54,29 @@ case "${SHELL:-}" in /data/data/*) SHELL=/bin/bash; export SHELL ;; esac
 case "${TERM:-}" in xterm-ghostty|xterm-kitty|alacritty) TERM=xterm-256color; export TERM ;; esac
 CLEAN
 
+# ---------------- name host-mapped gids ----------------
+# PRoot injects Android group ids (aid_inet, aid_everybody, app cache,
+# etc.) into the guest. Some have no /etc/group entry, so every login
+# prints "groups: cannot find name for group ID N" from bash.bashrc.
+# Give the unmapped ones neutral names. Only meaningful inside the guest:
+# host-side migration (LFA_ROOT) cannot see the proot-mapped ids.
+if [ -z "$R" ] && [ -r /etc/group ]; then
+    _gids="$(awk '/^Groups:/{for(i=2;i<=NF;i++) print $i}' /proc/self/status 2>/dev/null)"
+    for _u in root "$USER_NAME"; do
+        _gids="$_gids $(id -G "$_u" 2>/dev/null)"
+    done
+    for _g in $_gids; do
+        if command -v getent >/dev/null 2>&1; then
+            getent group "$_g" >/dev/null 2>&1 && continue
+        else
+            grep -q "^[^:]*:[^:]*:$_g:" /etc/group 2>/dev/null && continue
+        fi
+        printf 'lfa_gid_%s:x:%s:\n' "$_g" "$_g" >> /etc/group 2>/dev/null || true
+        [ -f /etc/gshadow ] && printf 'lfa_gid_%s:!::\n' "$_g" >> /etc/gshadow 2>/dev/null || true
+    done
+    unset _u _g _gids
+fi
+
 # ---------------- hostname reports the chosen name ----------------
 cat > "$R/usr/local/bin/hostname" <<'HOSTNAME'
 #!/bin/sh

@@ -42,13 +42,25 @@ cat > "$T/fakebin/proot-distro" <<'EOF'
 echo "STUB-PD: $*" >&2
 echo "$*" >> "$HOME/pd-calls.log" 2>/dev/null || true
 case "$1" in
-    list) printf 'Available distributions:\n  * Debian\n    Alias: debian\n  * Alpine Linux\n    Alias: alpine\n  * Debian (bullseye)\n    Alias: bullseye\n  * Ubuntu\n    Alias: ubuntu\n  * Fedora\n    Alias: fedora\n' ;;
+    list)
+        if [ "${PD_V5:-0}" = "1" ]; then
+            echo "No containers are installed."
+            echo "Install one with: proot-distro install ubuntu:24.04"
+        else
+            printf 'Available distributions:\n  * Debian\n    Alias: debian\n  * Alpine Linux\n    Alias: alpine\n  * Debian (bullseye)\n    Alias: bullseye\n  * Ubuntu\n    Alias: ubuntu\n  * Fedora\n    Alias: fedora\n'
+        fi ;;
     install)
         if [ "$2" = "--help" ]; then
-            if [ "${PD_V4:-0}" = "1" ]; then echo "Usage: install [--override-alias ALIAS] DISTRO";
+            if [ "${PD_V5:-0}" = "1" ]; then echo "USAGE: proot-distro install [OPTIONS] (IMAGE:TAG or URL or FILE)";
+            elif [ "${PD_V4:-0}" = "1" ]; then echo "Usage: install [--override-alias ALIAS] DISTRO";
             else echo "Usage: install ALIAS"; fi
-        else echo "STUB-PD-INSTALL-OK"; fi ;;
-    login|backup|remove|restore) echo "STUB-PD-$1-OK" ;;
+        else echo "STUB-PD-INSTALL-OK: $*"; fi ;;
+    restore)
+        if [ "$2" = "--help" ]; then
+            if [ "${PD_V5:-0}" = "1" ]; then echo "USAGE: proot-distro restore [OPTIONS] [BACKUP_FILE]";
+            else echo "USAGE: proot-distro restore NAME --input FILE"; fi
+        else echo "STUB-PD-restore-OK: $*"; fi ;;
+    login|backup|remove) echo "STUB-PD-$1-OK" ;;
     kill) echo "STUB-PD-KILL: $*" >&2 ;;
     *) echo "STUB-PD-OK" ;;
 esac
@@ -184,6 +196,9 @@ check "D x11 branch" 'startxfce4' "$T/prefix/bin/start-linux"
 check "D x11 dbus fallback" 'command -v dbus-launch' "$T/prefix/bin/start-linux"
 check_absent "D virgl skipped" 'virglrenderer-android' "$T/d.log"
 check "D x11 pkg" 'x11-repo' "$T/d.log"
+check "D x11 user fallback" 'X11_USER="${USER_NAME:-${LINUX_USER:-user}}"' "$T/prefix/bin/start-linux"
+check "D x11 private runtime" "XDG_RUNTIME_DIR=/tmp/xdg-" "$T/prefix/bin/start-linux"
+check "D x11 detached" 'nohup termux-x11 :1' "$T/prefix/bin/start-linux"
 
 echo "===== E: guided fedora mate ====="
 fresh_env
@@ -442,6 +457,25 @@ else
 fi
 check "Q manager shown" 'Linux for Termux Manager' "$T/q.log"
 check "Q clean bye" 'Bye.' "$T/q.log"
+
+echo "===== R: proot-distro v5 image mode ====="
+fresh_env
+export PD_V5=1
+printf '%s\n' 2 8 4 '' v5alpine '' '' '' '' '' 1 n '' n n '' '' 13 \
+| bash "$REPO/install_linux.sh" > "$T/r.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: run r exit $rc"; }
+check_absent "R no plugin rejection" "knows no 'alpine'" "$T/r.log"
+check "R image install" 'STUB-PD-INSTALL-OK: install --name v5alpine alpine:latest' "$T/r.log"
+check "R completes" 'Installation complete!' "$T/r.log"
+# pd_is_v4 must recognise the modern restore interface (not just legacy plugins).
+mkdir -p "$T/prefix/bin"
+cp "$T/fakebin/proot-distro" "$T/prefix/bin/proot-distro"
+chmod +x "$T/prefix/bin/proot-distro"
+MODERN=$(PREFIX="$T/prefix" PATH="$T/fakebin:/usr/bin:/bin" PD_V5=1 bash -c '
+source <(sed -n "/^pd_is_v4()/,/^}/p" "$1")
+pd_is_v4 && echo MODERN || echo LEGACY
+' _ "$REPO/install_linux.sh")
+[ "$MODERN" = "MODERN" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: R pd_is_v4 did not detect v5 ($MODERN)"; }
+unset PD_V5
 
 echo ""
 echo "PASS=$pass FAIL=$fail"
