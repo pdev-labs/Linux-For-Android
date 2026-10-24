@@ -25,6 +25,8 @@
 set -u
 cd "$(dirname "$0")/.." || exit 1
 REPO="$PWD"
+REAL_PREFIX="${PREFIX:-}"   # Termux provides bash/coreutils here
+export REAL_PREFIX
 command -v timeout >/dev/null 2>&1 || { echo "need 'timeout' (coreutils)"; exit 2; }
 
 T="$REPO/.test-tmp"
@@ -119,7 +121,8 @@ pass=0; fail=0
 fresh_env() { # reset HOME/PREFIX, keep stubs
     rm -rf "$T/home" "$T/prefix"
     mkdir -p "$T/home" "$T/prefix/bin" "$T/prefix/tmp"
-    export HOME="$T/home" PREFIX="$T/prefix" PATH="$T/fakebin:/usr/bin:/bin" TERM=""
+    export HOME="$T/home" PREFIX="$T/prefix" \
+        PATH="$T/fakebin${REAL_PREFIX:+:$REAL_PREFIX/bin}:/usr/bin:/bin" TERM=""
     unset GETPROP_SDK FREE_MB PD_V4
 }
 run_script() { # $1=logname, rest of stdin via caller pipe; needs $T/tmpin set
@@ -302,15 +305,16 @@ fresh_env
 printf '%s\n' 2 2 4 '' '' '' '' '' '' '' 1 'n' '' 'n' 'n' '' '' '13' \
 | bash "$REPO/install_linux.sh" > "$T/l.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: run l exit $rc"; }
 S=$(setup_sh_of)
-python3 - "$S" <<'EOF'
+SHIM="${TMPDIR:-/tmp}/lfa-shim-test"
+python3 - "$S" "$SHIM" <<'EOF'
 import re, sys
 src = open(sys.argv[1]).read()
 m = re.search(r"cat << 'SUDO' > /usr/local/bin/sudo\n(.*?)\nSUDO\n", src, re.S)
-open('/tmp/opencode-shim-test','w').write(m.group(1))
+open(sys.argv[2],'w').write(m.group(1))
 EOF
 if command -v script >/dev/null 2>&1; then
-    printf 'wrong\nroot\n' | script -qec "sh /tmp/opencode-shim-test echo SHIM-OK" /dev/null 2>&1 | tail -1 | grep -q SHIM-OK && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: L ritual"; }
-    printf 'a\nb\nc\n' | script -qec "sh /tmp/opencode-shim-test echo HI" /dev/null 2>&1 | tail -1 | grep -q "3 incorrect" && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: L rejects"; }
+    printf 'wrong\nroot\n' | script -qec "sh $SHIM echo SHIM-OK" /dev/null 2>&1 | tail -1 | grep -q SHIM-OK && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: L ritual"; }
+    printf 'a\nb\nc\n' | script -qec "sh $SHIM echo HI" /dev/null 2>&1 | tail -1 | grep -q "3 incorrect" && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: L rejects"; }
 else
     echo "SKIP: L (no 'script' for pty test)"; pass=$((pass+2))
 fi
@@ -470,7 +474,7 @@ check "R completes" 'Installation complete!' "$T/r.log"
 mkdir -p "$T/prefix/bin"
 cp "$T/fakebin/proot-distro" "$T/prefix/bin/proot-distro"
 chmod +x "$T/prefix/bin/proot-distro"
-MODERN=$(PREFIX="$T/prefix" PATH="$T/fakebin:/usr/bin:/bin" PD_V5=1 bash -c '
+MODERN=$(PREFIX="$T/prefix" PATH="$T/fakebin${REAL_PREFIX:+:$REAL_PREFIX/bin}:/usr/bin:/bin" PD_V5=1 bash -c '
 source <(sed -n "/^pd_is_v4()/,/^}/p" "$1")
 pd_is_v4 && echo MODERN || echo LEGACY
 ' _ "$REPO/install_linux.sh")
