@@ -55,6 +55,10 @@ Currently supported distributions:
   ritual-only shim: it asks for the install password, then runs your command
   with the full access you already have. No silent failures, no surprises.
 - **Interactive, npm-style UI:** arrow-key menus with descriptions, Enter to choose, space to toggle multiple packages, y/n confirmations and coloured status screens. You can also type an option number (e.g. `10`). When stdin is piped (CI or `curl | bash`), every menu falls back to plain numbered prompts so automation never hangs.
+- **Software that actually installs:** the built-in software menu maps each choice to the right package for the distro — APT, DNF, Zypper, XBPS, Pacman and APK — including `python3-pip`/`py3-pip`, real Firefox, Chromium, LibreOffice, GIMP, VLC, VS Code, Node/npm and Google Antigravity IDE.
+- **Snap-free browsers on Ubuntu 24.04+:** Ubuntu’s snap-only Firefox and Chromium cannot run in proot, so the manager installs the official Mozilla ARM64 Firefox tarball and Debian bookworm’s Chromium, with an APT pin that keeps them from being replaced by snap stubs.
+- **Real Google Antigravity IDE:** installs the official ARM64 build into `/opt/antigravity-ide` and launches it with the dbus/GPU flags needed inside proot — no placeholder “terminal edition”.
+- **Persistent Chromium GPU toggle:** the managed `/etc/lfa-chromium-flags` file lets the acceleration menu add/remove VirGL flags without ever overwriting the proot-safe Chromium wrapper.
 - **Robust uninstaller:** shows the instance, distro/desktop, rootfs path and size; asks for confirmation; stops active sessions first; verifies removal and cleans up half-deleted containers or legacy ghost entries left by older versions.
 - **proot-distro v3 / v4 / v5 aware:** reads the real rootfs from `installed-rootfs/` (older) or `containers/<name>/rootfs` (v4+), and understands v5's OCI image installs (`alpine:latest`, etc.) plus its `restore FILE` interface. Doctor, migration, backup/restore and the launchers work on all layouts.
 - **Legacy Android Auto-Support:** Android 5/6 devices are detected and get
@@ -62,6 +66,8 @@ Currently supported distributions:
   options, and workarounds for old `proot` — all automatically.
 - **VirGL 3D Hardware Acceleration:** Automatically configures `virglrenderer-android`, passing 3D OpenGL rendering directly to your phone's physical GPU for incredibly smooth graphics.
 - **Hardware Acceleration (Termux:X11):** Choose between traditional VNC (software rendering) or Termux:X11 for a much smoother, hardware-accelerated desktop experience.
+- **VNC that survives proot:** modern TigerVNC config, an `exec`-style desktop session, and a persistent proot keepalive (so `--kill-on-exit` cannot kill the server). `stop-linux` cleans up the server and its PID file, and `vncpasswd -f` accepts the default short passwords.
+- **Fail-safe installs:** repository and package operations retry, and the installer refuses to print “Installation complete” when the chosen desktop or VNC components are missing.
 - **Dynamic Display Settings:** Dynamically pick your screen resolution and UI scaling (Auto, 720p, 1080p, or Tablet size) to perfectly fit your device.
 
 ### Automation & Management
@@ -348,7 +354,7 @@ installs; needs only `bash`, `coreutils`, `timeout`, and `python3` (plus
 `script` from util-linux for the pty test, skipped if absent):
 ```bash
 chmod +x tests/test-all.sh
-./tests/test-all.sh   # expect: PASS=158 FAIL=0
+./tests/test-all.sh   # expect: PASS=195 FAIL=0
 ```
 
 ## 📝 License

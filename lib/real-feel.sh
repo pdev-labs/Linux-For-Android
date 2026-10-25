@@ -43,7 +43,7 @@ printf '\n'
 WELCOME
 
 # ---------------- hide Termux/Android host variables ----------------
-cat > "$R/etc/profile.d/01-lfa-env.sh" <<'CLEAN'
+cat > "$R/etc/profile.d/zz-lfa-env.sh" <<'CLEAN'
 #!/bin/sh
 # Make `env` look like a normal Linux box.
 for _v in $(env 2>/dev/null | sed -n 's/^\(TERMUX[^=]*\|ANDROID[^=]*\|EXTERNAL_STORAGE\|PREFIX\|LD_PRELOAD\|TMPDIR\)=.*/\1/p'); do
@@ -52,6 +52,19 @@ done
 unset _v
 case "${SHELL:-}" in /data/data/*) SHELL=/bin/bash; export SHELL ;; esac
 case "${TERM:-}" in xterm-ghostty|xterm-kitty|alacritty) TERM=xterm-256color; export TERM ;; esac
+# Do not let an uninstalled guest command fall through to a Termux binary
+# (e.g. `apt-get` on Fedora picking up Termux's apt-get). Keep only paths
+# that belong to the Linux guest.
+_clean_path=""; _ifs="$IFS"; IFS=:
+for _p in $PATH; do
+    case "$_p" in
+        /data/data/*|/data/user/*|/system/bin|/system/xbin|/vendor/bin|/product/bin) ;;
+        *) [ -n "$_p" ] && _clean_path="${_clean_path:+$_clean_path:}$_p" ;;
+    esac
+done
+IFS="$_ifs"
+[ -n "$_clean_path" ] && PATH="$_clean_path" && export PATH
+unset _clean_path _p _ifs
 CLEAN
 
 # ---------------- name host-mapped gids ----------------
@@ -111,7 +124,7 @@ write_prompt() {
         printf '%s\n' "alias l='ls -CF'"
         printf '%s\n' "alias grep='grep --color=auto'"
         printf '%s\n' 'HISTCONTROL=ignoreboth'
-        printf '%s\n' '[ -f /etc/profile.d/01-lfa-env.sh ] && . /etc/profile.d/01-lfa-env.sh'
+        printf '%s\n' '[ -f /etc/profile.d/zz-lfa-env.sh ] && . /etc/profile.d/zz-lfa-env.sh'
         printf '%s\n' '[ -f /etc/profile.d/00-lfa-welcome.sh ] && . /etc/profile.d/00-lfa-welcome.sh'
         printf '%s\n' '# <<< linux-for-android prompt <<<'
     } >> "$_rc"
@@ -120,5 +133,32 @@ write_prompt() {
 write_prompt "$R/root/.bashrc" '#' '01;31'
 write_prompt "$R/home/$USER_NAME/.bashrc" '$' '01;32'
 write_prompt "$R/etc/skel/.bashrc" '$' '01;32'
+
+# Login shells read /etc/profile + ~/.profile, not ~/.bashrc. Make the
+# profile pull in .bashrc so the prompt, PATH cleanup and aliases apply even
+# when the login shell is forced to bash for consistency.
+write_profile() {
+    _pf="$1"
+    [ -f "$_pf" ] || : > "$_pf"
+    sed -i '/# >>> linux-for-android profile >>>/,/# <<< linux-for-android profile <<</d' "$_pf" 2>/dev/null || true
+    {
+        printf '%s\n' '# >>> linux-for-android profile >>>'
+        printf '%s\n' '[ -n "$BASH_VERSION" ] && [ -f "$HOME/.bashrc" ] && . "$HOME/.bashrc"'
+        printf '%s\n' '# <<< linux-for-android profile <<<'
+    } >> "$_pf"
+}
+write_profile "$R/root/.profile"
+write_profile "$R/home/$USER_NAME/.profile"
+write_profile "$R/etc/skel/.profile"
+
+# Remove the old early env script: termux-profile.sh runs after 01-* and
+# would re-add the Termux PATH. The zz-* script runs last and wins.
+rm -f "$R/etc/profile.d/01-lfa-env.sh" 2>/dev/null || true
+
+# Profile snippets must be readable by the unprivileged desktop user.
+chmod 644 "$R/etc/profile.d/00-lfa-welcome.sh" \
+           "$R/etc/profile.d/zz-lfa-env.sh" 2>/dev/null || true
+chmod 644 "$R/root/.profile" "$R/home/$USER_NAME/.profile" \
+           "$R/root/.bashrc" "$R/home/$USER_NAME/.bashrc" 2>/dev/null || true
 
 exit 0

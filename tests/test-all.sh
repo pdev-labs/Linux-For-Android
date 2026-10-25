@@ -63,6 +63,7 @@ case "$1" in
             else echo "USAGE: proot-distro restore NAME --input FILE"; fi
         else echo "STUB-PD-restore-OK: $*"; fi ;;
     login|backup|remove) echo "STUB-PD-$1-OK" ;;
+    run) echo "STUB-PD-run-OK: $*" ;;
     kill) echo "STUB-PD-KILL: $*" >&2 ;;
     *) echo "STUB-PD-OK" ;;
 esac
@@ -174,7 +175,7 @@ check_absent "C placeholders" '__LUSER__' "$S"
 check_absent "C placeholders" '__UPASS_B64__' "$S"
 check_absent "C placeholders" '__SPASS_B64__' "$S"
 check_absent "C placeholders" '__TZ__' "$S"
-check "C start user" '--user dev' "$T/prefix/bin/start-linux"
+check "C start user" '--user "$X11_USER"' "$T/prefix/bin/start-linux"
 check_absent "C start placeholders" '__LUSER__' "$T/prefix/bin/start-linux"
 check "C conf user" 'USER_NAME="dev"' "$T/prefix/var/lib/proot-distro/installed-rootfs/debian/etc/termux-linux-manager.conf"
 check "C polish call" 'Applying Linux polish' "$S"
@@ -219,8 +220,8 @@ printf '%s\n' 2 8 2 2 1 1 '' 'myalpine' '' '' '' '' '' 1 'n' '' 'n' 'n' '' '' '1
 check "F remap" 'DE="xfce4"' "$T/home/.config/linux-for-android/setup.conf"
 S=$(setup_sh_of)
 check "F apk" 'apk add' "$S"
-check "F vnc expect" 'spawn vncpasswd' "$S"
-check "F expect decodes" 'set vpw [exec echo' "$S"
+check "F vncpasswd" 'vncpasswd -f' "$S"
+check_absent "F no expect" 'spawn vncpasswd' "$S"
 bash -n "$S" && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: F setup syntax"; }
 
 echo "===== G: legacy debian -> bullseye ====="
@@ -414,7 +415,8 @@ check "N colored prompt" '01;32' "$NROOT/home/user/.bashrc"
 check "N hostname shim" 'cat /etc/hostname' "$NROOT/usr/local/bin/hostname"
 check "N etc hostname synced" 'oldphone' "$NROOT/etc/hostname"
 check "N welcome banner" 'Welcome to' "$NROOT/etc/profile.d/00-lfa-welcome.sh"
-check "N env cleanup" 'TERMUX' "$NROOT/etc/profile.d/01-lfa-env.sh"
+check "N env cleanup" 'TERMUX' "$NROOT/etc/profile.d/zz-lfa-env.sh"
+check "N login profile" 'linux-for-android profile' "$NROOT/home/user/.profile"
 check "N launcher updated" 'command -v dbus-launch' "$T/prefix/bin/start-linux"
 check "N xstartup updated" 'startxfce4' "$NROOT/home/user/.vnc/xstartup"
 [ -f "$T/prefix/tmp/lfa-upgrade.sh" ] && bash -n "$T/prefix/tmp/lfa-upgrade.sh" && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: N upgrade script missing/invalid"; }
@@ -480,6 +482,71 @@ pd_is_v4 && echo MODERN || echo LEGACY
 ' _ "$REPO/install_linux.sh")
 [ "$MODERN" = "MODERN" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: R pd_is_v4 did not detect v5 ($MODERN)"; }
 unset PD_V5
+
+echo "===== S: software menu, pip/npm, browsers, Antigravity ====="
+fresh_env
+printf '%s\n' 2 1 4 '1 2 3 6 7 8 9 10 11 12 13 14' softinst suser '' '' UTC softinst 1 n '' n n '' '' 13 \
+| bash "$REPO/install_linux.sh" > "$T/s.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: run s exit $rc"; }
+S=$(setup_sh_of)
+check "S python pip" 'python3 python3-pip' "$S"
+check "S node npm" 'nodejs npm' "$S"
+check "S firefox tarball" 'linux64-aarch64' "$S"
+check "S chromium debian" 'debian-chromium.list' "$S"
+check "S chromium wrapper" 'lfa-chromium-flags' "$S"
+check "S apt retries" 'Repository update failed' "$S"
+check "S apt fix-missing" '--fix-missing' "$S"
+check "S core verify" 'Core installation incomplete' "$S"
+check "S antigravity real" 'antigravity.google/download' "$S"
+check_absent "S antigravity placeholder" 'Terminal Edition' "$S"
+
+# On Debian/Kali, Firefox must use firefox-esr (no `firefox` package).
+fresh_env
+printf '%s\n' 2 2 4 '7 8' debsoft '' '' '' UTC debsoft 1 n '' n n '' '' 13 \
+| bash "$REPO/install_linux.sh" > "$T/s2.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: run s2 exit $rc"; }
+S=$(setup_sh_of)
+check "S debian firefox-esr" 'firefox-esr' "$S"
+
+echo "===== T: Void bootstrap via proot-distro run ====="
+fresh_env
+export PD_V5=1
+printf '%s\n' 2 6 4 '' voidinst vuser '' '' UTC voidinst 1 n '' n n '' '' 13 \
+| bash "$REPO/install_linux.sh" > "$T/t.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: run t exit $rc"; }
+check "T void bootstrap message" 'Bootstrapping Void base tools' "$T/t.log"
+check "T void uses run" 'STUB-PD-run-OK: run' "$T/t.log"
+check "T void bash shadow" 'xbps-install -y bash shadow' "$T/t.log"
+
+echo "===== U: guest PATH hygiene ====="
+check "U clean path" '_clean_path' "$T/prefix/tmp/lfa-real-feel.sh"
+check "U drops termux" '/data/data/*' "$T/prefix/tmp/lfa-real-feel.sh"
+
+echo "===== V: VNC correctness (TigerVNC 1.15, keepalive) ====="
+fresh_env
+export PD_V5=1
+printf '%s\n' 2 2 2 2 2 1 '' vnctest vncuser 123 123 UTC vnctest 1 n '' n n '' '' 13 \
+| bash "$REPO/install_linux.sh" > "$T/v.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: run v exit $rc"; }
+VS=$(setup_sh_of)
+check "V both config dirs" 'mkdir -p /home/vncuser/.vnc /home/vncuser/.config/tigervnc' "$VS"
+check "V exec desktop" 'exec dbus-launch --exit-with-session startlxde' "$VS"
+check "V clean PATH" 'export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin' "$VS"
+check "V password gate" 'vnc-password' "$VS"
+check "V noninteractive vncpasswd" 'vncpasswd -f' "$VS"
+check "V keepalive launcher" 'while :; do sleep 3600; done' "$T/prefix/bin/start-linux"
+check "V stop pidfile" 'lfa-vnc-$DISTRO.pid' "$T/prefix/bin/stop-linux"
+check "V start uses bash login" '/bin/bash -l' "$T/prefix/bin/start-linux"
+check "V terminal uses bash login" '/bin/bash -l' "$T/prefix/bin/terminal-linux"
+check "V terminal reads conf user" 'TERM_USER="${USER_NAME:-${LINUX_USER:-user}}"' "$T/prefix/bin/terminal-linux"
+check_absent "V no baked terminal user" '--user __LUSER__' "$T/prefix/bin/terminal-linux"
+check "V start user dynamic" '--user "$X11_USER"' "$T/prefix/bin/start-linux"
+check "V stop user dynamic" '--user "$VNC_USER"' "$T/prefix/bin/stop-linux"
+
+echo "===== W: Alpine fastfetch/neofetch alias ====="
+fresh_env
+export PD_V5=1
+printf '%s\n' 2 8 4 '13' alpineapp auser '' '' UTC alpineapp 1 n '' n n '' '' 13 \
+| bash "$REPO/install_linux.sh" > "$T/w.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: run w exit $rc"; }
+WA=$(setup_sh_of)
+check "W alpine fastfetch" 'fastfetch' "$WA"
+check "W alpine neofetch alias" 'ln -sf /usr/bin/fastfetch /usr/local/bin/neofetch' "$WA"
 
 echo ""
 echo "PASS=$pass FAIL=$fail"

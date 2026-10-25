@@ -10,7 +10,7 @@ fi
 
 # Directory containing this script (lib/ lives next to it).
 LFA_DIR="$(cd "$(dirname "$0")" && pwd)"
-LFA_VERSION="1.5.1"
+LFA_VERSION="1.5.2"
 
 # ============================================================
 # Interactive UI (npm-style)
@@ -1289,8 +1289,12 @@ upgrade_existing() {
     fi
 
     # 4. Refresh the VNC xstartup (newer versions tolerate missing dbus).
-    local XSTART="$ROOTFS/home/$LINUX_USER/.vnc/xstartup"
-    if [ -f "$XSTART" ] || [ "$SERVER" = "vnc" ]; then
+    # TigerVNC 1.15 uses ~/.config/tigervnc and kills the session if xstartup
+    # exits, so the desktop must be exec'd in the foreground. Write both the
+    # legacy and modern locations, and carry the password across.
+    local XVNC="$ROOTFS/home/$LINUX_USER/.vnc"
+    local XCFG="$ROOTFS/home/$LINUX_USER/.config/tigervnc"
+    if [ -f "$XVNC/xstartup" ] || [ "$SERVER" = "vnc" ]; then
         local SES=""
         case "$DE" in
             xfce4|xfce) SES="startxfce4" ;;
@@ -1298,26 +1302,28 @@ upgrade_existing() {
             mate)       SES="mate-session" ;;
         esac
         if [ -n "$SES" ]; then
-            mkdir -p "$(dirname "$XSTART")"
-            if [ "$DE" = "mate" ]; then
+            mkdir -p "$XVNC" "$XCFG"
+            if [ -s "$XVNC/passwd" ] && [ ! -s "$XCFG/passwd" ]; then
+                cp "$XVNC/passwd" "$XCFG/passwd"
+            fi
+            chmod 600 "$XVNC/passwd" "$XCFG/passwd" 2>/dev/null || true
+            for XSTART in "$XVNC/xstartup" "$XCFG/xstartup"; do
                 cat > "$XSTART" <<EOF
 #!/bin/sh
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 export PULSE_SERVER=127.0.0.1
+export XDG_RUNTIME_DIR="/tmp/xdg-\$(id -un)"
+mkdir -p "\$XDG_RUNTIME_DIR"
+chmod 700 "\$XDG_RUNTIME_DIR"
 if command -v dbus-launch >/dev/null 2>&1; then
-    dbus-launch --exit-with-session $SES &
+    exec dbus-launch --exit-with-session $SES
 else
-    $SES &
+    exec $SES
 fi
 EOF
-            else
-                cat > "$XSTART" <<EOF
-#!/bin/sh
-export PULSE_SERVER=127.0.0.1
-$SES &
-EOF
-            fi
-            chmod 755 "$XSTART"
-            echo "[*] Refreshed VNC xstartup."
+                chmod 755 "$XSTART"
+            done
+            echo "[*] Refreshed VNC xstartup (legacy + modern TigerVNC)."
         fi
     fi
 
@@ -1496,17 +1502,22 @@ optimize_browser() {
     if [ "$OPT_CHOICE" == "1" ]; then
         echo "[*] Optimizing Chromium for Hardware Accelerated Video Decoding..."
         proot-distro login $(pd_login_flags) "$INSTANCE_NAME" -- bash -c '
-cat << EOF > /usr/local/bin/chromium
-#!/bin/bash
-/usr/bin/chromium --ignore-gpu-blocklist --enable-gpu-rasterization --enable-zero-copy --use-gl=egl "\$@" 2>/dev/null
-EOF
-chmod +x /usr/local/bin/chromium
-
-cat << EOF > /usr/local/bin/chromium-browser
-#!/bin/bash
-/usr/bin/chromium-browser --ignore-gpu-blocklist --enable-gpu-rasterization --enable-zero-copy --use-gl=egl "\$@" 2>/dev/null
-EOF
-chmod +x /usr/local/bin/chromium-browser
+mkdir -p /etc
+echo "--ignore-gpu-blocklist --enable-gpu-rasterization --enable-zero-copy --use-gl=egl" > /etc/lfa-chromium-flags
+if [ ! -x /usr/local/bin/chromium ]; then
+    REAL=""
+    [ -x /usr/bin/chromium ] && REAL=/usr/bin/chromium
+    [ -z "$REAL" ] && [ -x /usr/bin/chromium-browser ] && REAL=/usr/bin/chromium-browser
+    if [ -n "$REAL" ]; then
+        cat > /usr/local/bin/chromium <<WRAP
+#!/bin/sh
+FLAGS="\$(cat /etc/lfa-chromium-flags 2>/dev/null)"
+exec $REAL --no-sandbox --disable-dev-shm-usage \$FLAGS "\$@"
+WRAP
+        chmod +x /usr/local/bin/chromium
+        ln -sf /usr/local/bin/chromium /usr/local/bin/chromium-browser
+    fi
+fi
 '
         echo "========================================="
         ui_ok "Optimization complete! Chromium will now render using VirGL!"
@@ -1514,8 +1525,7 @@ chmod +x /usr/local/bin/chromium-browser
     elif [ "$OPT_CHOICE" == "2" ]; then
         echo "[*] Removing Hardware Acceleration Overrides..."
         proot-distro login $(pd_login_flags) "$INSTANCE_NAME" -- bash -c '
-rm -f /usr/local/bin/chromium
-rm -f /usr/local/bin/chromium-browser
+rm -f /etc/lfa-chromium-flags
 '
         echo "========================================="
         ui_ok "Hardware Acceleration disabled. Restored to default!"
@@ -1638,16 +1648,16 @@ else
     echo ""
     echo "No desktop installed (CLI only)."
     echo "1) Root terminal (default, admin)"
-    echo "2) User terminal ('__LUSER__' account)"
+    echo "2) User terminal ('$X11_USER' account)"
     read -p "Select [1-2]: " MODE_CHOICE
     if [ "$MODE_CHOICE" == "2" ]; then MODE="user"; else MODE="root"; fi
 fi
 
 if [ "$MODE" == "root" ]; then
-    proot-distro login $NO_SYSVIPC $DISTRO --shared-tmp
+    proot-distro login $NO_SYSVIPC $DISTRO --shared-tmp -- /bin/bash -l
     exit 0
 elif [ "$MODE" == "user" ]; then
-    proot-distro login $NO_SYSVIPC $DISTRO --user __LUSER__ --shared-tmp
+    proot-distro login $NO_SYSVIPC $DISTRO --user "$X11_USER" --shared-tmp -- /bin/bash -l
     exit 0
 fi
 
@@ -1699,7 +1709,18 @@ if [ "$SERVER" == "x11" ]; then
 elif [ "$SERVER" == "vnc" ]; then
     echo "Starting VNC Server..."
     if [ -z "$RESOLUTION" ]; then RESOLUTION="1280x720"; fi
-    proot-distro login $NO_SYSVIPC $DISTRO --user "$X11_USER" --shared-tmp -- bash -c "export PULSE_SERVER=127.0.0.1; $VIRGL_ENV vncserver -geometry $RESOLUTION :1"
+    VNC_PIDFILE="$PREFIX/tmp/lfa-vnc-$DISTRO.pid"
+    VNC_LOG="$PREFIX/tmp/lfa-vnc-$DISTRO.log"
+    if [ -f "$VNC_PIDFILE" ] && kill -0 "$(cat "$VNC_PIDFILE")" 2>/dev/null; then
+        echo "VNC server is already running on port 5901."
+    else
+        # proot-distro uses --kill-on-exit: a daemonised Xvnc dies as soon as
+        # the login command returns. Keep the login session alive in the
+        # background so the VNC server (and its desktop) persists.
+        nohup proot-distro login $NO_SYSVIPC $DISTRO --user "$X11_USER" --shared-tmp -- bash -c "export PULSE_SERVER=127.0.0.1; $VIRGL_ENV vncserver -geometry $RESOLUTION :1; rc=\$?; [ \$rc -eq 0 ] || exit \$rc; while :; do sleep 3600; done" > "$VNC_LOG" 2>&1 &
+        echo $! > "$VNC_PIDFILE"
+        echo "VNC server started on port 5901 (log: $VNC_LOG)."
+    fi
 fi
 EOF
     chmod +x $PREFIX/bin/start-linux
@@ -1742,6 +1763,7 @@ else
     SERVER="none"
 fi
 DISTRO="$INSTANCE_NAME"
+VNC_USER="${USER_NAME:-${LINUX_USER:-user}}"
 
 NO_SYSVIPC=""
 if ! proot --help 2>&1 | grep -q "sysvipc"; then
@@ -1765,7 +1787,13 @@ if [ "$SERVER" == "x11" ]; then
     pkill -f "^termux-x11" 2>/dev/null || true
 elif [ "$SERVER" == "vnc" ]; then
     echo "Stopping VNC Server..."
-    proot-distro login $NO_SYSVIPC $DISTRO --user __LUSER__ --shared-tmp -- bash -c "vncserver -kill :1" 2>/dev/null || true
+    VNC_PIDFILE="$PREFIX/tmp/lfa-vnc-$DISTRO.pid"
+    if [ -f "$VNC_PIDFILE" ]; then
+        VNC_PID="$(cat "$VNC_PIDFILE" 2>/dev/null || true)"
+        [ -n "$VNC_PID" ] && kill "$VNC_PID" 2>/dev/null || true
+        rm -f "$VNC_PIDFILE"
+    fi
+    proot-distro login $NO_SYSVIPC $DISTRO --user "$VNC_USER" --shared-tmp -- bash -c "vncserver -kill :1" 2>/dev/null || true
 fi
 EOF
     chmod +x $PREFIX/bin/stop-linux
@@ -1802,6 +1830,14 @@ else
     DISTRO=${DISTROS[$idx]}
 fi
 
+CONF_FILE="$(lfa_conf "$DISTRO")"
+INSTANCE_NAME="$DISTRO"
+if [ -f "$CONF_FILE" ]; then
+    source "$CONF_FILE"
+fi
+DISTRO="$INSTANCE_NAME"
+TERM_USER="${USER_NAME:-${LINUX_USER:-user}}"
+
 NO_SYSVIPC=""
 if ! proot --help 2>&1 | grep -q "sysvipc"; then
     if [ -f "$PREFIX/bin/proot-distro" ] && grep -q "no-sysvipc" "$PREFIX/bin/proot-distro" 2>/dev/null; then
@@ -1811,12 +1847,12 @@ fi
 
 echo ""
 echo "1) Root terminal (admin)"
-echo "2) User terminal ('__LUSER__' account)"
+echo "2) User terminal ('$TERM_USER' account)"
 read -p "Select [1-2, default 1]: " TERM_CHOICE
 if [ "$TERM_CHOICE" == "2" ]; then
-    proot-distro login $NO_SYSVIPC $DISTRO --user __LUSER__ --shared-tmp
+    proot-distro login $NO_SYSVIPC $DISTRO --user "$TERM_USER" --shared-tmp -- /bin/bash -l
 else
-    proot-distro login $NO_SYSVIPC $DISTRO --shared-tmp
+    proot-distro login $NO_SYSVIPC $DISTRO --shared-tmp -- /bin/bash -l
 fi
 EOF
     chmod +x $PREFIX/bin/terminal-linux
@@ -2150,21 +2186,24 @@ install_linux() {
     # Configure package manager mapping
     case "$DISTRO" in
         ubuntu|debian|kali)
-            UPDATE_CMD="apt-get update -y && apt-get upgrade -y"
-            INSTALL_CMD="apt-get install -y"
+            UPDATE_CMD="apt-get -o Acquire::Retries=5 update -y && apt-get -o Acquire::Retries=5 upgrade -y"
+            INSTALL_CMD="apt-get install -y --fix-missing"
             XFCE_PKG="xfce4 xfce4-goodies dbus-x11"
             LXDE_PKG="lxde dbus-x11"
             MATE_PKG="mate-desktop-environment dbus-x11"
-            VNC_PKG="tigervnc-standalone-server expect"
+            VNC_PKG="tigervnc-standalone-server"
             SUDO_PKG=""
             SELECTED_PKGS=""
-            if [ "$INSTALL_PYTHON" == "1" ]; then SELECTED_PKGS="$SELECTED_PKGS python3"; fi
+            if [ "$INSTALL_PYTHON" == "1" ]; then SELECTED_PKGS="$SELECTED_PKGS python3 python3-pip"; fi
             if [ "$INSTALL_GIT" == "1" ]; then SELECTED_PKGS="$SELECTED_PKGS git"; fi
-            if [ "$INSTALL_NODEJS" == "1" ]; then SELECTED_PKGS="$SELECTED_PKGS nodejs"; fi
+            if [ "$INSTALL_NODEJS" == "1" ]; then SELECTED_PKGS="$SELECTED_PKGS nodejs npm"; fi
             if [ "$INSTALL_CURL" == "1" ]; then SELECTED_PKGS="$SELECTED_PKGS curl"; fi
             if [ "$INSTALL_WGET" == "1" ]; then SELECTED_PKGS="$SELECTED_PKGS wget"; fi
-            if [ "$INSTALL_FIREFOX" == "1" ]; then SELECTED_PKGS="$SELECTED_PKGS firefox"; fi
-            if [ "$INSTALL_CHROMIUM" == "1" ]; then SELECTED_PKGS="$SELECTED_PKGS chromium-browser"; fi
+            # Ubuntu 24.04 ships snap-only Firefox/Chromium. They are installed
+            # from official/real debs by the special block below. Debian/Kali
+            # still have real packages (Firefox ESR).
+            if [ "$INSTALL_FIREFOX" == "1" ] && [ "$DISTRO" != "ubuntu" ]; then SELECTED_PKGS="$SELECTED_PKGS firefox-esr"; fi
+            if [ "$INSTALL_CHROMIUM" == "1" ] && [ "$DISTRO" != "ubuntu" ]; then SELECTED_PKGS="$SELECTED_PKGS chromium"; fi
             if [ "$INSTALL_LIBREOFFICE" == "1" ]; then SELECTED_PKGS="$SELECTED_PKGS libreoffice"; fi
             if [ "$INSTALL_VLC" == "1" ]; then SELECTED_PKGS="$SELECTED_PKGS vlc"; fi
             if [ "$INSTALL_GIMP" == "1" ]; then SELECTED_PKGS="$SELECTED_PKGS gimp"; fi
@@ -2179,12 +2218,12 @@ install_linux() {
             XFCE_PKG="xfce4 xfce4-goodies dbus"
             LXDE_PKG="lxde dbus"
             MATE_PKG="mate dbus"
-            VNC_PKG="tigervnc expect"
+            VNC_PKG="tigervnc"
             SUDO_PKG=""
             SELECTED_PKGS=""
-            if [ "$INSTALL_PYTHON" == "1" ]; then SELECTED_PKGS="$SELECTED_PKGS python"; fi
+            if [ "$INSTALL_PYTHON" == "1" ]; then SELECTED_PKGS="$SELECTED_PKGS python python-pip"; fi
             if [ "$INSTALL_GIT" == "1" ]; then SELECTED_PKGS="$SELECTED_PKGS git"; fi
-            if [ "$INSTALL_NODEJS" == "1" ]; then SELECTED_PKGS="$SELECTED_PKGS nodejs"; fi
+            if [ "$INSTALL_NODEJS" == "1" ]; then SELECTED_PKGS="$SELECTED_PKGS nodejs npm"; fi
             if [ "$INSTALL_CURL" == "1" ]; then SELECTED_PKGS="$SELECTED_PKGS curl"; fi
             if [ "$INSTALL_WGET" == "1" ]; then SELECTED_PKGS="$SELECTED_PKGS wget"; fi
             if [ "$INSTALL_FIREFOX" == "1" ]; then SELECTED_PKGS="$SELECTED_PKGS firefox"; fi
@@ -2202,12 +2241,12 @@ install_linux() {
             XFCE_PKG="xfce4-session xfce4-panel xfdesktop xfwm4 dbus-x11"
             LXDE_PKG="lxde-common lxsession dbus-x11"
             MATE_PKG="mate-desktop dbus-x11"
-            VNC_PKG="tigervnc-server expect"
+            VNC_PKG="tigervnc-server"
             SUDO_PKG=""
             SELECTED_PKGS=""
-            if [ "$INSTALL_PYTHON" == "1" ]; then SELECTED_PKGS="$SELECTED_PKGS python3"; fi
+            if [ "$INSTALL_PYTHON" == "1" ]; then SELECTED_PKGS="$SELECTED_PKGS python3 python3-pip"; fi
             if [ "$INSTALL_GIT" == "1" ]; then SELECTED_PKGS="$SELECTED_PKGS git"; fi
-            if [ "$INSTALL_NODEJS" == "1" ]; then SELECTED_PKGS="$SELECTED_PKGS nodejs"; fi
+            if [ "$INSTALL_NODEJS" == "1" ]; then SELECTED_PKGS="$SELECTED_PKGS nodejs npm"; fi
             if [ "$INSTALL_CURL" == "1" ]; then SELECTED_PKGS="$SELECTED_PKGS curl"; fi
             if [ "$INSTALL_WGET" == "1" ]; then SELECTED_PKGS="$SELECTED_PKGS wget"; fi
             if [ "$INSTALL_FIREFOX" == "1" ]; then SELECTED_PKGS="$SELECTED_PKGS firefox"; fi
@@ -2225,12 +2264,12 @@ install_linux() {
             XFCE_PKG="patterns-xfce-xfce dbus-1-x11"
             LXDE_PKG="patterns-lxde-lxde dbus-1-x11"
             MATE_PKG="patterns-mate-mate dbus-1-x11"
-            VNC_PKG="tigervnc expect"
+            VNC_PKG="tigervnc"
             SUDO_PKG=""
             SELECTED_PKGS=""
-            if [ "$INSTALL_PYTHON" == "1" ]; then SELECTED_PKGS="$SELECTED_PKGS python3"; fi
+            if [ "$INSTALL_PYTHON" == "1" ]; then SELECTED_PKGS="$SELECTED_PKGS python3 python3-pip"; fi
             if [ "$INSTALL_GIT" == "1" ]; then SELECTED_PKGS="$SELECTED_PKGS git"; fi
-            if [ "$INSTALL_NODEJS" == "1" ]; then SELECTED_PKGS="$SELECTED_PKGS nodejs"; fi
+            if [ "$INSTALL_NODEJS" == "1" ]; then SELECTED_PKGS="$SELECTED_PKGS nodejs npm"; fi
             if [ "$INSTALL_CURL" == "1" ]; then SELECTED_PKGS="$SELECTED_PKGS curl"; fi
             if [ "$INSTALL_WGET" == "1" ]; then SELECTED_PKGS="$SELECTED_PKGS wget"; fi
             if [ "$INSTALL_FIREFOX" == "1" ]; then SELECTED_PKGS="$SELECTED_PKGS MozillaFirefox"; fi
@@ -2248,12 +2287,12 @@ install_linux() {
             XFCE_PKG="xfce4 dbus"
             LXDE_PKG="lxde dbus"
             MATE_PKG="mate dbus"
-            VNC_PKG="tigervnc expect"
+            VNC_PKG="tigervnc"
             SUDO_PKG=""
             SELECTED_PKGS=""
-            if [ "$INSTALL_PYTHON" == "1" ]; then SELECTED_PKGS="$SELECTED_PKGS python3"; fi
+            if [ "$INSTALL_PYTHON" == "1" ]; then SELECTED_PKGS="$SELECTED_PKGS python3 python3-pip"; fi
             if [ "$INSTALL_GIT" == "1" ]; then SELECTED_PKGS="$SELECTED_PKGS git"; fi
-            if [ "$INSTALL_NODEJS" == "1" ]; then SELECTED_PKGS="$SELECTED_PKGS nodejs"; fi
+            if [ "$INSTALL_NODEJS" == "1" ]; then SELECTED_PKGS="$SELECTED_PKGS nodejs npm"; fi
             if [ "$INSTALL_CURL" == "1" ]; then SELECTED_PKGS="$SELECTED_PKGS curl"; fi
             if [ "$INSTALL_WGET" == "1" ]; then SELECTED_PKGS="$SELECTED_PKGS wget"; fi
             if [ "$INSTALL_FIREFOX" == "1" ]; then SELECTED_PKGS="$SELECTED_PKGS firefox"; fi
@@ -2275,16 +2314,16 @@ install_linux() {
             XFCE_PKG="xfce4 xfce4-terminal dbus"
             LXDE_PKG="xfce4 xfce4-terminal dbus"
             MATE_PKG="mate-desktop mate-session-manager marco mate-settings-daemon dbus"
-            VNC_PKG="tigervnc expect"
+            VNC_PKG="tigervnc"
             # shadow=useradd, bash=guest login shell (Alpine base lacks both).
             # No real sudo package: setuid elevation is impossible inside
             # proot (Android NO_NEW_PRIVS); setup installs a ritual-only
             # sudo shim instead (see below).
             SUDO_PKG="shadow bash"
             SELECTED_PKGS=""
-            if [ "$INSTALL_PYTHON" == "1" ]; then SELECTED_PKGS="$SELECTED_PKGS python3"; fi
+            if [ "$INSTALL_PYTHON" == "1" ]; then SELECTED_PKGS="$SELECTED_PKGS python3 py3-pip"; fi
             if [ "$INSTALL_GIT" == "1" ]; then SELECTED_PKGS="$SELECTED_PKGS git"; fi
-            if [ "$INSTALL_NODEJS" == "1" ]; then SELECTED_PKGS="$SELECTED_PKGS nodejs"; fi
+            if [ "$INSTALL_NODEJS" == "1" ]; then SELECTED_PKGS="$SELECTED_PKGS nodejs npm"; fi
             if [ "$INSTALL_CURL" == "1" ]; then SELECTED_PKGS="$SELECTED_PKGS curl"; fi
             if [ "$INSTALL_WGET" == "1" ]; then SELECTED_PKGS="$SELECTED_PKGS wget"; fi
             if [ "$INSTALL_FIREFOX" == "1" ]; then SELECTED_PKGS="$SELECTED_PKGS firefox"; fi
@@ -2384,7 +2423,13 @@ EOF
 
     cat << EOF >> "$SETUP_SCRIPT"
 echo " -> Updating repositories..."
-$UPDATE_CMD
+_LFA_UPD_OK=0
+for _lfa_i in 1 2 3; do
+    if $UPDATE_CMD; then _LFA_UPD_OK=1; break; fi
+    echo "[!] Repository update failed (attempt \$_lfa_i/3)."
+    [ "\$_lfa_i" -lt 3 ] && sleep 5
+done
+[ "\$_LFA_UPD_OK" = "1" ] || echo "[!] Continuing; package caches may still be usable."
 EOF
     
     APT_PKGS="$SUDO_PKG"
@@ -2397,7 +2442,13 @@ EOF
     if [ -n "$APT_PKGS" ]; then
         cat << EOF >> "$SETUP_SCRIPT"
 echo " -> Installing core packages ($APT_PKGS)..."
-$INSTALL_CMD $APT_PKGS
+_LFA_PKG_OK=0
+for _lfa_i in 1 2 3; do
+    if $INSTALL_CMD $APT_PKGS; then _LFA_PKG_OK=1; break; fi
+    echo "[!] Core package install failed (attempt \$_lfa_i/3)."
+    [ "\$_lfa_i" -lt 3 ] && sleep 8
+done
+[ "\$_LFA_PKG_OK" = "1" ] || echo "[!] Core package installation did not finish cleanly."
 EOF
     fi
 
@@ -2473,6 +2524,15 @@ EOF
         cat << EOF >> "$SETUP_SCRIPT"
 echo " -> Installing Selected Applications..."
 $INSTALL_CMD $SELECTED_PKGS || true
+EOF
+    fi
+    # Alpine has no neofetch package; fastfetch is the supported replacement.
+    # Expose the familiar `neofetch` command as well.
+    if [ "$DISTRO" = "alpine" ] && [ "$INSTALL_NEOFETCH" = "1" ]; then
+        cat << 'EOF' >> "$SETUP_SCRIPT"
+if [ -x /usr/bin/fastfetch ]; then
+    ln -sf /usr/bin/fastfetch /usr/local/bin/neofetch
+fi
 EOF
     fi
     
@@ -2655,69 +2715,150 @@ chmod +x /usr/local/bin/sudo
 EOF
     
     if [ "$INSTALL_IDE" == "1" ]; then
-        cat << 'EOF' >> "$SETUP_SCRIPT"
-echo " -> Installing Google Antigravity IDE..."
-cat << 'IDE' > /usr/local/bin/antigravity-ide
-#!/bin/bash
-echo "========================================="
-echo "   Welcome to Google Antigravity IDE!    "
-echo "   Powered by AI. (Terminal Edition)     "
-echo "========================================="
-nano
-IDE
-chmod +x /usr/local/bin/antigravity-ide
+        case "$DISTRO" in
+            ubuntu|debian|kali)
+                if [ "$DISTRO" == "ubuntu" ]; then
+                    AG_DEPS="curl ca-certificates xz-utils libnss3 libgtk-3-0 libgbm1 libasound2t64 libatk-bridge2.0-0 libatspi2.0-0 libcups2 libsecret-1-0 libxss1 libxtst6 libxshmfence1 libxdamage1 libxrandr2 libxcomposite1 libxfixes3 libxkbcommon0 libpango-1.0-0 libcairo2"
+                else
+                    AG_DEPS="curl ca-certificates xz-utils libnss3 libgtk-3-0 libgbm1 libasound2 libatk-bridge2.0-0 libatspi2.0-0 libcups2 libsecret-1-0 libxss1 libxtst6 libxshmfence1 libxdamage1 libxrandr2 libxcomposite1 libxfixes3 libxkbcommon0 libpango-1.0-0 libcairo2"
+                fi
+                cat << EOF >> "$SETUP_SCRIPT"
+echo " -> Installing Google Antigravity IDE (official ARM64 build)..."
+$INSTALL_CMD $AG_DEPS || true
+AG_PAGE="\$(curl -fsSL --compressed https://antigravity.google/download/ 2>/dev/null || true)"
+AG_URL="\$(printf '%s' "\$AG_PAGE" | grep -oE 'https://[^"]*/linux-arm/Antigravity%20IDE\.tar\.gz' | head -n1)"
+if [ -z "\$AG_URL" ]; then
+    echo "[!] Could not resolve the latest Antigravity URL; using known release."
+    AG_URL="https://edgedl.me.gvt1.com/edgedl/release2/j0qc3/antigravity/stable/2.5.5-4923483625488384/linux-arm/Antigravity%20IDE.tar.gz"
+fi
+mkdir -p /opt/antigravity-ide
+if curl -fL --retry 3 "\$AG_URL" -o /tmp/antigravity-ide.tar.gz; then
+    tar -xzf /tmp/antigravity-ide.tar.gz -C /opt/antigravity-ide --strip-components=1
+    rm -f /tmp/antigravity-ide.tar.gz
+    if [ -x /opt/antigravity-ide/antigravity-ide ]; then
+        cat > /usr/local/bin/antigravity-ide <<'WRAP'
+#!/bin/sh
+exec /opt/antigravity-ide/antigravity-ide --no-sandbox --disable-gpu --use-gl=swiftshader "\$@"
+WRAP
+        chmod +x /usr/local/bin/antigravity-ide
+        ln -sf /usr/local/bin/antigravity-ide /usr/local/bin/antigravity
+        echo "    Antigravity IDE installed at /opt/antigravity-ide"
+    else
+        echo "[!] Antigravity archive did not contain the expected binary."
+    fi
+else
+    echo "[!] Antigravity download failed; skipping."
+fi
 EOF
+                ;;
+            *)
+                cat << 'EOF' >> "$SETUP_SCRIPT"
+echo "[!] Antigravity IDE: automatic Linux ARM64 install is supported on Ubuntu/Debian/Kali."
+echo "    Download it for this distro from https://antigravity.google/download"
+EOF
+                ;;
+        esac
     fi
 
+    if [ "$INSTALL_FIREFOX" == "1" ] && [ "$DISTRO" == "ubuntu" ]; then
+        cat << 'EOF' >> "$SETUP_SCRIPT"
+echo " -> Installing Firefox (official ARM64 build, no snap)..."
+apt-get install -y curl ca-certificates xz-utils || true
+mkdir -p /opt
+if curl -fL --retry 3 'https://download.mozilla.org/?product=firefox-latest-ssl&os=linux64-aarch64&lang=en-US' -o /tmp/firefox.tar.xz; then
+    tar -xJf /tmp/firefox.tar.xz -C /opt
+    rm -f /tmp/firefox.tar.xz
+    cat > /usr/local/bin/firefox <<'WRAP'
+#!/bin/sh
+export MOZ_DISABLE_CONTENT_SANDBOX=1
+exec /opt/firefox/firefox "$@"
+WRAP
+    chmod +x /usr/local/bin/firefox
+    echo "    Firefox installed at /opt/firefox"
+else
+    echo "[!] Firefox download failed; skipping."
+fi
+EOF
+    fi
+    if [ "$INSTALL_CHROMIUM" == "1" ] && [ "$DISTRO" == "ubuntu" ]; then
+        cat << 'EOF' >> "$SETUP_SCRIPT"
+echo " -> Installing Chromium (Debian arm64 build for Ubuntu)..."
+apt-get install -y curl ca-certificates gnupg debian-archive-keyring || true
+install -d -m 0755 /etc/apt/keyrings
+if [ -f /usr/share/keyrings/debian-archive-keyring.gpg ]; then
+    echo 'deb [signed-by=/usr/share/keyrings/debian-archive-keyring.gpg] http://deb.debian.org/debian bookworm main' > /etc/apt/sources.list.d/debian-chromium.list
+    printf 'Package: *\nPin: release n=bookworm\nPin-Priority: 100\n' > /etc/apt/preferences.d/99-lfa-debian
+    apt-get update -y || true
+    DEBIAN_FRONTEND=noninteractive apt-get install -y chromium chromium-common || true
+else
+    echo "[!] Debian archive keyring missing; skipping Chromium."
+fi
+EOF
+    fi
+    # A proot-safe Chromium launcher: Chromium's sandbox cannot work inside
+    # PRoot, and GPU flags are toggled through /etc/lfa-chromium-flags so the
+    # browser-acceleration menu never destroys the launcher.
+    if [ "$INSTALL_CHROMIUM" == "1" ]; then
+        cat << 'EOF' >> "$SETUP_SCRIPT"
+echo " -> Creating proot-safe Chromium launcher..."
+REAL_CHROMIUM=""
+[ -x /usr/bin/chromium ] && REAL_CHROMIUM=/usr/bin/chromium
+[ -z "$REAL_CHROMIUM" ] && [ -x /usr/bin/chromium-browser ] && REAL_CHROMIUM=/usr/bin/chromium-browser
+if [ -n "$REAL_CHROMIUM" ]; then
+    cat > /usr/local/bin/chromium <<'WRAP'
+#!/bin/sh
+FLAGS="$(cat /etc/lfa-chromium-flags 2>/dev/null)"
+exec __REAL__ --no-sandbox --disable-dev-shm-usage --use-gl=swiftshader $FLAGS "$@"
+WRAP
+    sed -i "s|__REAL__|$REAL_CHROMIUM|" /usr/local/bin/chromium
+    chmod +x /usr/local/bin/chromium
+    ln -sf /usr/local/bin/chromium /usr/local/bin/chromium-browser
+    echo "    Chromium launcher ready ($REAL_CHROMIUM)."
+else
+    echo "[!] Chromium binary not found after package install."
+fi
+EOF
+    fi
     if [ "$SERVER" == "vnc" ]; then
         cat << 'EOF' >> "$SETUP_SCRIPT"
 echo " -> Configuring VNC password..."
 mkdir -p /home/__LUSER__/.vnc
-expect << 'EOD'
-set vpw [exec echo __UPASS_B64__ | base64 -d]
-spawn vncpasswd /home/__LUSER__/.vnc/passwd
-expect "Password:"
-send "$vpw\r"
-expect "Verify:"
-send "$vpw\r"
-expect "Would you like to enter a view-only password (y/n)?"
-send "n\r"
-expect eof
-EOD
+VPW="$(echo '__UPASS_B64__' | base64 -d 2>/dev/null)"
+if [ -n "$VPW" ]; then
+    printf '%s\n' "$VPW" | vncpasswd -f > /home/__LUSER__/.vnc/passwd
+fi
+unset VPW
 EOF
-        if [ "$DE" == "xfce4" ]; then
-            cat << 'EOF' >> "$SETUP_SCRIPT"
-cat << 'STARTUP' > /home/__LUSER__/.vnc/xstartup
+        local _vnc_ses=""
+        case "$DE" in
+            xfce4|xfce) _vnc_ses="startxfce4" ;;
+            lxde)       _vnc_ses="startlxde" ;;
+            mate)       _vnc_ses="mate-session" ;;
+        esac
+        if [ -n "$_vnc_ses" ]; then
+            cat << EOF >> "$SETUP_SCRIPT"
+mkdir -p /home/__LUSER__/.vnc /home/__LUSER__/.config/tigervnc
+cp -f /home/__LUSER__/.vnc/passwd /home/__LUSER__/.config/tigervnc/passwd 2>/dev/null || true
+for _lfa_vdir in /home/__LUSER__/.vnc /home/__LUSER__/.config/tigervnc; do
+cat > "\$_lfa_vdir/xstartup" <<'STARTUP'
 #!/bin/sh
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 export PULSE_SERVER=127.0.0.1
-startxfce4 &
-STARTUP
-EOF
-        elif [ "$DE" == "lxde" ]; then
-            cat << 'EOF' >> "$SETUP_SCRIPT"
-cat << 'STARTUP' > /home/__LUSER__/.vnc/xstartup
-#!/bin/sh
-export PULSE_SERVER=127.0.0.1
-startlxde &
-STARTUP
-EOF
-        elif [ "$DE" == "mate" ]; then
-            cat << 'EOF' >> "$SETUP_SCRIPT"
-cat << 'STARTUP' > /home/__LUSER__/.vnc/xstartup
-#!/bin/sh
-export PULSE_SERVER=127.0.0.1
+export XDG_RUNTIME_DIR="/tmp/xdg-\$(id -un)"
+mkdir -p "\$XDG_RUNTIME_DIR"
+chmod 700 "\$XDG_RUNTIME_DIR"
 if command -v dbus-launch >/dev/null 2>&1; then
-    dbus-launch --exit-with-session mate-session &
+    exec dbus-launch --exit-with-session $_vnc_ses
 else
-    mate-session &
+    exec $_vnc_ses
 fi
 STARTUP
+chmod +x "\$_lfa_vdir/xstartup"
+done
+chmod 600 /home/__LUSER__/.vnc/passwd /home/__LUSER__/.config/tigervnc/passwd 2>/dev/null || true
+chown -R __LUSER__:__LUSER__ /home/__LUSER__/.vnc /home/__LUSER__/.config/tigervnc
 EOF
         fi
-        cat << 'EOF' >> "$SETUP_SCRIPT"
-chmod +x /home/__LUSER__/.vnc/xstartup
-chown -R __LUSER__:__LUSER__ /home/__LUSER__/.vnc
-EOF
     fi
     
     # Timezone / hostname / shell prompt (from guided setup; skipped when
@@ -2752,6 +2893,29 @@ LFA_USER="__LUSER__" LFA_HOSTNAME="__HOSTNAME__" LFA_PSTYLE="__PSTYLE__" bash /t
 EOF
     fi
 
+    # A failed mirror download must not be reported as a successful install.
+    # Verify the components that make the chosen session usable; software
+    # choices are checked by their own installers but this gate catches the
+    # common "apt/dnf died halfway" case.
+    cat << EOF >> "$SETUP_SCRIPT"
+echo " -> Verifying core desktop/VNC components..."
+MISSING_CORE=""
+if [ "$DE" = "xfce4" ] && ! command -v xfce4-session >/dev/null 2>&1; then MISSING_CORE="\$MISSING_CORE xfce4-session"; fi
+if [ "$DE" = "lxde" ] && ! command -v startlxde >/dev/null 2>&1; then MISSING_CORE="\$MISSING_CORE lxde"; fi
+if [ "$DE" = "mate" ] && ! command -v mate-session >/dev/null 2>&1; then MISSING_CORE="\$MISSING_CORE mate-session"; fi
+if [ "$SERVER" = "vnc" ] && ! command -v vncserver >/dev/null 2>&1; then MISSING_CORE="\$MISSING_CORE vncserver"; fi
+if [ "$SERVER" = "vnc" ] && [ ! -s /home/$LINUX_USER/.config/tigervnc/passwd ] && [ ! -s /home/$LINUX_USER/.vnc/passwd ]; then MISSING_CORE="\$MISSING_CORE vnc-password"; fi
+if [ -n "\$MISSING_CORE" ]; then
+    echo "========================================="
+    echo "[!] Core installation incomplete:\$MISSING_CORE"
+    echo "    This is usually a repository/network failure."
+    echo "    Re-run the installer, or use menu 0 (Doctor) to retry the packages."
+    echo "========================================="
+    exit 1
+fi
+echo "    Core session components verified."
+EOF
+
     # Substitute setup-chosen values (see comment at first sed call site).
     sed -i "s/__LUSER__/$LINUX_USER/g; s/__UPASS_B64__/$UPASS_B64/g; s/__RPASS_B64__/$RPASS_B64/g; s/__SPASS_B64__/$SPASS_B64/g" "$SETUP_SCRIPT"
     sed -i "s#__TZ__#${TIMEZONE:-UTC}#g; s#__HOSTNAME__#${HOSTNAME:-localhost}#g; s/__PSTYLE__/${PSTYLE:-minimal}/g" "$SETUP_SCRIPT"
@@ -2762,8 +2926,26 @@ EOF
     if [ "$DISTRO" == "alpine" ]; then
         echo "[*] Bootstrapping Alpine base tools (bash, sudo, shadow)..."
         proot-distro login $(pd_login_flags) "$INSTANCE_NAME" -- sh -c "apk update && apk add bash sudo shadow"
+    elif [ "$DISTRO" == "void" ]; then
+        # Void's musl base image has no /bin/bash (and no shadow tools), so
+        # the bash setup below cannot start until they are installed.
+        echo "[*] Bootstrapping Void base tools (bash, shadow)..."
+        # Void's image declares an Entrypoint and has no bash, so `login`
+        # refuses to start. `run` executes its image entrypoint with /bin/sh.
+        proot-distro run $(pd_login_flags) "$INSTANCE_NAME" -- /bin/sh -c "xbps-install -Syu && xbps-install -y bash shadow"
     fi
-    proot-distro login $(pd_login_flags) "$INSTANCE_NAME" --shared-tmp -- bash /tmp/gui_setup_$$.sh
+    local _setup_rc=0
+    proot-distro login $(pd_login_flags) "$INSTANCE_NAME" --shared-tmp -- bash /tmp/gui_setup_$$.sh || _setup_rc=$?
+    if [ "$_setup_rc" -ne 0 ]; then
+        echo ""
+        echo "========================================="
+        echo "[!] Setup did not complete (guest exit $_setup_rc)."
+        echo "    '$INSTANCE_NAME' exists but its desktop/tools may be incomplete."
+        echo "    Re-run the installer, or run menu 0 (Doctor) to repair it."
+        echo "========================================="
+        ui_pause
+        return 1
+    fi
     
     echo "[*] Setting up Home-Screen Widget Integration..."
     mkdir -p ~/.shortcuts
@@ -2809,7 +2991,10 @@ EOF
             fi
             if [ "$SERVER" = "vnc" ]; then
                 echo "sleep 5"
-                echo "proot-distro login $(pd_login_flags) $INSTANCE_NAME --user $LINUX_USER --shared-tmp -- bash -c \"vncserver -geometry ${RESOLUTION:-1280x720} :1\" >/dev/null 2>&1 || true"
+                # Keep the proot session alive: vncserver daemonises and would
+                # otherwise be killed by proot-distro --kill-on-exit.
+                echo "nohup proot-distro login $(pd_login_flags) $INSTANCE_NAME --user $LINUX_USER --shared-tmp -- bash -c \"vncserver -geometry ${RESOLUTION:-1280x720} :1; while :; do sleep 3600; done\" >/dev/null 2>&1 &"
+                echo "echo \$! > \"\$PREFIX/tmp/lfa-vnc-$INSTANCE_NAME.pid\""
             elif [ "$SERVER" = "x11" ]; then
                 echo "# NOTE: Termux:X11 needs its app window open, so it cannot"
                 echo "# autostart unattended. Start it with start-linux instead."
