@@ -50,6 +50,7 @@ Currently supported distributions:
   terminal (full admin) or the **`user`** terminal — with no display/audio
   servers started in terminal modes.
 - **Feels like a real Linux box:** Ubuntu-style colored prompt with your chosen hostname, a proper login banner, a `hostname` command that reports that name, colorised `ls`/`grep`, and Termux/Android variables stripped from `env`. No proot caveats or "use the root terminal" notices in the guest.
+- **Authentic distro wallpaper:** every GUI install automatically gets the selected distribution's default wallpaper — the real Ubuntu 24.04 Numbat, Debian 13, Kali 2026, Fedora 44 and openSUSE Tumbleweed images, plus branded defaults for Arch, Void and Alpine. It is bundled (no download at install time), staged into the guest, and applied on desktop login through an XDG autostart entry. **CLI-only installs skip wallpaper setup entirely.**
 - **Honest Privileges (Ritual `sudo`):** Real setuid elevation is impossible
   inside proot on Android, so instead of a broken `sudo` you get a small
   ritual-only shim: it asks for the install password, then runs your command
@@ -73,7 +74,7 @@ Currently supported distributions:
 ### Automation & Management
 - **1-Click Universal Updater:** Never manually type update commands again! The Manager Menu automatically detects your distro and updates it in the background.
 - **Doctor / Repair (menu → 0):** One key fixes the usual proot breakages inside an existing distro — sanitises `dpkg`'s `statoverride`, reinstalls the proot-safe `dpkg-statoverride` shim, re-applies apt hardening, finishes half-configured packages with `dpkg --configure -a`, and audits the package database. Safe to run any time.
-- **Apply Latest Fixes (menu → 12):** Bring a distro installed by an older Linux-for-Android up to date without reinstalling. It runs the Doctor, adds new config keys (`USER_NAME`, `TIMEZONE`, `HOSTNAME`, `NEED_VIRGL`), bakes the hostname into the shell prompt, refreshes the VNC `xstartup`, regenerates `start-linux` / `terminal-linux` / `stop-linux` from the current templates, updates the legacy bullseye plugin, rebuilds `libuid0` if missing, and repairs EOL apt sources.
+- **Apply Latest Fixes (menu → 12):** Bring a distro installed by an older Linux-for-Android up to date without reinstalling. It runs the Doctor, adds new config keys (`USER_NAME`, `TIMEZONE`, `HOSTNAME`, `NEED_VIRGL`), bakes the hostname into the shell prompt, refreshes the VNC `xstartup`, re-applies the distro wallpaper for GUI instances, regenerates `start-linux` / `terminal-linux` / `stop-linux` from the current templates, updates the legacy bullseye plugin, rebuilds `libuid0` if missing, and repairs EOL apt sources.
 - **System Dashboard:** Instantly view your Android phone's RAM availability, Termux storage consumption, and CPU architecture right from the manager menu.
 - **Advanced Audio Fixer:** A built-in debugger that dynamically restarts PulseAudio and forcefully binds it to TCP protocols to instantly resolve any audio crackling issues.
 - **Hardware Accelerated Web Browsing:** Easily optimize Chromium directly from the menu to force hardware-accelerated video decoding (`--enable-gpu-rasterization`, `--use-gl=egl`), giving you silky smooth YouTube playback over VirGL.
@@ -197,7 +198,7 @@ When you run `./install_linux.sh`, it will launch the interactive Manager Menu w
 Two maintenance options keep old installs healthy without reinstalling:
 
 - **0) Repair a Distro** — Doctor for broken `dpkg`/`apt`, half-configured packages and stale `statoverride` rows. Safe any time, and also runs automatically before every distro update.
-- **12) Apply Latest Fixes** — migration for a distro created by an older version of this script: refreshes launchers/`xstartup`, adds new config keys, fixes the hostname prompt, updates the legacy plugin, and rebuilds the uid0 helper if needed.
+- **12) Apply Latest Fixes** — migration for a distro created by an older version of this script: refreshes launchers/`xstartup`, re-applies the distro wallpaper (GUI only), adds new config keys, fixes the hostname prompt, updates the legacy plugin, and rebuilds the uid0 helper if needed.
 
 ### Starting your Linux Desktop
 Once installed, you never need to run the setup script again. Just type this anywhere in Termux:
@@ -354,7 +355,7 @@ installs; needs only `bash`, `coreutils`, `timeout`, and `python3` (plus
 `script` from util-linux for the pty test, skipped if absent):
 ```bash
 chmod +x tests/test-all.sh
-./tests/test-all.sh   # expect: PASS=195 FAIL=0
+./tests/test-all.sh   # expect: PASS=221 FAIL=0
 ```
 
 ## 📝 License

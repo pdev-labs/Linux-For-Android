@@ -10,7 +10,7 @@ fi
 
 # Directory containing this script (lib/ lives next to it).
 LFA_DIR="$(cd "$(dirname "$0")" && pwd)"
-LFA_VERSION="1.5.2"
+LFA_VERSION="1.5.3"
 
 # ============================================================
 # Interactive UI (npm-style)
@@ -1288,6 +1288,12 @@ upgrade_existing() {
         echo "[*] Shell polished (prompt, banner, hostname, environment, gids)."
     fi
 
+    # 3b. Distro wallpaper for GUI instances (skipped for CLI-only).
+    if [ "$DE" != "none" ]; then
+        local WALL_DISTRO="${DISTRO:-$INSTANCE_NAME}"
+        apply_distro_wallpaper "$ROOTFS" "$LINUX_USER" "$WALL_DISTRO" "$DE"
+    fi
+
     # 4. Refresh the VNC xstartup (newer versions tolerate missing dbus).
     # TigerVNC 1.15 uses ~/.config/tigervnc and kills the session if xstartup
     # exits, so the desktop must be exec'd in the foreground. Write both the
@@ -1535,6 +1541,19 @@ rm -f /etc/lfa-chromium-flags
     fi
     ui_pause
     show_menu
+}
+
+# Install the distro's default wallpaper into a GUI rootfs.
+# CLI-only installs (DE=none) intentionally skip this: no desktop, no
+# backdrop config, and no extra asset copied into the guest.
+apply_distro_wallpaper() { # $1=rootfs $2=user $3=distro $4=desktop-env
+    local root="$1" user="$2" distro="$3" de="$4"
+    [ "$de" = "none" ] && return 0
+    [ -f "$LFA_DIR/lib/wallpaper.sh" ] || return 0
+    [ -d "$root" ] || return 0
+    LFA_ROOT="$root" LFA_USER="$user" LFA_DISTRO="$distro" LFA_DE="$de" \
+        LFA_ASSET_DIR="$LFA_DIR/assets/wallpapers" \
+        sh "$LFA_DIR/lib/wallpaper.sh" || true
 }
 
 write_launchers() {
@@ -2956,6 +2975,12 @@ EOF
     chmod +x ~/.shortcuts/Start-Linux
     
     write_launchers
+
+    # Distro wallpaper (GUI installs only). Applied on first desktop login
+    # through an XDG autostart entry, with static LXDE config where possible.
+    if [ "$DE" != "none" ]; then
+        apply_distro_wallpaper "$ROOTFS" "$LINUX_USER" "$DISTRO" "$DE"
+    fi
 
     # Post-install extras chosen in guided setup (all optional, all safe to
     # skip: every block tolerates missing pieces).

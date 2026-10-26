@@ -188,6 +188,9 @@ check "C boot script" 'termux-wake-lock' "$T/home/.termux/boot/start-linux-servi
 bash -n "$S" && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: C setup syntax"; }
 bash -n "$T/prefix/bin/start-linux" && bash -n "$T/prefix/bin/stop-linux" && bash -n "$T/prefix/bin/terminal-linux" && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: C launcher syntax"; }
 [ "$(grep '^SETUP_ROOT_B64=' "$T/home/.config/linux-for-android/setup.conf" | cut -d'"' -f2 | base64 -d 2>/dev/null)" = "s3cret" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: C pw roundtrip"; }
+# CLI-only installs must not get a wallpaper or autostart entry.
+[ ! -e "$T/prefix/var/lib/proot-distro/installed-rootfs/debian/usr/share/backgrounds/lfa-default.jpg" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: C CLI got a wallpaper"; }
+[ ! -e "$T/prefix/var/lib/proot-distro/installed-rootfs/debian/home/dev/.config/autostart/lfa-wallpaper.desktop" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: C CLI got wallpaper autostart"; }
 
 echo "===== D: guided ubuntu xfce x11, hw off, software set ====="
 fresh_env
@@ -203,6 +206,11 @@ check "D x11 pkg" 'x11-repo' "$T/d.log"
 check "D x11 user fallback" 'X11_USER="${USER_NAME:-${LINUX_USER:-user}}"' "$T/prefix/bin/start-linux"
 check "D x11 private runtime" "XDG_RUNTIME_DIR=/tmp/xdg-" "$T/prefix/bin/start-linux"
 check "D x11 detached" 'nohup termux-x11 :1' "$T/prefix/bin/start-linux"
+DROOT="$T/prefix/var/lib/proot-distro/installed-rootfs/ubuntu"
+[ -s "$DROOT/usr/share/backgrounds/lfa-default.jpg" ] && cmp -s "$DROOT/usr/share/backgrounds/lfa-default.jpg" "$REPO/assets/wallpapers/ubuntu.jpg" && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: D ubuntu wallpaper not staged"; }
+[ -x "$DROOT/usr/local/bin/lfa-set-wallpaper" ] && sh -n "$DROOT/usr/local/bin/lfa-set-wallpaper" && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: D wallpaper applier missing/invalid"; }
+check "D wallpaper xfce" 'xfconf-query -c xfce4-desktop' "$DROOT/usr/local/bin/lfa-set-wallpaper"
+check "D wallpaper autostart" 'Exec=/usr/local/bin/lfa-set-wallpaper --autostart' "$DROOT/home/user/.config/autostart/lfa-wallpaper.desktop"
 
 echo "===== E: guided fedora mate ====="
 fresh_env
@@ -212,6 +220,10 @@ S=$(setup_sh_of)
 check "E dnf" 'dnf install' "$S"
 check "E mate" 'mate-desktop' "$S"
 check "E mate template" 'mate-session' "$T/prefix/bin/start-linux"
+EROOT="$T/prefix/var/lib/proot-distro/installed-rootfs/fedora"
+[ -s "$EROOT/usr/share/backgrounds/lfa-default.jpg" ] && cmp -s "$EROOT/usr/share/backgrounds/lfa-default.jpg" "$REPO/assets/wallpapers/fedora.jpg" && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: E fedora wallpaper not staged"; }
+check "E wallpaper mate" 'org.mate.background picture-filename' "$EROOT/usr/local/bin/lfa-set-wallpaper"
+[ -f "$EROOT/home/user/.config/autostart/lfa-wallpaper.desktop" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: E wallpaper autostart missing"; }
 
 echo "===== F: guided alpine vnc (lxde remap) ====="
 fresh_env
@@ -223,6 +235,9 @@ check "F apk" 'apk add' "$S"
 check "F vncpasswd" 'vncpasswd -f' "$S"
 check_absent "F no expect" 'spawn vncpasswd' "$S"
 bash -n "$S" && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: F setup syntax"; }
+FROOT="$T/prefix/var/lib/proot-distro/installed-rootfs/myalpine"
+[ -s "$FROOT/usr/share/backgrounds/lfa-default.jpg" ] && cmp -s "$FROOT/usr/share/backgrounds/lfa-default.jpg" "$REPO/assets/wallpapers/alpine.jpg" && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: F alpine wallpaper not staged"; }
+check "F wallpaper vnc" 'monitorVNC-0' "$FROOT/usr/local/bin/lfa-set-wallpaper"
 
 echo "===== G: legacy debian -> bullseye ====="
 fresh_env
@@ -419,6 +434,8 @@ check "N env cleanup" 'TERMUX' "$NROOT/etc/profile.d/zz-lfa-env.sh"
 check "N login profile" 'linux-for-android profile' "$NROOT/home/user/.profile"
 check "N launcher updated" 'command -v dbus-launch' "$T/prefix/bin/start-linux"
 check "N xstartup updated" 'startxfce4' "$NROOT/home/user/.vnc/xstartup"
+[ -s "$NROOT/usr/share/backgrounds/lfa-default.jpg" ] && cmp -s "$NROOT/usr/share/backgrounds/lfa-default.jpg" "$REPO/assets/wallpapers/debian.jpg" && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: N upgrade wallpaper not staged"; }
+check "N wallpaper autostart" 'lfa-set-wallpaper --autostart' "$NROOT/home/user/.config/autostart/lfa-wallpaper.desktop"
 [ -f "$T/prefix/tmp/lfa-upgrade.sh" ] && bash -n "$T/prefix/tmp/lfa-upgrade.sh" && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: N upgrade script missing/invalid"; }
 
 echo "===== O: proot-distro v4 containers layout ====="
@@ -547,6 +564,25 @@ printf '%s\n' 2 8 4 '13' alpineapp auser '' '' UTC alpineapp 1 n '' n n '' '' 13
 WA=$(setup_sh_of)
 check "W alpine fastfetch" 'fastfetch' "$WA"
 check "W alpine neofetch alias" 'ln -sf /usr/bin/fastfetch /usr/local/bin/neofetch' "$WA"
+
+echo "===== X: distro wallpapers (assets + LXDE/CLI) ====="
+fresh_env
+for _d in ubuntu debian kali fedora opensuse archlinux void alpine; do
+    if [ -s "$REPO/assets/wallpapers/$_d.jpg" ]; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: X missing wallpaper $_d.jpg"; fi
+done
+LXROOT="$T/prefix/var/lib/proot-distro/installed-rootfs/lxroot"
+mkdir -p "$LXROOT"
+LFA_ROOT="$LXROOT" LFA_USER=lxuser LFA_DISTRO=debian LFA_DE=lxde \
+    LFA_ASSET_DIR="$REPO/assets/wallpapers" sh "$REPO/lib/wallpaper.sh" > "$T/x.log" 2>&1
+check "X lxde wallpaper path" 'wallpaper=/usr/share/backgrounds/lfa-default.jpg' "$LXROOT/home/lxuser/.config/pcmanfm/LXDE/pcmanfm.conf"
+check "X lxde zoom mode" 'wallpaper_mode=5' "$LXROOT/home/lxuser/.config/pcmanfm/LXDE/desktop-items-0.conf"
+check "X lxde autostart" 'lfa-set-wallpaper --autostart' "$LXROOT/home/lxuser/.config/autostart/lfa-wallpaper.desktop"
+[ -s "$LXROOT/usr/share/backgrounds/lfa-default.jpg" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: X LXDE wallpaper not staged"; }
+CLIROOT="$T/prefix/var/lib/proot-distro/installed-rootfs/cliroot"
+mkdir -p "$CLIROOT"
+LFA_ROOT="$CLIROOT" LFA_USER=cliuser LFA_DISTRO=ubuntu LFA_DE=none \
+    LFA_ASSET_DIR="$REPO/assets/wallpapers" sh "$REPO/lib/wallpaper.sh" > "$T/xc.log" 2>&1
+[ ! -e "$CLIROOT/usr/share/backgrounds/lfa-default.jpg" ] && [ ! -e "$CLIROOT/home/cliuser" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: X CLI-only wallpaper not skipped"; }
 
 echo ""
 echo "PASS=$pass FAIL=$fail"
