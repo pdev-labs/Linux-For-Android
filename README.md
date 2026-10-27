@@ -50,7 +50,7 @@ Currently supported distributions:
   terminal (full admin) or the **`user`** terminal — with no display/audio
   servers started in terminal modes.
 - **Feels like a real Linux box:** Ubuntu-style colored prompt with your chosen hostname, a proper login banner, a `hostname` command that reports that name, colorised `ls`/`grep`, and Termux/Android variables stripped from `env`. No proot caveats or "use the root terminal" notices in the guest.
-- **Authentic distro wallpaper, light or dark:** every GUI install automatically gets the selected distribution's default wallpaper — the real Ubuntu 24.04 Numbat, Debian 13, Kali 2026, Fedora 44 and openSUSE Tumbleweed images, plus branded defaults for Arch, Void and Alpine. Guided setup asks whether you want the **light or dark** variant. The chosen image is bundled (no download at install time), staged into the guest, and applied on desktop login through an XDG autostart entry. **CLI-only installs skip wallpaper setup entirely.**
+- **Authentic distro wallpaper, light or dark:** every GUI install automatically gets the selected distribution's real default wallpaper — Ubuntu 24.04, Debian 13, Kali 2026, Fedora 44 and openSUSE Tumbleweed images, Arch's official `archlinux-wallpaper` wave pair, and official Void/Alpine artwork. Guided setup asks whether you want the **light or dark** variant. The chosen image is bundled (no download at install time), staged into the guest, and applied on desktop login through an XDG autostart entry. **CLI-only installs skip wallpaper setup entirely.**
 - **Honest Privileges (Ritual `sudo`):** Real setuid elevation is impossible
   inside proot on Android, so instead of a broken `sudo` you get a small
   ritual-only shim: it asks for the install password, then runs your command

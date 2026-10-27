@@ -25,18 +25,19 @@ The selected image is copied into the guest as
 | `fedora-dark.jpg` | `f44-backgrounds-base` 44.0.0, `f44-01-night.jxl` | CC-BY-SA-4.0, Fedora Design Team |
 | `opensuse.jpg` | `wallpaper-branding-openSUSE` 84.87.20240405, `openSUSEdefault` light | openSUSE branding package; see the source package metadata |
 | `opensuse-dark.jpg` | `wallpaper-branding-openSUSE` 84.87.20240405, `openSUSEdefault` dark | openSUSE branding package; see the source package metadata |
-| `archlinux.jpg` | Generated for Linux-for-Android from the Arch Linux logo (Simple Icons), light background | Logo: Simple Icons (CC0-1.0); Arch Linux trademark belongs to Arch Linux |
-| `archlinux-dark.jpg` | Generated for Linux-for-Android from the Arch Linux logo (Simple Icons), dark background | Logo: Simple Icons (CC0-1.0); Arch Linux trademark belongs to Arch Linux |
-| `void.jpg` | Generated for Linux-for-Android from the Void Linux logo (Simple Icons), light background | Logo: Simple Icons (CC0-1.0); Void Linux trademark belongs to the Void Linux project |
-| `void-dark.jpg` | Generated for Linux-for-Android from the Void Linux logo (Simple Icons), dark background | Logo: Simple Icons (CC0-1.0); Void Linux trademark belongs to the Void Linux project |
-| `alpine.jpg` | Generated for Linux-for-Android from the Alpine Linux logo (Simple Icons), light background | Logo: Simple Icons (CC0-1.0); Alpine Linux trademark belongs to the Alpine Linux project |
-| `alpine-dark.jpg` | Generated for Linux-for-Android from the Alpine Linux logo (Simple Icons), dark background | Logo: Simple Icons (CC0-1.0); Alpine Linux trademark belongs to the Alpine Linux project |
+| `archlinux.jpg` | `archlinux-wallpaper` 1.6.1-7 (official Arch package), `archwaveinv.png` (light) | CC0, rhysperry111 / Arch Linux |
+| `archlinux-dark.jpg` | `archlinux-wallpaper` 1.6.1-7 (official Arch package), `archwave.png` (dark) | CC0, rhysperry111 / Arch Linux |
+| `void.jpg` | `void-artwork` 20221013 (official Void package), `void-logo.svg`, composed on a light background | Public Domain, Void Linux |
+| `void-dark.jpg` | `void-artwork` 20221013 (official Void package), `void-logo.svg`, composed on a dark background | Public Domain, Void Linux |
+| `alpine.jpg` | Official Alpine Linux logo from alpinelinux.org, composed on a light background | Alpine Linux logo / trademark belongs to the Alpine Linux project |
+| `alpine-dark.jpg` | Official Alpine Linux logo from alpinelinux.org, composed on a dark background | Alpine Linux logo / trademark belongs to the Alpine Linux project |
 
-Arch, Void and Alpine do not ship a single canonical desktop wallpaper, so
-the generated images provide a recognisable branded default while keeping the
-install small and deterministic. Distro names and logos are trademarks of
-their respective owners; these assets are used only to identify the distro
-being installed.
+Arch ships `archlinux-wallpaper`, and its official light/dark wave pair is
+used above. Void and Alpine do not ship a desktop wallpaper package: the
+Void images use the distro's official `void-artwork` logo, and the Alpine
+images use the official Alpine logo, both composed on neutral backgrounds.
+Distro names and logos are trademarks of their respective owners; these
+assets are used only to identify the distro being installed.
 
 The installer and these assets are distributed under the project's GPL-3.0
 license. The wallpaper images above remain under their respective licenses.

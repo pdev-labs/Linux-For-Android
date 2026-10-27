@@ -10,7 +10,7 @@ fi
 
 # Directory containing this script (lib/ lives next to it).
 LFA_DIR="$(cd "$(dirname "$0")" && pwd)"
-LFA_VERSION="1.5.4"
+LFA_VERSION="1.5.5"
 
 # ============================================================
 # Interactive UI (npm-style)
