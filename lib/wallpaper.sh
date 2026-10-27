@@ -16,6 +16,7 @@
 #   LFA_USER       desktop user name (default: user)
 #   LFA_DISTRO     distro/base alias (ubuntu, debian, kali, fedora, ...)
 #   LFA_DE         xfce4 | lxde | mate | none
+#   LFA_MODE       light | dark (desktop wallpaper variant, default light)
 #   LFA_ASSET_DIR  directory containing the bundled .jpg files
 #                  (default: <repo>/assets/wallpapers)
 #
@@ -26,7 +27,13 @@ ROOT="${LFA_ROOT:-}"
 USER_NAME="${LFA_USER:-user}"
 DISTRO="${LFA_DISTRO:-}"
 DE="${LFA_DE:-none}"
+MODE="${LFA_MODE:-light}"
 ASSET_DIR="${LFA_ASSET_DIR:-}"
+
+case "$MODE" in
+    light|dark) ;;
+    *) MODE="light" ;;
+esac
 
 if [ -z "$ROOT" ] || [ ! -d "$ROOT" ]; then
     echo "[!] wallpaper: rootfs not found: ${ROOT:-<unset>}" >&2
@@ -46,18 +53,22 @@ if [ -z "$ASSET_DIR" ]; then
     ASSET_DIR="$(cd "$(dirname "$0")/.." && pwd)/assets/wallpapers"
 fi
 
-# Map aliases/custom instance names to the bundled image.
+# Map aliases/custom instance names to the bundled image family.
 case "$DISTRO" in
-    ubuntu*)                    ASSET="ubuntu.jpg" ;;
-    debian*|bullseye*)          ASSET="debian.jpg" ;;
-    kali*)                      ASSET="kali.jpg" ;;
-    fedora*)                    ASSET="fedora.jpg" ;;
-    opensuse*|suse*)            ASSET="opensuse.jpg" ;;
-    archlinux*|arch*|alarm*)    ASSET="archlinux.jpg" ;;
-    void*)                      ASSET="void.jpg" ;;
-    alpine*)                    ASSET="alpine.jpg" ;;
-    *)                          ASSET="ubuntu.jpg" ;;
+    ubuntu*)                    ASSET_BASE="ubuntu" ;;
+    debian*|bullseye*)          ASSET_BASE="debian" ;;
+    kali*)                      ASSET_BASE="kali" ;;
+    fedora*)                    ASSET_BASE="fedora" ;;
+    opensuse*|suse*)            ASSET_BASE="opensuse" ;;
+    archlinux*|arch*|alarm*)    ASSET_BASE="archlinux" ;;
+    void*)                      ASSET_BASE="void" ;;
+    alpine*)                    ASSET_BASE="alpine" ;;
+    *)                          ASSET_BASE="ubuntu" ;;
 esac
+ASSET="$ASSET_BASE.jpg"
+if [ "$MODE" = "dark" ] && [ -s "$ASSET_DIR/$ASSET_BASE-dark.jpg" ]; then
+    ASSET="$ASSET_BASE-dark.jpg"
+fi
 SRC="$ASSET_DIR/$ASSET"
 if [ ! -s "$SRC" ]; then
     echo "[!] wallpaper: bundled image missing: $SRC" >&2
@@ -69,7 +80,9 @@ WALL="$WALL_DIR/lfa-default.jpg"
 mkdir -p "$WALL_DIR" || exit 1
 cp -f "$SRC" "$WALL" || exit 1
 chmod 644 "$WALL" 2>/dev/null || true
-echo "[*] Wallpaper: $ASSET -> /usr/share/backgrounds/lfa-default.jpg"
+mkdir -p "$ROOT/etc" 2>/dev/null || true
+printf '%s\n' "$MODE" > "$ROOT/etc/lfa-wallpaper-mode" 2>/dev/null || true
+echo "[*] Wallpaper: $MODE / $ASSET -> /usr/share/backgrounds/lfa-default.jpg"
 
 # ---------------------------------------------------------------------------
 # Guest-side applier. Kept dependency-free and idempotent: it is safe to run

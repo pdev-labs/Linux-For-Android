@@ -160,6 +160,7 @@ fresh_env
 printf '%s\n' 1 '' 13 | bash "$REPO/install_linux.sh" > "$T/b.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: run b exit $rc"; }
 check "B summary" 'Setup Summary' "$T/b.log"
 check "B distro" 'DISTRO="debian"' "$T/home/.config/linux-for-android/setup.conf"
+check "B wallpaper mode" 'COLOR_MODE="light"' "$T/home/.config/linux-for-android/setup.conf"
 [ "$(stat -c %a "$T/home/.config/linux-for-android/setup.conf")" = "600" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: B conf perms"; }
 check "B install done" 'Installation complete!' "$T/b.log"
 
@@ -194,7 +195,7 @@ bash -n "$T/prefix/bin/start-linux" && bash -n "$T/prefix/bin/stop-linux" && bas
 
 echo "===== D: guided ubuntu xfce x11, hw off, software set ====="
 fresh_env
-printf '%s\n' 2 1 1 1 2 '2 12 14' '' '' '' '' '' '' 1 'n' '' 'n' 'n' '' '' '13' \
+printf '%s\n' 2 1 1 1 1 2 '2 12 14' '' '' '' '' '' '' 1 'n' '' 'n' 'n' '' '' '13' \
 | bash "$REPO/install_linux.sh" > "$T/d.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: run d exit $rc"; }
 S=$(setup_sh_of)
 check "D apt mapping" 'apt-get install -y' "$S"
@@ -206,38 +207,45 @@ check "D x11 pkg" 'x11-repo' "$T/d.log"
 check "D x11 user fallback" 'X11_USER="${USER_NAME:-${LINUX_USER:-user}}"' "$T/prefix/bin/start-linux"
 check "D x11 private runtime" "XDG_RUNTIME_DIR=/tmp/xdg-" "$T/prefix/bin/start-linux"
 check "D x11 detached" 'nohup termux-x11 :1' "$T/prefix/bin/start-linux"
+check "D light mode saved" 'COLOR_MODE="light"' "$T/home/.config/linux-for-android/setup.conf"
+check "D light mode conf" 'COLOR_MODE="light"' "$T/prefix/var/lib/proot-distro/installed-rootfs/ubuntu/etc/termux-linux-manager.conf"
 DROOT="$T/prefix/var/lib/proot-distro/installed-rootfs/ubuntu"
 [ -s "$DROOT/usr/share/backgrounds/lfa-default.jpg" ] && cmp -s "$DROOT/usr/share/backgrounds/lfa-default.jpg" "$REPO/assets/wallpapers/ubuntu.jpg" && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: D ubuntu wallpaper not staged"; }
+[ "$(cat "$DROOT/etc/lfa-wallpaper-mode" 2>/dev/null)" = "light" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: D wallpaper mode marker"; }
 [ -x "$DROOT/usr/local/bin/lfa-set-wallpaper" ] && sh -n "$DROOT/usr/local/bin/lfa-set-wallpaper" && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: D wallpaper applier missing/invalid"; }
 check "D wallpaper xfce" 'xfconf-query -c xfce4-desktop' "$DROOT/usr/local/bin/lfa-set-wallpaper"
 check "D wallpaper autostart" 'Exec=/usr/local/bin/lfa-set-wallpaper --autostart' "$DROOT/home/user/.config/autostart/lfa-wallpaper.desktop"
 
 echo "===== E: guided fedora mate ====="
 fresh_env
-printf '%s\n' 2 4 3 1 1 '' '' '' '' '' '' '' 1 'n' '' 'n' 'n' '' '' '13' \
+printf '%s\n' 2 4 3 2 1 1 '' '' '' '' '' '' '' 1 'n' '' 'n' 'n' '' '' '13' \
 | bash "$REPO/install_linux.sh" > "$T/e.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: run e exit $rc"; }
 S=$(setup_sh_of)
 check "E dnf" 'dnf install' "$S"
 check "E mate" 'mate-desktop' "$S"
 check "E mate template" 'mate-session' "$T/prefix/bin/start-linux"
+check "E dark mode saved" 'COLOR_MODE="dark"' "$T/home/.config/linux-for-android/setup.conf"
 EROOT="$T/prefix/var/lib/proot-distro/installed-rootfs/fedora"
-[ -s "$EROOT/usr/share/backgrounds/lfa-default.jpg" ] && cmp -s "$EROOT/usr/share/backgrounds/lfa-default.jpg" "$REPO/assets/wallpapers/fedora.jpg" && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: E fedora wallpaper not staged"; }
+[ -s "$EROOT/usr/share/backgrounds/lfa-default.jpg" ] && cmp -s "$EROOT/usr/share/backgrounds/lfa-default.jpg" "$REPO/assets/wallpapers/fedora-dark.jpg" && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: E fedora wallpaper not staged"; }
 check "E wallpaper mate" 'org.mate.background picture-filename' "$EROOT/usr/local/bin/lfa-set-wallpaper"
+[ "$(cat "$EROOT/etc/lfa-wallpaper-mode" 2>/dev/null)" = "dark" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: E wallpaper mode marker"; }
 [ -f "$EROOT/home/user/.config/autostart/lfa-wallpaper.desktop" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: E wallpaper autostart missing"; }
 
 echo "===== F: guided alpine vnc (lxde remap) ====="
 fresh_env
-printf '%s\n' 2 8 2 2 1 1 '' 'myalpine' '' '' '' '' '' 1 'n' '' 'n' 'n' '' '' '13' \
+printf '%s\n' 2 8 2 2 2 1 1 '' 'myalpine' '' '' '' '' '' 1 'n' '' 'n' 'n' '' '' '13' \
 | bash "$REPO/install_linux.sh" > "$T/f.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: run f exit $rc"; }
 check "F remap" 'DE="xfce4"' "$T/home/.config/linux-for-android/setup.conf"
+check "F dark mode saved" 'COLOR_MODE="dark"' "$T/home/.config/linux-for-android/setup.conf"
 S=$(setup_sh_of)
 check "F apk" 'apk add' "$S"
 check "F vncpasswd" 'vncpasswd -f' "$S"
 check_absent "F no expect" 'spawn vncpasswd' "$S"
 bash -n "$S" && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: F setup syntax"; }
 FROOT="$T/prefix/var/lib/proot-distro/installed-rootfs/myalpine"
-[ -s "$FROOT/usr/share/backgrounds/lfa-default.jpg" ] && cmp -s "$FROOT/usr/share/backgrounds/lfa-default.jpg" "$REPO/assets/wallpapers/alpine.jpg" && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: F alpine wallpaper not staged"; }
+[ -s "$FROOT/usr/share/backgrounds/lfa-default.jpg" ] && cmp -s "$FROOT/usr/share/backgrounds/lfa-default.jpg" "$REPO/assets/wallpapers/alpine-dark.jpg" && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: F alpine wallpaper not staged"; }
 check "F wallpaper vnc" 'monitorVNC-0' "$FROOT/usr/local/bin/lfa-set-wallpaper"
+[ "$(cat "$FROOT/etc/lfa-wallpaper-mode" 2>/dev/null)" = "dark" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: F wallpaper mode marker"; }
 
 echo "===== G: legacy debian -> bullseye ====="
 fresh_env
@@ -423,6 +431,7 @@ printf 'root messagebus 4754 /usr/lib/dbus-1.0/dbus-daemon-launch-helper\n' > "$
 printf '%s\n' 3 12 '' 13 | bash "$REPO/install_linux.sh" > "$T/n.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: run n exit $rc"; }
 check "N completes" 'Latest fixes applied!' "$T/n.log"
 check "N adds user key" 'USER_NAME="user"' "$NROOT/etc/termux-linux-manager.conf"
+check "N adds color key" 'COLOR_MODE="light"' "$NROOT/etc/termux-linux-manager.conf"
 check "N adds virgl key" 'NEED_VIRGL="1"' "$NROOT/etc/termux-linux-manager.conf"
 check "N keeps hostname" 'HOSTNAME="oldphone"' "$NROOT/etc/termux-linux-manager.conf"
 check "N bakes hostname" 'oldphone' "$NROOT/home/user/.bashrc"
@@ -539,7 +548,7 @@ check "U drops termux" '/data/data/*' "$T/prefix/tmp/lfa-real-feel.sh"
 echo "===== V: VNC correctness (TigerVNC 1.15, keepalive) ====="
 fresh_env
 export PD_V5=1
-printf '%s\n' 2 2 2 2 2 1 '' vnctest vncuser 123 123 UTC vnctest 1 n '' n n '' '' 13 \
+printf '%s\n' 2 2 2 2 2 2 1 '' vnctest vncuser 123 123 UTC vnctest 1 n '' n n '' '' 13 \
 | bash "$REPO/install_linux.sh" > "$T/v.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: run v exit $rc"; }
 VS=$(setup_sh_of)
 check "V both config dirs" 'mkdir -p /home/vncuser/.vnc /home/vncuser/.config/tigervnc' "$VS"
@@ -555,6 +564,9 @@ check "V terminal reads conf user" 'TERM_USER="${USER_NAME:-${LINUX_USER:-user}}
 check_absent "V no baked terminal user" '--user __LUSER__' "$T/prefix/bin/terminal-linux"
 check "V start user dynamic" '--user "$X11_USER"' "$T/prefix/bin/start-linux"
 check "V stop user dynamic" '--user "$VNC_USER"' "$T/prefix/bin/stop-linux"
+VROOT="$T/prefix/var/lib/proot-distro/installed-rootfs/vnctest"
+[ -s "$VROOT/usr/share/backgrounds/lfa-default.jpg" ] && cmp -s "$VROOT/usr/share/backgrounds/lfa-default.jpg" "$REPO/assets/wallpapers/debian-dark.jpg" && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: V debian dark wallpaper not staged"; }
+check "V lxde wallpaper" 'wallpaper=/usr/share/backgrounds/lfa-default.jpg' "$VROOT/home/vncuser/.config/pcmanfm/LXDE/pcmanfm.conf"
 
 echo "===== W: Alpine fastfetch/neofetch alias ====="
 fresh_env
@@ -565,22 +577,30 @@ WA=$(setup_sh_of)
 check "W alpine fastfetch" 'fastfetch' "$WA"
 check "W alpine neofetch alias" 'ln -sf /usr/bin/fastfetch /usr/local/bin/neofetch' "$WA"
 
-echo "===== X: distro wallpapers (assets + LXDE/CLI) ====="
+echo "===== X: distro wallpapers (light/dark, LXDE, CLI) ====="
 fresh_env
 for _d in ubuntu debian kali fedora opensuse archlinux void alpine; do
-    if [ -s "$REPO/assets/wallpapers/$_d.jpg" ]; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: X missing wallpaper $_d.jpg"; fi
+    for _s in "" "-dark"; do
+        if [ -s "$REPO/assets/wallpapers/$_d$_s.jpg" ]; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: X missing wallpaper $_d$_s.jpg"; fi
+    done
 done
 LXROOT="$T/prefix/var/lib/proot-distro/installed-rootfs/lxroot"
 mkdir -p "$LXROOT"
-LFA_ROOT="$LXROOT" LFA_USER=lxuser LFA_DISTRO=debian LFA_DE=lxde \
+LFA_ROOT="$LXROOT" LFA_USER=lxuser LFA_DISTRO=debian LFA_DE=lxde LFA_MODE=dark \
     LFA_ASSET_DIR="$REPO/assets/wallpapers" sh "$REPO/lib/wallpaper.sh" > "$T/x.log" 2>&1
 check "X lxde wallpaper path" 'wallpaper=/usr/share/backgrounds/lfa-default.jpg' "$LXROOT/home/lxuser/.config/pcmanfm/LXDE/pcmanfm.conf"
 check "X lxde zoom mode" 'wallpaper_mode=5' "$LXROOT/home/lxuser/.config/pcmanfm/LXDE/desktop-items-0.conf"
 check "X lxde autostart" 'lfa-set-wallpaper --autostart' "$LXROOT/home/lxuser/.config/autostart/lfa-wallpaper.desktop"
-[ -s "$LXROOT/usr/share/backgrounds/lfa-default.jpg" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: X LXDE wallpaper not staged"; }
+[ -s "$LXROOT/usr/share/backgrounds/lfa-default.jpg" ] && cmp -s "$LXROOT/usr/share/backgrounds/lfa-default.jpg" "$REPO/assets/wallpapers/debian-dark.jpg" && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: X LXDE dark wallpaper not staged"; }
+[ "$(cat "$LXROOT/etc/lfa-wallpaper-mode" 2>/dev/null)" = "dark" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: X dark mode marker"; }
+LIGHTROOT="$T/prefix/var/lib/proot-distro/installed-rootfs/lightroot"
+mkdir -p "$LIGHTROOT"
+LFA_ROOT="$LIGHTROOT" LFA_USER=lightuser LFA_DISTRO=ubuntu LFA_DE=xfce4 LFA_MODE=light \
+    LFA_ASSET_DIR="$REPO/assets/wallpapers" sh "$REPO/lib/wallpaper.sh" > "$T/xl.log" 2>&1
+[ -s "$LIGHTROOT/usr/share/backgrounds/lfa-default.jpg" ] && cmp -s "$LIGHTROOT/usr/share/backgrounds/lfa-default.jpg" "$REPO/assets/wallpapers/ubuntu.jpg" && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: X light wallpaper not staged"; }
 CLIROOT="$T/prefix/var/lib/proot-distro/installed-rootfs/cliroot"
 mkdir -p "$CLIROOT"
-LFA_ROOT="$CLIROOT" LFA_USER=cliuser LFA_DISTRO=ubuntu LFA_DE=none \
+LFA_ROOT="$CLIROOT" LFA_USER=cliuser LFA_DISTRO=ubuntu LFA_DE=none LFA_MODE=dark \
     LFA_ASSET_DIR="$REPO/assets/wallpapers" sh "$REPO/lib/wallpaper.sh" > "$T/xc.log" 2>&1
 [ ! -e "$CLIROOT/usr/share/backgrounds/lfa-default.jpg" ] && [ ! -e "$CLIROOT/home/cliuser" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: X CLI-only wallpaper not skipped"; }
 

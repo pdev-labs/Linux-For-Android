@@ -10,7 +10,7 @@ fi
 
 # Directory containing this script (lib/ lives next to it).
 LFA_DIR="$(cd "$(dirname "$0")" && pwd)"
-LFA_VERSION="1.5.3"
+LFA_VERSION="1.5.4"
 
 # ============================================================
 # Interactive UI (npm-style)
@@ -546,6 +546,9 @@ deploy_legacy_plugins() {
 # question is asked twice. Passwords are stored base64-encoded only.
 # ============================================================
 SETUP_CONF="$HOME/.config/linux-for-android/setup.conf"
+# Wallpaper mode: light (default) or dark. Guided setup asks for GUI
+# installs; CLI-only installs keep the default and skip wallpaper setup.
+COLOR_MODE="light"
 
 b64enc() {
     printf '%s' "$1" | base64 2>/dev/null | tr -d '\n'
@@ -592,6 +595,7 @@ DISTRO="$DISTRO"
 DE="$DE"
 SERVER="$SERVER"
 RESOLUTION="$RESOLUTION"
+COLOR_MODE="$COLOR_MODE"
 APP_CHOICES="$APP_CHOICES"
 INSTANCE_NAME="$INSTANCE_NAME"
 SETUP_USER="$SETUP_USER"
@@ -615,6 +619,7 @@ setup_summary() {
     ui_rule
     printf '  %s%-13s%s %s\n' "$C_GRAY" "Distribution" "$C_RESET" "$DISTRO"
     printf '  %s%-13s%s %s\n' "$C_GRAY" "Desktop" "$C_RESET" "$DE"
+    [ "$DE" != "none" ] && printf '  %s%-13s%s %s\n' "$C_GRAY" "Wallpaper" "$C_RESET" "$COLOR_MODE"
     printf '  %s%-13s%s %s\n' "$C_GRAY" "Server" "$C_RESET" "$SERVER"
     [ "$SERVER" = "vnc" ] && printf '  %s%-13s%s %s\n' "$C_GRAY" "Resolution" "$C_RESET" "$RESOLUTION"
     printf '  %s%-13s%s %s\n' "$C_GRAY" "Software" "$C_RESET" "${APP_CHOICES:-none}"
@@ -639,6 +644,7 @@ setup_quick() {
     if [ "$IS_LEGACY" = "1" ] || [ "$(setup_ram_mb)" -le 2048 ]; then DE="none"; else DE="xfce4"; fi
     if [ "$DE" = "none" ]; then SERVER="none"; elif [ "$IS_LEGACY" = "1" ]; then SERVER="vnc"; else SERVER="x11"; fi
     RESOLUTION="1280x720"
+    COLOR_MODE="light"
     APP_CHOICES=""
     INSTANCE_NAME=""
     SETUP_USER="user"
@@ -713,6 +719,20 @@ setup_guided() {
     if [ "$DISTRO" = "alpine" ] && [ "$DE" = "lxde" ]; then
         echo "[*] LXDE is not packaged for Alpine -> using XFCE4 instead."
         DE="xfce4"
+    fi
+    # 2b. Desktop wallpaper mode (GUI only; CLI installs skip wallpaper).
+    COLOR_MODE="light"
+    if [ "$DE" != "none" ]; then
+        if ! ui_select "Default desktop mode (wallpaper)" "1" \
+            "1|Light|bright default wallpaper" \
+            "2|Dark|dark default wallpaper"; then
+            show_menu
+            return
+        fi
+        case "$UI_SELECTED" in
+            2) COLOR_MODE="dark" ;;
+            *) COLOR_MODE="light" ;;
+        esac
     fi
     # 3. Display server + resolution + HW accel (GUI only)
     SERVER="none"
@@ -860,6 +880,7 @@ setup_load_saved() {
         return
     fi
     : "${SERVER:=none}" "${RESOLUTION:=1280x720}" "${APP_CHOICES:=}"
+    : "${COLOR_MODE:=light}"
     : "${INSTANCE_NAME:=}" "${SETUP_USER:=user}"
     : "${SETUP_USER_B64:=cm9vdA==}" "${SETUP_ROOT_B64:=cm9vdA==}"
     : "${TIMEZONE:=UTC}" "${HOSTNAME:=localhost}" "${PSTYLE:=minimal}"
@@ -1242,7 +1263,7 @@ upgrade_existing() {
 
     # Load what the old install recorded; supply defaults for newer keys.
     USER_NAME="user"; DE="none"; SERVER="none"; RESOLUTION=""; PSTYLE="minimal"
-    HOSTNAME="localhost"; TIMEZONE="UTC"; NEED_VIRGL="1"
+    HOSTNAME="localhost"; TIMEZONE="UTC"; NEED_VIRGL="1"; COLOR_MODE="light"
     if [ -f "$CONF" ]; then
         # shellcheck disable=SC1090
         source "$CONF" 2>/dev/null || true
@@ -1264,6 +1285,7 @@ upgrade_existing() {
     # 2. Add settings keys introduced by newer versions.
     if [ -f "$CONF" ]; then
         grep -q '^USER_NAME=' "$CONF" || echo "USER_NAME=\"$LINUX_USER\"" >> "$CONF"
+        grep -q '^COLOR_MODE=' "$CONF" || echo 'COLOR_MODE="light"' >> "$CONF"
         grep -q '^TIMEZONE=' "$CONF" || echo 'TIMEZONE="UTC"' >> "$CONF"
         grep -q '^HOSTNAME=' "$CONF" || echo 'HOSTNAME="localhost"' >> "$CONF"
         grep -q '^NEED_VIRGL=' "$CONF" || echo 'NEED_VIRGL="1"' >> "$CONF"
@@ -1291,7 +1313,7 @@ upgrade_existing() {
     # 3b. Distro wallpaper for GUI instances (skipped for CLI-only).
     if [ "$DE" != "none" ]; then
         local WALL_DISTRO="${DISTRO:-$INSTANCE_NAME}"
-        apply_distro_wallpaper "$ROOTFS" "$LINUX_USER" "$WALL_DISTRO" "$DE"
+        apply_distro_wallpaper "$ROOTFS" "$LINUX_USER" "$WALL_DISTRO" "$DE" "${COLOR_MODE:-light}"
     fi
 
     # 4. Refresh the VNC xstartup (newer versions tolerate missing dbus).
@@ -1546,13 +1568,13 @@ rm -f /etc/lfa-chromium-flags
 # Install the distro's default wallpaper into a GUI rootfs.
 # CLI-only installs (DE=none) intentionally skip this: no desktop, no
 # backdrop config, and no extra asset copied into the guest.
-apply_distro_wallpaper() { # $1=rootfs $2=user $3=distro $4=desktop-env
-    local root="$1" user="$2" distro="$3" de="$4"
+apply_distro_wallpaper() { # $1=rootfs $2=user $3=distro $4=desktop-env $5=mode
+    local root="$1" user="$2" distro="$3" de="$4" mode="${5:-light}"
     [ "$de" = "none" ] && return 0
     [ -f "$LFA_DIR/lib/wallpaper.sh" ] || return 0
     [ -d "$root" ] || return 0
     LFA_ROOT="$root" LFA_USER="$user" LFA_DISTRO="$distro" LFA_DE="$de" \
-        LFA_ASSET_DIR="$LFA_DIR/assets/wallpapers" \
+        LFA_MODE="$mode" LFA_ASSET_DIR="$LFA_DIR/assets/wallpapers" \
         sh "$LFA_DIR/lib/wallpaper.sh" || true
 }
 
@@ -2011,6 +2033,7 @@ install_linux() {
     DE="none"
     SERVER="none"
     RESOLUTION="1280x720"
+    COLOR_MODE="light"
 
     if ! ui_select "Choose Desktop Environment" "1" \
         "1|XFCE4|recommended, light GUI" \
@@ -2369,6 +2392,7 @@ install_linux() {
     echo "RESOLUTION=\"$RESOLUTION\"" >> "$ROOTFS/etc/termux-linux-manager.conf"
     echo "UPDATE_CMD=\"$UPDATE_CMD\"" >> "$ROOTFS/etc/termux-linux-manager.conf"
     echo "USER_NAME=\"$LINUX_USER\"" >> "$ROOTFS/etc/termux-linux-manager.conf"
+    echo "COLOR_MODE=\"${COLOR_MODE:-light}\"" >> "$ROOTFS/etc/termux-linux-manager.conf"
     echo "TIMEZONE=\"${TIMEZONE:-UTC}\"" >> "$ROOTFS/etc/termux-linux-manager.conf"
     echo "HOSTNAME=\"${HOSTNAME:-localhost}\"" >> "$ROOTFS/etc/termux-linux-manager.conf"
     echo "NEED_VIRGL=\"${NEED_VIRGL:-1}\"" >> "$ROOTFS/etc/termux-linux-manager.conf"
@@ -2979,7 +3003,7 @@ EOF
     # Distro wallpaper (GUI installs only). Applied on first desktop login
     # through an XDG autostart entry, with static LXDE config where possible.
     if [ "$DE" != "none" ]; then
-        apply_distro_wallpaper "$ROOTFS" "$LINUX_USER" "$DISTRO" "$DE"
+        apply_distro_wallpaper "$ROOTFS" "$LINUX_USER" "$DISTRO" "$DE" "${COLOR_MODE:-light}"
     fi
 
     # Post-install extras chosen in guided setup (all optional, all safe to
