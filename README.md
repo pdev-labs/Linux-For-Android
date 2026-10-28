@@ -356,7 +356,7 @@ installs; needs only `bash`, `coreutils`, `timeout`, and `python3` (plus
 `script` from util-linux for the pty test, skipped if absent):
 ```bash
 chmod +x tests/test-all.sh
-./tests/test-all.sh   # expect: PASS=242 FAIL=0
+./tests/test-all.sh   # expect: PASS=272 FAIL=0
 ```
 
 ## 📝 License

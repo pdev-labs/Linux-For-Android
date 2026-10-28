@@ -10,7 +10,7 @@ fi
 
 # Directory containing this script (lib/ lives next to it).
 LFA_DIR="$(cd "$(dirname "$0")" && pwd)"
-LFA_VERSION="1.5.5"
+LFA_VERSION="1.5.6"
 
 # ============================================================
 # Interactive UI (npm-style)
@@ -1343,7 +1343,9 @@ export PULSE_SERVER=127.0.0.1
 export XDG_RUNTIME_DIR="/tmp/xdg-\$(id -un)"
 mkdir -p "\$XDG_RUNTIME_DIR"
 chmod 700 "\$XDG_RUNTIME_DIR"
-if command -v dbus-launch >/dev/null 2>&1; then
+if command -v dbus-run-session >/dev/null 2>&1; then
+    exec dbus-run-session -- $SES
+elif command -v dbus-launch >/dev/null 2>&1; then
     exec dbus-launch --exit-with-session $SES
 else
     exec $SES
@@ -1727,6 +1729,12 @@ if [ "$SERVER" == "x11" ]; then
         exit 1
     fi
     echo "Starting Termux:X11..."
+    # Every distro shares $PREFIX/tmp. A dead D-Bus or X socket left by a
+    # previous session makes the new desktop reuse a dead bus ("Unable to
+    # contact settings server"). Clear this user's per-session state first.
+    rm -rf "$PREFIX/tmp/xdg-$X11_USER" 2>/dev/null || true
+    rm -f "$PREFIX"/tmp/dbus-* 2>/dev/null || true
+    rm -rf "$(lfa_rootfs "$DISTRO")/home/$X11_USER/.dbus/session-bus" 2>/dev/null || true
     # /tmp is shared with the guest. Pre-create the ICE socket directory as
     # root-owned 1777; the unprivileged desktop user cannot create it.
     mkdir -p "$PREFIX/tmp/.X11-unix" "$PREFIX/tmp/.ICE-unix" 2>/dev/null || true
@@ -1739,11 +1747,11 @@ if [ "$SERVER" == "x11" ]; then
     # visible instead of hidden.
     echo "Starting $DISTRO desktop as '$X11_USER' (session log: ~/start-linux-session.log)..."
     if [ "$DE" == "xfce4" ]; then
-        nohup proot-distro login $NO_SYSVIPC $DISTRO --user "$X11_USER" --shared-tmp -- bash -c "mkdir -p /tmp/.X11-unix; chmod 1777 /tmp/.X11-unix; export XDG_RUNTIME_DIR=/tmp/xdg-\$USER; mkdir -p "\$XDG_RUNTIME_DIR"; chmod 700 "\$XDG_RUNTIME_DIR"; export PULSE_SERVER=127.0.0.1; export DISPLAY=:1; $VIRGL_ENV if command -v dbus-launch >/dev/null 2>&1; then dbus-launch --exit-with-session startxfce4 > \$HOME/start-linux-session.log 2>&1; else startxfce4 > \$HOME/start-linux-session.log 2>&1; fi" &
+        nohup proot-distro login $NO_SYSVIPC $DISTRO --user "$X11_USER" --shared-tmp -- bash -c "mkdir -p /tmp/.X11-unix; chmod 1777 /tmp/.X11-unix; export XDG_RUNTIME_DIR=/tmp/xdg-\$USER; mkdir -p "\$XDG_RUNTIME_DIR"; chmod 700 "\$XDG_RUNTIME_DIR"; export PULSE_SERVER=127.0.0.1; export DISPLAY=:1; $VIRGL_ENV if command -v dbus-run-session >/dev/null 2>&1; then dbus-run-session -- startxfce4 > \$HOME/start-linux-session.log 2>&1; elif command -v dbus-launch >/dev/null 2>&1; then dbus-launch --exit-with-session startxfce4 > \$HOME/start-linux-session.log 2>&1; else startxfce4 > \$HOME/start-linux-session.log 2>&1; fi" &
     elif [ "$DE" == "lxde" ]; then
-        nohup proot-distro login $NO_SYSVIPC $DISTRO --user "$X11_USER" --shared-tmp -- bash -c "mkdir -p /tmp/.X11-unix; chmod 1777 /tmp/.X11-unix; export XDG_RUNTIME_DIR=/tmp/xdg-\$USER; mkdir -p "\$XDG_RUNTIME_DIR"; chmod 700 "\$XDG_RUNTIME_DIR"; export PULSE_SERVER=127.0.0.1; export DISPLAY=:1; $VIRGL_ENV if command -v dbus-launch >/dev/null 2>&1; then dbus-launch --exit-with-session startlxde > \$HOME/start-linux-session.log 2>&1; else startlxde > \$HOME/start-linux-session.log 2>&1; fi" &
+        nohup proot-distro login $NO_SYSVIPC $DISTRO --user "$X11_USER" --shared-tmp -- bash -c "mkdir -p /tmp/.X11-unix; chmod 1777 /tmp/.X11-unix; export XDG_RUNTIME_DIR=/tmp/xdg-\$USER; mkdir -p "\$XDG_RUNTIME_DIR"; chmod 700 "\$XDG_RUNTIME_DIR"; export PULSE_SERVER=127.0.0.1; export DISPLAY=:1; $VIRGL_ENV if command -v dbus-run-session >/dev/null 2>&1; then dbus-run-session -- startlxde > \$HOME/start-linux-session.log 2>&1; elif command -v dbus-launch >/dev/null 2>&1; then dbus-launch --exit-with-session startlxde > \$HOME/start-linux-session.log 2>&1; else startlxde > \$HOME/start-linux-session.log 2>&1; fi" &
     elif [ "$DE" == "mate" ]; then
-        nohup proot-distro login $NO_SYSVIPC $DISTRO --user "$X11_USER" --shared-tmp -- bash -c "mkdir -p /tmp/.X11-unix; chmod 1777 /tmp/.X11-unix; export XDG_RUNTIME_DIR=/tmp/xdg-\$USER; mkdir -p "\$XDG_RUNTIME_DIR"; chmod 700 "\$XDG_RUNTIME_DIR"; export PULSE_SERVER=127.0.0.1; export DISPLAY=:1; $VIRGL_ENV if command -v dbus-launch >/dev/null 2>&1; then dbus-launch --exit-with-session mate-session > \$HOME/start-linux-session.log 2>&1; else mate-session > \$HOME/start-linux-session.log 2>&1; fi" &
+        nohup proot-distro login $NO_SYSVIPC $DISTRO --user "$X11_USER" --shared-tmp -- bash -c "mkdir -p /tmp/.X11-unix; chmod 1777 /tmp/.X11-unix; export XDG_RUNTIME_DIR=/tmp/xdg-\$USER; mkdir -p "\$XDG_RUNTIME_DIR"; chmod 700 "\$XDG_RUNTIME_DIR"; export PULSE_SERVER=127.0.0.1; export DISPLAY=:1; $VIRGL_ENV if command -v dbus-run-session >/dev/null 2>&1; then dbus-run-session -- mate-session > \$HOME/start-linux-session.log 2>&1; elif command -v dbus-launch >/dev/null 2>&1; then dbus-launch --exit-with-session mate-session > \$HOME/start-linux-session.log 2>&1; else mate-session > \$HOME/start-linux-session.log 2>&1; fi" &
     fi
     echo "If the screen stays on the X cursor, the desktop failed to start:"
     echo "  cat ~/start-linux-session.log   (inside the distro) for the reason."
@@ -1758,7 +1766,10 @@ elif [ "$SERVER" == "vnc" ]; then
         # proot-distro uses --kill-on-exit: a daemonised Xvnc dies as soon as
         # the login command returns. Keep the login session alive in the
         # background so the VNC server (and its desktop) persists.
-        nohup proot-distro login $NO_SYSVIPC $DISTRO --user "$X11_USER" --shared-tmp -- bash -c "export PULSE_SERVER=127.0.0.1; $VIRGL_ENV vncserver -geometry $RESOLUTION :1; rc=\$?; [ \$rc -eq 0 ] || exit \$rc; while :; do sleep 3600; done" > "$VNC_LOG" 2>&1 &
+        VNC_SES="startxfce4"
+        [ "$DE" = "lxde" ] && VNC_SES="startlxde"
+        [ "$DE" = "mate" ] && VNC_SES="mate-session"
+        nohup proot-distro login $NO_SYSVIPC $DISTRO --user "$X11_USER" --shared-tmp -- bash -c "export PULSE_SERVER=127.0.0.1; mkdir -p \$HOME/.vnc \$HOME/.config/tigervnc; printf 'geometry=%s\n' '$RESOLUTION' > \$HOME/.vnc/config; printf 'geometry=%s\n' '$RESOLUTION' > \$HOME/.config/tigervnc/config; if command -v vncserver >/dev/null 2>&1; then $VIRGL_ENV vncserver :1; rc=\$?; [ \$rc -eq 0 ] || exit \$rc; else $VIRGL_ENV Xvnc :1 -geometry $RESOLUTION -depth 24 -rfbauth \$HOME/.config/tigervnc/passwd -SecurityTypes VncAuth > \$HOME/.vnc-xvnc.log 2>&1 & sleep 2; DISPLAY=:1 dbus-run-session -- $VNC_SES > \$HOME/start-linux-session.log 2>&1; fi; while :; do sleep 3600; done" > "$VNC_LOG" 2>&1 &
         echo $! > "$VNC_PIDFILE"
         echo "VNC server started on port 5901 (log: $VNC_LOG)."
     fi
@@ -2234,6 +2245,7 @@ install_linux() {
             LXDE_PKG="lxde dbus-x11"
             MATE_PKG="mate-desktop-environment dbus-x11"
             VNC_PKG="tigervnc-standalone-server"
+            LOADER_PKG="glycin-loaders"
             SUDO_PKG=""
             SELECTED_PKGS=""
             if [ "$INSTALL_PYTHON" == "1" ]; then SELECTED_PKGS="$SELECTED_PKGS python3 python3-pip"; fi
@@ -2261,6 +2273,7 @@ install_linux() {
             LXDE_PKG="lxde dbus"
             MATE_PKG="mate dbus"
             VNC_PKG="tigervnc"
+            LOADER_PKG="glycin"
             SUDO_PKG=""
             SELECTED_PKGS=""
             if [ "$INSTALL_PYTHON" == "1" ]; then SELECTED_PKGS="$SELECTED_PKGS python python-pip"; fi
@@ -2284,6 +2297,7 @@ install_linux() {
             LXDE_PKG="lxde-common lxsession dbus-x11"
             MATE_PKG="mate-desktop dbus-x11"
             VNC_PKG="tigervnc-server"
+            LOADER_PKG="glycin-loaders"
             SUDO_PKG=""
             SELECTED_PKGS=""
             if [ "$INSTALL_PYTHON" == "1" ]; then SELECTED_PKGS="$SELECTED_PKGS python3 python3-pip"; fi
@@ -2303,10 +2317,11 @@ install_linux() {
         opensuse)
             UPDATE_CMD="zypper refresh && zypper update -y"
             INSTALL_CMD="zypper install -y"
-            XFCE_PKG="patterns-xfce-xfce dbus-1-x11"
-            LXDE_PKG="patterns-lxde-lxde dbus-1-x11"
-            MATE_PKG="patterns-mate-mate dbus-1-x11"
+            XFCE_PKG="patterns-xfce-xfce dbus-1-daemon dbus-1-tools"
+            LXDE_PKG="patterns-lxde-lxde dbus-1-daemon dbus-1-tools"
+            MATE_PKG="patterns-mate-mate dbus-1-daemon dbus-1-tools"
             VNC_PKG="tigervnc"
+            LOADER_PKG="glycin-loaders"
             SUDO_PKG=""
             SELECTED_PKGS=""
             if [ "$INSTALL_PYTHON" == "1" ]; then SELECTED_PKGS="$SELECTED_PKGS python3 python3-pip"; fi
@@ -2326,10 +2341,11 @@ install_linux() {
         void)
             UPDATE_CMD="xbps-install -Syu"
             INSTALL_CMD="xbps-install -y"
-            XFCE_PKG="xfce4 dbus"
-            LXDE_PKG="lxde dbus"
-            MATE_PKG="mate dbus"
+            XFCE_PKG="xfce4 dbus dejavu-fonts-ttf"
+            LXDE_PKG="lxde dbus dejavu-fonts-ttf"
+            MATE_PKG="mate dbus dejavu-fonts-ttf"
             VNC_PKG="tigervnc"
+            LOADER_PKG="glycin-loaders"
             SUDO_PKG=""
             SELECTED_PKGS=""
             if [ "$INSTALL_PYTHON" == "1" ]; then SELECTED_PKGS="$SELECTED_PKGS python3 python3-pip"; fi
@@ -2351,9 +2367,23 @@ install_linux() {
             # Package names verified against edge/aarch64 APKINDEX.
             # NOTE: no LXDE meta / startlxde (remapped to xfce4 above),
             # no neofetch (use fastfetch), no VS Code build (skipped).
-            UPDATE_CMD="apk update && apk upgrade"
+            #
+            # The proot-distro Alpine image ships *edge* repositories even
+            # though its base is 3.18. Edge glib 2.90 / gtk abort on the
+            # Android 5/6 3.10 kernel with "ENOSYS: Function not implemented"
+            # (verified live on the Oppo A37fw), killing the XFCE session.
+            # Legacy installs pin the 3.18 branch and use a minimal XFCE set
+            # that avoids the huge webkit/llvm pulls.
+            if [ "$IS_LEGACY" = "1" ]; then
+                UPDATE_CMD="sed -i 's|/edge/|/v3.18/|g' /etc/apk/repositories && apk update && apk upgrade"
+                XFCE_PKG="xfce4-session xfwm4 xfce4-panel xfce4-settings xfce4-terminal xfdesktop dbus dbus-x11 font-dejavu"
+                LOADER_PKG=""
+            else
+                UPDATE_CMD="apk update && apk upgrade"
+                XFCE_PKG="xfce4 xfce4-terminal dbus"
+                LOADER_PKG="glycin-loaders-all"
+            fi
             INSTALL_CMD="apk add"
-            XFCE_PKG="xfce4 xfce4-terminal dbus"
             LXDE_PKG="xfce4 xfce4-terminal dbus"
             MATE_PKG="mate-desktop mate-session-manager marco mate-settings-daemon dbus"
             VNC_PKG="tigervnc"
@@ -2492,6 +2522,13 @@ for _lfa_i in 1 2 3; do
     [ "\$_lfa_i" -lt 3 ] && sleep 8
 done
 [ "\$_LFA_PKG_OK" = "1" ] || echo "[!] Core package installation did not finish cleanly."
+# gdk-pixbuf >= 2.42.11 delegates PNG/JPEG decoding to glycin. Install the
+# loaders where the distro provides them; ignore distros that do not (older
+# Ubuntu/Debian releases ship the classic in-tree loaders instead).
+if [ "$DE" != "none" ] && [ -n "$LOADER_PKG" ]; then
+    echo " -> Installing image loaders ($LOADER_PKG)..."
+    $INSTALL_CMD $LOADER_PKG >/dev/null 2>&1 || true
+fi
 EOF
     fi
 
@@ -2890,7 +2927,9 @@ export PULSE_SERVER=127.0.0.1
 export XDG_RUNTIME_DIR="/tmp/xdg-\$(id -un)"
 mkdir -p "\$XDG_RUNTIME_DIR"
 chmod 700 "\$XDG_RUNTIME_DIR"
-if command -v dbus-launch >/dev/null 2>&1; then
+if command -v dbus-run-session >/dev/null 2>&1; then
+    exec dbus-run-session -- $_vnc_ses
+elif command -v dbus-launch >/dev/null 2>&1; then
     exec dbus-launch --exit-with-session $_vnc_ses
 else
     exec $_vnc_ses
@@ -2946,7 +2985,7 @@ MISSING_CORE=""
 if [ "$DE" = "xfce4" ] && ! command -v xfce4-session >/dev/null 2>&1; then MISSING_CORE="\$MISSING_CORE xfce4-session"; fi
 if [ "$DE" = "lxde" ] && ! command -v startlxde >/dev/null 2>&1; then MISSING_CORE="\$MISSING_CORE lxde"; fi
 if [ "$DE" = "mate" ] && ! command -v mate-session >/dev/null 2>&1; then MISSING_CORE="\$MISSING_CORE mate-session"; fi
-if [ "$SERVER" = "vnc" ] && ! command -v vncserver >/dev/null 2>&1; then MISSING_CORE="\$MISSING_CORE vncserver"; fi
+if [ "$SERVER" = "vnc" ] && ! command -v vncserver >/dev/null 2>&1 && ! command -v Xvnc >/dev/null 2>&1; then MISSING_CORE="\$MISSING_CORE vncserver"; fi
 if [ "$SERVER" = "vnc" ] && [ ! -s /home/$LINUX_USER/.config/tigervnc/passwd ] && [ ! -s /home/$LINUX_USER/.vnc/passwd ]; then MISSING_CORE="\$MISSING_CORE vnc-password"; fi
 if [ -n "\$MISSING_CORE" ]; then
     echo "========================================="
@@ -3042,7 +3081,7 @@ EOF
                 echo "sleep 5"
                 # Keep the proot session alive: vncserver daemonises and would
                 # otherwise be killed by proot-distro --kill-on-exit.
-                echo "nohup proot-distro login $(pd_login_flags) $INSTANCE_NAME --user $LINUX_USER --shared-tmp -- bash -c \"vncserver -geometry ${RESOLUTION:-1280x720} :1; while :; do sleep 3600; done\" >/dev/null 2>&1 &"
+                echo "nohup proot-distro login $(pd_login_flags) $INSTANCE_NAME --user $LINUX_USER --shared-tmp -- bash -c \"mkdir -p \$HOME/.vnc \$HOME/.config/tigervnc; printf 'geometry=%s\n' '${RESOLUTION:-1280x720}' > \$HOME/.vnc/config; printf 'geometry=%s\n' '${RESOLUTION:-1280x720}' > \$HOME/.config/tigervnc/config; vncserver :1; while :; do sleep 3600; done\" >/dev/null 2>&1 &"
                 echo "echo \$! > \"\$PREFIX/tmp/lfa-vnc-$INSTANCE_NAME.pid\""
             elif [ "$SERVER" = "x11" ]; then
                 echo "# NOTE: Termux:X11 needs its app window open, so it cannot"

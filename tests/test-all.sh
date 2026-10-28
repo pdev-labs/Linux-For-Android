@@ -49,7 +49,7 @@ case "$1" in
             echo "No containers are installed."
             echo "Install one with: proot-distro install ubuntu:24.04"
         else
-            printf 'Available distributions:\n  * Debian\n    Alias: debian\n  * Alpine Linux\n    Alias: alpine\n  * Debian (bullseye)\n    Alias: bullseye\n  * Ubuntu\n    Alias: ubuntu\n  * Fedora\n    Alias: fedora\n'
+            printf 'Available distributions:\n  * Debian\n    Alias: debian\n  * Alpine Linux\n    Alias: alpine\n  * Debian (bullseye)\n    Alias: bullseye\n  * Ubuntu\n    Alias: ubuntu\n  * Fedora\n    Alias: fedora\n  * OpenSUSE\n    Alias: opensuse\n  * Kali Linux\n    Alias: kali\n  * Void Linux\n    Alias: void\n  * Arch Linux\n    Alias: archlinux\n'
         fi ;;
     install)
         if [ "$2" = "--help" ]; then
@@ -202,6 +202,7 @@ check "D apt mapping" 'apt-get install -y' "$S"
 check "D vscode repo" 'packages.microsoft.com' "$S"
 check "D x11 branch" 'startxfce4' "$T/prefix/bin/start-linux"
 check "D x11 dbus fallback" 'command -v dbus-launch' "$T/prefix/bin/start-linux"
+check "D x11 dbus run session" 'dbus-run-session -- startxfce4' "$T/prefix/bin/start-linux"
 check_absent "D virgl skipped" 'virglrenderer-android' "$T/d.log"
 check "D x11 pkg" 'x11-repo' "$T/d.log"
 check "D x11 user fallback" 'X11_USER="${USER_NAME:-${LINUX_USER:-user}}"' "$T/prefix/bin/start-linux"
@@ -214,6 +215,10 @@ DROOT="$T/prefix/var/lib/proot-distro/installed-rootfs/ubuntu"
 [ "$(cat "$DROOT/etc/lfa-wallpaper-mode" 2>/dev/null)" = "light" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: D wallpaper mode marker"; }
 [ -x "$DROOT/usr/local/bin/lfa-set-wallpaper" ] && sh -n "$DROOT/usr/local/bin/lfa-set-wallpaper" && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: D wallpaper applier missing/invalid"; }
 check "D wallpaper xfce" 'xfconf-query -c xfce4-desktop' "$DROOT/usr/local/bin/lfa-set-wallpaper"
+check "D wallpaper waits for xfdesktop" 'workspace[0-9]*/last-image' "$DROOT/usr/local/bin/lfa-set-wallpaper"
+check "D wallpaper xrandr seed" 'xrandr --query' "$DROOT/usr/local/bin/lfa-set-wallpaper"
+check "D wallpaper monitorscreen seed" 'monitorVNC-0 monitorscreen' "$DROOT/usr/local/bin/lfa-set-wallpaper"
+check "D wallpaper repaint nudge" 'xfdesktop --reload' "$DROOT/usr/local/bin/lfa-set-wallpaper"
 check "D wallpaper autostart" 'Exec=/usr/local/bin/lfa-set-wallpaper --autostart' "$DROOT/home/user/.config/autostart/lfa-wallpaper.desktop"
 
 echo "===== E: guided fedora mate ====="
@@ -224,12 +229,24 @@ S=$(setup_sh_of)
 check "E dnf" 'dnf install' "$S"
 check "E mate" 'mate-desktop' "$S"
 check "E mate template" 'mate-session' "$T/prefix/bin/start-linux"
+check "E glycin loaders" 'glycin-loaders' "$(setup_sh_of)"
 check "E dark mode saved" 'COLOR_MODE="dark"' "$T/home/.config/linux-for-android/setup.conf"
 EROOT="$T/prefix/var/lib/proot-distro/installed-rootfs/fedora"
 [ -s "$EROOT/usr/share/backgrounds/lfa-default.jpg" ] && cmp -s "$EROOT/usr/share/backgrounds/lfa-default.jpg" "$REPO/assets/wallpapers/fedora-dark.jpg" && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: E fedora wallpaper not staged"; }
 check "E wallpaper mate" 'org.mate.background picture-filename' "$EROOT/usr/local/bin/lfa-set-wallpaper"
 [ "$(cat "$EROOT/etc/lfa-wallpaper-mode" 2>/dev/null)" = "dark" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: E wallpaper mode marker"; }
 [ -f "$EROOT/home/user/.config/autostart/lfa-wallpaper.desktop" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: E wallpaper autostart missing"; }
+
+echo "===== E2: opensuse xfce (dbus provider rename) ====="
+fresh_env
+printf '%s\n' 2 5 1 1 1 1 '' ostest ouser 123 123 UTC ostest 1 'n' '' 'n' 'n' '' '' '13' \
+| bash "$REPO/install_linux.sh" > "$T/e2.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: run e2 exit $rc"; }
+E2S=$(setup_sh_of)
+check "E2 completes" 'Installation complete!' "$T/e2.log"
+check "E2 dbus provider" 'dbus-1-daemon' "$E2S"
+check_absent "E2 no dbus-1-x11" 'dbus-1-x11' "$E2S"
+check "E2 xfce pattern" 'patterns-xfce-xfce' "$E2S"
+check "E2 glycin loaders" 'glycin-loaders' "$E2S"
 
 echo "===== F: guided alpine vnc (lxde remap) ====="
 fresh_env
@@ -239,6 +256,7 @@ check "F remap" 'DE="xfce4"' "$T/home/.config/linux-for-android/setup.conf"
 check "F dark mode saved" 'COLOR_MODE="dark"' "$T/home/.config/linux-for-android/setup.conf"
 S=$(setup_sh_of)
 check "F apk" 'apk add' "$S"
+check "F glycin loaders" 'glycin-loaders-all' "$S"
 check "F vncpasswd" 'vncpasswd -f' "$S"
 check_absent "F no expect" 'spawn vncpasswd' "$S"
 bash -n "$S" && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: F setup syntax"; }
@@ -265,6 +283,21 @@ printf '%s\n' 2 3 8 4 '' '' '' '' '' '' '' 1 'n' '' 'n' 'n' '' '' '13' \
 | bash "$REPO/install_linux.sh" > "$T/h.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: run h exit $rc"; }
 check "H kali blocked" 'no legacy plugin' "$T/h.log"
 check "H completes" 'Installation complete!' "$T/h.log"
+unset GETPROP_SDK PD_V4 FREE_MB
+
+echo "===== H2: legacy alpine XFCE VNC (pinned branch, minimal set) ====="
+fresh_env
+export GETPROP_SDK=22 PD_V4=1 FREE_MB=1024
+printf '%s\n' 2 8 1 1 1 '' h2alpine h2user 123 123 UTC h2alpine 1 'n' '' 'n' 'n' '' '' '13' \
+| bash "$REPO/install_linux.sh" > "$T/h2.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: run h2 exit $rc"; }
+check "H2 completes" 'Installation complete!' "$T/h2.log"
+check "H2 vnc auto" 'display server auto-set to VNC' "$T/h2.log"
+H2S=$(setup_sh_of)
+check "H2 alpine pinned" 's|/edge/|/v3.18/|g' "$H2S"
+check "H2 minimal xfce" 'xfce4-session xfwm4 xfce4-panel' "$H2S"
+H2ROOT="$T/prefix/var/lib/proot-distro/installed-rootfs/h2alpine"
+[ -s "$H2ROOT/usr/share/backgrounds/lfa-default.jpg" ] && cmp -s "$H2ROOT/usr/share/backgrounds/lfa-default.jpg" "$REPO/assets/wallpapers/alpine.jpg" && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: H2 alpine wallpaper not staged"; }
+[ -f "$H2ROOT/home/h2user/.config/autostart/lfa-wallpaper.desktop" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: H2 wallpaper autostart missing"; }
 unset GETPROP_SDK PD_V4 FREE_MB
 
 echo "===== I: legacy ubuntu glibc warning ====="
@@ -419,6 +452,15 @@ check_absent "M remove applied" 'dbus-daemon-launch-helper' "$T/so.db"
 run_shim --version > "$T/m-ver.log" 2>&1
 check "M passthrough" 'REAL-CALLED' "$T/m-ver.log"
 
+echo "===== M2: glycin bwrap shim (proot) ====="
+GLROOT="$T/glycinroot"
+mkdir -p "$GLROOT/usr/libexec/glycin-loaders" "$GLROOT/etc" "$GLROOT/home/guser"
+LFA_ROOT="$GLROOT" LFA_USER=guser sh "$REPO/lib/real-feel.sh" >/dev/null 2>&1
+[ -x "$GLROOT/usr/local/bin/bwrap" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: M2 bwrap shim missing"; }
+check "M2 shim message" 'No permissions to create a new namespace' "$GLROOT/usr/local/bin/bwrap"
+[ -s "$GLROOT/etc/machine-id" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: M2 machine-id missing"; }
+[ -e "$GLROOT/var/lib/dbus/machine-id" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: M2 dbus machine-id link missing"; }
+
 echo "===== N: apply latest fixes to an older distro ====="
 fresh_env
 NROOT="$T/prefix/var/lib/proot-distro/installed-rootfs/oldinst"
@@ -552,11 +594,17 @@ printf '%s\n' 2 2 2 2 2 2 1 '' vnctest vncuser 123 123 UTC vnctest 1 n '' n n ''
 | bash "$REPO/install_linux.sh" > "$T/v.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: run v exit $rc"; }
 VS=$(setup_sh_of)
 check "V both config dirs" 'mkdir -p /home/vncuser/.vnc /home/vncuser/.config/tigervnc' "$VS"
-check "V exec desktop" 'exec dbus-launch --exit-with-session startlxde' "$VS"
+check "V exec desktop" 'exec dbus-run-session -- startlxde' "$VS"
 check "V clean PATH" 'export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin' "$VS"
 check "V password gate" 'vnc-password' "$VS"
 check "V noninteractive vncpasswd" 'vncpasswd -f' "$VS"
 check "V keepalive launcher" 'while :; do sleep 3600; done' "$T/prefix/bin/start-linux"
+check "V vnc config geometry" '.config/tigervnc/config' "$T/prefix/bin/start-linux"
+check "V xvnc fallback" 'Xvnc :1 -geometry' "$T/prefix/bin/start-linux"
+check "V vnc session var" 'VNC_SES="startxfce4"' "$T/prefix/bin/start-linux"
+check "V clears stale runtime" 'rm -rf "$PREFIX/tmp/xdg-$X11_USER"' "$T/prefix/bin/start-linux"
+check "V clears dbus sockets" 'rm -f "$PREFIX"/tmp/dbus-*' "$T/prefix/bin/start-linux"
+check_absent "V no legacy vncserver flags" 'vncserver -geometry' "$T/prefix/bin/start-linux"
 check "V stop pidfile" 'lfa-vnc-$DISTRO.pid' "$T/prefix/bin/stop-linux"
 check "V start uses bash login" '/bin/bash -l' "$T/prefix/bin/start-linux"
 check "V terminal uses bash login" '/bin/bash -l' "$T/prefix/bin/terminal-linux"

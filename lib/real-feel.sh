@@ -161,4 +161,40 @@ chmod 644 "$R/etc/profile.d/00-lfa-welcome.sh" \
 chmod 644 "$R/root/.profile" "$R/home/$USER_NAME/.profile" \
            "$R/root/.bashrc" "$R/home/$USER_NAME/.bashrc" 2>/dev/null || true
 
+# ---------------- D-Bus machine id ----------------------------------
+# Some container images ship an empty /etc/machine-id. D-Bus refuses to
+# start without one, so XFCE cannot reach xfconfd and shows "Unable to
+# contact settings server" on a black desktop. Generate it once per rootfs.
+if [ ! -s "$R/etc/machine-id" ]; then
+    _mid="$(od -An -N16 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n')"
+    [ -n "$_mid" ] || _mid="0123456789abcdef0123456789abcdef"
+    # Images may ship the file read-only and empty; recreate it.
+    rm -f "$R/etc/machine-id" 2>/dev/null || true
+    printf '%s\n' "$_mid" > "$R/etc/machine-id" 2>/dev/null || true
+    chmod 444 "$R/etc/machine-id" 2>/dev/null || true
+fi
+mkdir -p "$R/var/lib/dbus" 2>/dev/null || true
+[ -e "$R/var/lib/dbus/machine-id" ] || \
+    ln -s /etc/machine-id "$R/var/lib/dbus/machine-id" 2>/dev/null || true
+
+# ---------------- glycin (gdk-pixbuf >= 2.42.11) --------------------
+# New GTK stacks decode PNG/JPEG through glycin, which sandboxes its loader
+# with bubblewrap. proot cannot create user namespaces, so bwrap always fails
+# and gdk-pixbuf aborts the whole application (Kali 2026, Fedora 44, ...).
+# Report the exact failure glycin's availability probe recognises, so it
+# falls back to in-process decoding instead of killing the desktop.
+if [ -d "$R/usr/libexec/glycin-loaders" ] || \
+   [ -d "$R/usr/lib/glycin-loaders" ] || \
+   ls "$R"/usr/lib*/libglycin-*.so* "$R"/usr/lib/*/libglycin-*.so* >/dev/null 2>&1; then
+    cat > "$R/usr/local/bin/bwrap" <<'LFA_BWRAP'
+#!/bin/sh
+# Linux-for-Android: bubblewrap cannot create namespaces inside proot.
+# glycin (gdk-pixbuf image loading) treats this message as "sandbox
+# unavailable" and decodes images in-process instead of aborting GTK.
+echo "bwrap: No permissions to create a new namespace" >&2
+exit 1
+LFA_BWRAP
+    chmod 755 "$R/usr/local/bin/bwrap" 2>/dev/null || true
+fi
+
 exit 0

@@ -94,7 +94,21 @@ cat > "$BIN_DIR/lfa-set-wallpaper" <<'LFA_WALL_EOF'
 #!/bin/sh
 # Apply the Linux-for-Android distro wallpaper in the current session.
 # Installed by the Linux-for-Android manager; re-run safely at any time.
-[ "${1:-}" = "--autostart" ] && sleep 2
+# On login xfdesktop creates its backdrop keys several seconds into the
+# session. Writing them earlier only hits guessed monitor names, and the
+# desktop stays black on first login. Wait for the real keys before applying.
+if [ "${1:-}" = "--autostart" ] && command -v xfconf-query >/dev/null 2>&1; then
+    _i=0
+    while [ "$_i" -lt 20 ]; do
+        if xfconf-query -c xfce4-desktop -l 2>/dev/null \
+            | grep -q '/backdrop/.*/workspace[0-9]*/last-image'; then
+            break
+        fi
+        sleep 1
+        _i=$((_i + 1))
+    done
+    sleep 1
+fi
 
 WALL="${LFA_WALLPAPER:-/usr/share/backgrounds/lfa-default.jpg}"
 [ -r "$WALL" ] || exit 0
@@ -120,14 +134,35 @@ if command -v xfconf-query >/dev/null 2>&1; then
             set_xfconf xfce4-desktop "$base/image-style" int 5
         done
     fi
-    # First login: xfdesktop may not have created backdrop keys yet. The
-    # monitor name differs between Termux:X11 and TigerVNC, so seed the
-    # common ones; autostart runs again after xfdesktop starts.
-    for mon in monitor0 monitor1 monitorVirtual-1 monitorVNC-0; do
+    # Fallback when xfdesktop has not created keys yet: derive the real X11
+    # output name and seed both the single-workspace and per-workspace keys.
+    for mon in monitor0 monitor1 monitorVirtual-1 monitorVNC-0 monitorscreen; do
         base="/backdrop/screen0/$mon"
         set_xfconf xfce4-desktop "$base/last-image" string "$WALL"
         set_xfconf xfce4-desktop "$base/image-style" int 5
+        # Single-workspace desktops read <monitor>/last-image, multi-workspace
+        # ones read <monitor>/workspaceN/last-image. Seed both, because the
+        # real connector name (e.g. termux-x11's "screen") is only known once
+        # xfdesktop has created its own keys.
+        for _ws in 0 1 2 3; do
+            set_xfconf xfce4-desktop "$base/workspace$_ws/last-image" string "$WALL"
+            set_xfconf xfce4-desktop "$base/workspace$_ws/image-style" int 5
+        done
     done
+    for _o in $(xrandr --query 2>/dev/null | awk '/ connected/{print $1}'); do
+        for _i in 0 1 2 3; do
+            base="/backdrop/screen0/monitor$_o/workspace$_i"
+            set_xfconf xfce4-desktop "$base/last-image" string "$WALL"
+            set_xfconf xfce4-desktop "$base/image-style" int 5
+        done
+        base="/backdrop/screen0/monitor$_o"
+        set_xfconf xfce4-desktop "$base/last-image" string "$WALL"
+        set_xfconf xfce4-desktop "$base/image-style" int 5
+    done
+    # Ask an already-running xfdesktop to repaint the new backdrop.
+    if [ -n "${DISPLAY:-}" ] && command -v xfdesktop >/dev/null 2>&1; then
+        xfdesktop --reload >/dev/null 2>&1 || true
+    fi
 fi
 
 # ---- LXDE ---------------------------------------------------------------
