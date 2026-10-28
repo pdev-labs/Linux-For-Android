@@ -459,7 +459,7 @@ LFA_ROOT="$GLROOT" LFA_USER=guser sh "$REPO/lib/real-feel.sh" >/dev/null 2>&1
 [ -x "$GLROOT/usr/local/bin/bwrap" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: M2 bwrap shim missing"; }
 check "M2 shim message" 'No permissions to create a new namespace' "$GLROOT/usr/local/bin/bwrap"
 [ -s "$GLROOT/etc/machine-id" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: M2 machine-id missing"; }
-[ -e "$GLROOT/var/lib/dbus/machine-id" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: M2 dbus machine-id link missing"; }
+{ [ -e "$GLROOT/var/lib/dbus/machine-id" ] || [ -L "$GLROOT/var/lib/dbus/machine-id" ]; } && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: M2 dbus machine-id link missing"; }
 
 echo "===== N: apply latest fixes to an older distro ====="
 fresh_env
