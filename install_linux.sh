@@ -10,7 +10,7 @@ fi
 
 # Directory containing this script (lib/ lives next to it).
 LFA_DIR="$(cd "$(dirname "$0")" && pwd)"
-LFA_VERSION="1.5.6"
+LFA_VERSION="1.5.7"
 
 # ============================================================
 # Interactive UI (npm-style)
@@ -1739,6 +1739,12 @@ if [ "$SERVER" == "x11" ]; then
     # root-owned 1777; the unprivileged desktop user cannot create it.
     mkdir -p "$PREFIX/tmp/.X11-unix" "$PREFIX/tmp/.ICE-unix" 2>/dev/null || true
     chmod 1777 "$PREFIX/tmp/.X11-unix" "$PREFIX/tmp/.ICE-unix" 2>/dev/null || true
+    # A dead VNC server can leave /tmp/.X11-unix/X1 behind (all distros share
+    # /tmp). Termux:X11 then refuses to start and clients talk to a dead
+    # socket. Drop it only when no Termux:X11 instance is running.
+    if ! pgrep -f "termux-x11 :1" >/dev/null 2>&1; then
+        rm -f "$PREFIX/tmp/.X11-unix/X1" 2>/dev/null || true
+    fi
     nohup termux-x11 :1 >/dev/null 2>&1 &
     sleep 2
     # XDG_RUNTIME_DIR is required by xfce4-session/dbus; without it the
