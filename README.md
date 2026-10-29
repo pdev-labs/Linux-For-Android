@@ -65,18 +65,19 @@ hardware, not just simulated. Full details, root causes and evidence:
 | Void Linux | ✅ | ✅ | |
 | Alpine Linux | ✅ | ⚠️ | desktop renders; panel does not start on edge |
 | Alpine 3.18 (Android 5) | ✅ | ✅ | legacy VNC desktop |
+| Ubuntu GNOME 46 (experimental) | ✅ | ✅ | shell renders, apps launch; session services missing |
 
-> Test suite: `304` checks, `0` failures — the same suite is what runs on the devices.
+> Test suite: `313` checks, `0` failures — the same suite is what runs on the devices.
 
 ## 🧪 GNOME (Experimental)
 
 > **Status: BETA / EXPERIMENTAL. It is not a supported desktop. Expect crashes
 > and missing features. Do not use it for anything you depend on.**
 
-> **Hardware validation:** unlike the desktops in the matrix above, GNOME has
-> **not** been validated on the test devices yet. It is shipped from the
-> community-proven recipe (direct `gnome-shell --x11`, no `gnome-session`)
-> and covered by the automated suite only.
+> **Hardware validation:** GNOME Shell **does** start and render on the Vivo
+> (Android 16, Ubuntu 24.04, GNOME 46) over both Termux:X11 and VNC, and
+> `gnome-terminal` runs inside it. It is still beta: the session services
+> below are missing, and the first login opens with the overview.
 
 Guided setup offers **GNOME (experimental)** as option 5, but only on
 Ubuntu, Debian, Kali, Arch Linux, Fedora and openSUSE, and only on Android 8+.
@@ -91,6 +92,20 @@ D-Bus session.
 
 The shell itself runs. The session services that `gnome-session` normally
 starts do not, which is where the breakage comes from.
+
+Two proot-specific patches make it start at all:
+
+1. **A private system bus.** GNOME Shell asks logind for suspend/lock state
+   while building the background. proot has a session bus but no system bus,
+   so `Gio.DBus.system` throws `A connection to the bus can't be made` and the
+   shell dies before the first frame. The launcher points
+   `DBUS_SYSTEM_BUS_ADDRESS` at a private daemon that simply has no logind.
+2. **A UTF-8 locale.** proot starts the session with an empty `LANG`, which
+   glib reports as `ANSI_X3.4-1968`. GTK apps then refuse to start
+   (`Non UTF-8 locale ... is not supported!`, `gnome-terminal` exits with
+   status 8). The launcher sets `LANG=C.UTF-8` and publishes the environment
+   with `dbus-update-activation-environment --all`, which `gnome-session`
+   would normally do.
 
 ### What is missing or broken
 
@@ -112,6 +127,9 @@ starts do not, which is where the breakage comes from.
 - GNOME 49+ removed the X11 session. The launcher detects this and refuses
   with a clear message instead of showing a black screen; use a release with
   GNOME 48 or older.
+- Cosmetic: under software rendering the window shadow is drawn as a solid
+  black rectangle, and the first login opens in the overview instead of the
+  desktop.
 
 ### Requirements
 
@@ -470,11 +488,13 @@ If you need `ubuntu-desktop`, note that it is only a metapackage — removing `s
 **Cause:** GNOME is experimental here. It runs `gnome-shell --x11` without `gnome-session`, so the services the session normally provides (systemd user session, logind, portals, session manager) are absent.
 **Fix, in order:**
 1. Read `~/start-linux-session.log` inside the distro.
-2. If it says the X11 session is not supported, your GNOME is 49 or newer — you need a release with GNOME 48 or older.
-3. Switch to **VNC** if you were using Termux:X11; GNOME crashes far more often over X11.
-4. Run menu **0 (Doctor)**, then `start-linux` again (package upgrades can break the session).
-5. If Settings crashes, the only known workaround is to wipe `~/.cache ~/.config ~/.local` — this also deletes your settings.
-6. If it keeps misbehaving, reinstall with **MATE** (option 3): same GNOME heritage, stable, no systemd requirement.
+2. `A connection to the bus can't be made` / `LoginManagerSystemd` in the log means the private system bus is missing — re-run menu **12 (Apply Latest Fixes)** so the launcher is regenerated.
+3. `Non UTF-8 locale (ANSI_X3.4-1968) is not supported!` or apps exiting with status 8 means the session has no UTF-8 locale — same fix: menu **12**.
+4. If it says the X11 session is not supported, your GNOME is 49 or newer — you need a release with GNOME 48 or older.
+5. Switch to **VNC** if you were using Termux:X11; GNOME crashes far more often over X11.
+6. Run menu **0 (Doctor)**, then `start-linux` again (package upgrades can break the session).
+7. If Settings crashes, the only known workaround is to wipe `~/.cache ~/.config ~/.local` — this also deletes your settings.
+8. If it keeps misbehaving, reinstall with **MATE** (option 3): same GNOME heritage, stable, no systemd requirement.
 
 ## 🤝 Contributing
 
@@ -490,7 +510,7 @@ installs; needs only `bash`, `coreutils`, `timeout`, and `python3` (plus
 `script` from util-linux for the pty test, skipped if absent):
 ```bash
 chmod +x tests/test-all.sh
-./tests/test-all.sh   # expect: PASS=304 FAIL=0
+./tests/test-all.sh   # expect: PASS=313 FAIL=0
 ```
 
 The suite is deliberately stubbed — it cannot prove a desktop actually

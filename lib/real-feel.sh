@@ -191,11 +191,44 @@ export XDG_CURRENT_DESKTOP=GNOME
 export XDG_SESSION_DESKTOP=gnome
 export XDG_SESSION_TYPE=x11
 export GDK_BACKEND=x11
+# proot starts us with an empty LANG, which glib reports as
+# ANSI_X3.4-1968. GTK/GNOME apps then refuse to start with
+# "Non UTF-8 locale (ANSI_X3.4-1968) is not supported!" (gnome-terminal
+# exits with status 8). C.UTF-8 ships with glibc, so it always exists.
+case "${LC_ALL:-}${LANG:-}" in
+    *UTF-8*|*utf8*|*UTF8*) ;;
+    *) LANG=C.UTF-8; export LANG ;;
+esac
+
+# gnome-session normally publishes its environment to the session bus so that
+# bus-activated apps inherit LANG/DISPLAY. Without that, org.gnome.Terminal
+# starts with an empty locale and dies with "exited with status 8".
+if command -v dbus-update-activation-environment >/dev/null 2>&1; then
+    dbus-update-activation-environment --all >/dev/null 2>&1 || true
+fi
+
 [ -n "$HOME" ] && cd "$HOME" 2>/dev/null || true
 
 # gnome-session is not running, so nothing else applies the wallpaper.
 if [ -x /usr/local/bin/lfa-set-wallpaper ]; then
     /usr/local/bin/lfa-set-wallpaper --autostart >/dev/null 2>&1 || true
+fi
+
+# proot has a session bus but no *system* bus. GNOME Shell asks logind over the
+# system bus for suspend/lock state while building the background, so
+# Gio.DBus.system throws "A connection to the bus can't be made" and the shell
+# dies before the first frame. Pointing DBUS_SYSTEM_BUS_ADDRESS at a private
+# daemon that simply has no logind service makes the lookup fail softly.
+if [ -z "${DBUS_SYSTEM_BUS_ADDRESS:-}" ] && command -v dbus-daemon >/dev/null 2>&1; then
+    _lfa_bus=/tmp/lfa-gnome-system-bus
+    mkdir -p "$_lfa_bus" 2>/dev/null || true
+    rm -f "$_lfa_bus/socket" 2>/dev/null || true
+    dbus-daemon --session --fork --nopidfile \
+        --address="unix:path=$_lfa_bus/socket" >/dev/null 2>&1 || true
+    if [ -S "$_lfa_bus/socket" ]; then
+        DBUS_SYSTEM_BUS_ADDRESS="unix:path=$_lfa_bus/socket"
+        export DBUS_SYSTEM_BUS_ADDRESS
+    fi
 fi
 
 # GNOME 49+ removed the X11 session; without it GNOME cannot run in proot.

@@ -205,6 +205,8 @@ check "D x11 dbus fallback" 'command -v dbus-launch' "$T/prefix/bin/start-linux"
 check "D x11 dbus run session" 'dbus-run-session -- startxfce4' "$T/prefix/bin/start-linux"
 check_absent "D virgl skipped" 'virglrenderer-android' "$T/d.log"
 check "D x11 pkg" 'x11-repo' "$T/d.log"
+check "D x11 auto-install" 'pkg install -y termux-x11-nightly' "$T/prefix/bin/start-linux"
+check "D x11 manual hint" 'pkg install x11-repo && pkg install termux-x11-nightly' "$T/prefix/bin/start-linux"
 check "D x11 user fallback" 'X11_USER="${USER_NAME:-${LINUX_USER:-user}}"' "$T/prefix/bin/start-linux"
 check "D x11 private runtime" "XDG_RUNTIME_DIR=/tmp/xdg-" "$T/prefix/bin/start-linux"
 check "D x11 detached" 'nohup termux-x11 :1' "$T/prefix/bin/start-linux"
@@ -505,11 +507,34 @@ LFA_ROOT="$GNROOT" LFA_USER=guser LFA_DE=gnome sh "$REPO/lib/real-feel.sh" >/dev
 check "M3 starts shell" 'exec gnome-shell --x11' "$GNROOT/usr/local/bin/start-gnome-session"
 check "M3 applies wallpaper" 'lfa-set-wallpaper --autostart' "$GNROOT/usr/local/bin/start-gnome-session"
 check "M3 session desktop" 'XDG_CURRENT_DESKTOP=GNOME' "$GNROOT/usr/local/bin/start-gnome-session"
+check "M3 private system bus" 'DBUS_SYSTEM_BUS_ADDRESS' "$GNROOT/usr/local/bin/start-gnome-session"
+check "M3 utf8 locale" 'LANG=C.UTF-8' "$GNROOT/usr/local/bin/start-gnome-session"
+check "M3 activation env" 'dbus-update-activation-environment --all' "$GNROOT/usr/local/bin/start-gnome-session"
+check "M3 system bus socket" 'lfa-gnome-system-bus' "$GNROOT/usr/local/bin/start-gnome-session"
 check "M3 x11 capability probe" 'gnome-shell --help' "$GNROOT/usr/local/bin/start-gnome-session"
 check "M3 x11 fallback message" 'no longer supports an X11 session' "$GNROOT/usr/local/bin/start-gnome-session"
 GN2="$T/gnomeroot2"
 LFA_ROOT="$GN2" LFA_USER=guser LFA_DE=xfce4 sh "$REPO/lib/real-feel.sh" >/dev/null 2>&1
 [ ! -e "$GN2/usr/local/bin/start-gnome-session" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: M3 wrapper written for non-GNOME desktop"; }
+
+echo "===== M4: stale display :1 is released but a live server is respected ====="
+SP="$T/staleprefix"
+mkdir -p "$SP/tmp/.X11-unix"
+: > "$SP/tmp/.X11-unix/X1"
+printf '999999\n' > "$SP/tmp/.X1-lock"
+( PREFIX="$SP"; . "$T/prefix/bin/lfa-lib.sh"; lfa_clear_stale_x1 )
+[ ! -e "$SP/tmp/.X11-unix/X1" ] && [ ! -e "$SP/tmp/.X1-lock" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: M4 stale X1 socket/lock not removed"; }
+: > "$SP/tmp/.X11-unix/X1"
+bash -c 'exec -a "Xvnc :1" sleep 5' &
+FAKE_X=$!
+sleep 0.3
+printf '%s\n' "$FAKE_X" > "$SP/tmp/.X1-lock"
+( PREFIX="$SP"; . "$T/prefix/bin/lfa-lib.sh"; lfa_clear_stale_x1 )
+[ -e "$SP/tmp/.X11-unix/X1" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: M4 live X server socket was removed"; }
+kill "$FAKE_X" 2>/dev/null
+wait "$FAKE_X" 2>/dev/null
+( PREFIX="$SP"; . "$T/prefix/bin/lfa-lib.sh"; lfa_clear_stale_x1 )
+[ ! -e "$SP/tmp/.X11-unix/X1" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: M4 socket not released after server exit"; }
 
 echo "===== N: apply latest fixes to an older distro ====="
 fresh_env

@@ -10,7 +10,7 @@ fi
 
 # Directory containing this script (lib/ lives next to it).
 LFA_DIR="$(cd "$(dirname "$0")" && pwd)"
-LFA_VERSION="1.6.0"
+LFA_VERSION="1.6.1"
 
 # ============================================================
 # Interactive UI (npm-style)
@@ -1728,6 +1728,34 @@ lfa_conf() {
         echo "$PD_BASE/installed-rootfs/$1/etc/termux-linux-manager.conf"
     fi
 }
+# Display :1 is shared by every distro and by both back ends. A dead X server
+# leaves /tmp/.X11-unix/X1 and /tmp/.X1-lock behind, and the next start then
+# fails with "display :1 is taken" (VNC) or talks to a dead socket (X11).
+# Only a real X server counts: this script line itself mentions Xvnc, so a
+# `pgrep -f` match is not proof that anything is running.
+lfa_x1_server_pid() {
+    local pid lock="$PREFIX/tmp/.X1-lock" c
+    if [ -f "$lock" ]; then
+        pid=$(tr -dc '0-9' < "$lock" 2>/dev/null)
+        if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+            c=$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null)
+            case "$c" in
+                Xvnc*|Xtigervnc*|Xorg*|X\ *|termux-x11*) echo "$pid"; return 0 ;;
+            esac
+        fi
+    fi
+    for pid in $(pgrep -f '^(Xvnc|Xtigervnc|Xorg|X|termux-x11) ' 2>/dev/null); do
+        c=$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null)
+        case "$c" in
+            *' :1 '*|*' :1') echo "$pid"; return 0 ;;
+        esac
+    done
+    return 1
+}
+lfa_clear_stale_x1() {
+    lfa_x1_server_pid >/dev/null 2>&1 && return 0
+    rm -f "$PREFIX/tmp/.X11-unix/X1" "$PREFIX/tmp/.X1-lock" 2>/dev/null || true
+}
 EOF
     chmod +x "$PREFIX/bin/lfa-lib.sh"
     echo "[*] Generating Universal Quick-Launch Scripts..."
@@ -1739,6 +1767,7 @@ else
     lfa_instances() { ls -1 "$PREFIX/var/lib/proot-distro/installed-rootfs" 2>/dev/null; }
     lfa_rootfs() { echo "$PREFIX/var/lib/proot-distro/installed-rootfs/$1"; }
     lfa_conf() { echo "$(lfa_rootfs "$1")/etc/termux-linux-manager.conf"; }
+    lfa_clear_stale_x1() { pgrep -f '^(Xvnc|Xtigervnc|Xorg|X|termux-x11) ' >/dev/null 2>&1 && return 0; rm -f "$PREFIX/tmp/.X11-unix/X1" "$PREFIX/tmp/.X1-lock" 2>/dev/null; }
 fi
 DISTROS=($(lfa_instances))
 if [ ${#DISTROS[@]} -eq 0 ]; then
@@ -1831,9 +1860,16 @@ else
 fi
 
 if [ "$SERVER" == "x11" ]; then
+    # An install that chose VNC never pulled the X11 packages. Switching the
+    # distro to X11 later (re-install / menu 12) used to dead-end here.
     if ! command -v termux-x11 >/dev/null 2>&1; then
-        echo "ERROR: Termux:X11 backend requested but 'termux-x11' not installed."
-        echo "This backend requires Android 8+. Re-install with VNC instead."
+        echo "Termux:X11 is not installed yet - installing it now..."
+        { pkg install -y x11-repo && pkg install -y termux-x11-nightly; } >/dev/null 2>&1 || true
+    fi
+    if ! command -v termux-x11 >/dev/null 2>&1; then
+        echo "ERROR: Termux:X11 backend requested but 'termux-x11' is not installed."
+        echo "Fix it with:  pkg install x11-repo && pkg install termux-x11-nightly"
+        echo "or switch this distro to VNC by re-running the installer."
         exit 1
     fi
     echo "Starting Termux:X11..."
@@ -1847,12 +1883,10 @@ if [ "$SERVER" == "x11" ]; then
     # root-owned 1777; the unprivileged desktop user cannot create it.
     mkdir -p "$PREFIX/tmp/.X11-unix" "$PREFIX/tmp/.ICE-unix" 2>/dev/null || true
     chmod 1777 "$PREFIX/tmp/.X11-unix" "$PREFIX/tmp/.ICE-unix" 2>/dev/null || true
-    # A dead VNC server can leave /tmp/.X11-unix/X1 behind (all distros share
-    # /tmp). Termux:X11 then refuses to start and clients talk to a dead
-    # socket. Drop it only when no Termux:X11 instance is running.
-    if ! pgrep -f "termux-x11 :1" >/dev/null 2>&1; then
-        rm -f "$PREFIX/tmp/.X11-unix/X1" 2>/dev/null || true
-    fi
+    # A dead VNC server can leave /tmp/.X11-unix/X1 + /tmp/.X1-lock behind (all
+    # distros share /tmp). Termux:X11 then refuses to start and clients talk to
+    # a dead socket. Drop them only when no real X server holds display :1.
+    lfa_clear_stale_x1
     nohup termux-x11 :1 >/dev/null 2>&1 &
     sleep 2
     # XDG_RUNTIME_DIR is required by xfce4-session/dbus; without it the
@@ -1881,6 +1915,7 @@ elif [ "$SERVER" == "vnc" ]; then
     if [ -f "$VNC_PIDFILE" ] && kill -0 "$(cat "$VNC_PIDFILE")" 2>/dev/null; then
         echo "VNC server is already running on port 5901."
     else
+        lfa_clear_stale_x1
         # proot-distro uses --kill-on-exit: a daemonised Xvnc dies as soon as
         # the login command returns. Keep the login session alive in the
         # background so the VNC server (and its desktop) persists.
@@ -1905,6 +1940,7 @@ else
     lfa_instances() { ls -1 "$PREFIX/var/lib/proot-distro/installed-rootfs" 2>/dev/null; }
     lfa_rootfs() { echo "$PREFIX/var/lib/proot-distro/installed-rootfs/$1"; }
     lfa_conf() { echo "$(lfa_rootfs "$1")/etc/termux-linux-manager.conf"; }
+    lfa_clear_stale_x1() { pgrep -f '^(Xvnc|Xtigervnc|Xorg|X|termux-x11) ' >/dev/null 2>&1 && return 0; rm -f "$PREFIX/tmp/.X11-unix/X1" "$PREFIX/tmp/.X1-lock" 2>/dev/null; }
 fi
 DISTROS=($(lfa_instances))
 if [ ${#DISTROS[@]} -eq 0 ]; then
@@ -1966,6 +2002,12 @@ elif [ "$SERVER" == "vnc" ]; then
     fi
     proot-distro login $NO_SYSVIPC $DISTRO --user "$VNC_USER" --shared-tmp -- bash -c "vncserver -kill :1" 2>/dev/null || true
 fi
+
+# Hand display :1 back. A killed X server does not always remove its socket or
+# lock file, and the next start (either back end) then fails with
+# "display :1 is taken".
+sleep 2
+lfa_clear_stale_x1
 EOF
     chmod +x $PREFIX/bin/stop-linux
     sed -i "s/__LUSER__/$LINUX_USER/g" $PREFIX/bin/stop-linux
@@ -1980,6 +2022,7 @@ else
     lfa_instances() { ls -1 "$PREFIX/var/lib/proot-distro/installed-rootfs" 2>/dev/null; }
     lfa_rootfs() { echo "$PREFIX/var/lib/proot-distro/installed-rootfs/$1"; }
     lfa_conf() { echo "$(lfa_rootfs "$1")/etc/termux-linux-manager.conf"; }
+    lfa_clear_stale_x1() { pgrep -f '^(Xvnc|Xtigervnc|Xorg|X|termux-x11) ' >/dev/null 2>&1 && return 0; rm -f "$PREFIX/tmp/.X11-unix/X1" "$PREFIX/tmp/.X1-lock" 2>/dev/null; }
 fi
 DISTROS=($(lfa_instances))
 if [ ${#DISTROS[@]} -eq 0 ]; then
