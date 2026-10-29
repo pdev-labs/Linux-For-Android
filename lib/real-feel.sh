@@ -177,6 +177,28 @@ mkdir -p "$R/var/lib/dbus" 2>/dev/null || true
 [ -e "$R/var/lib/dbus/machine-id" ] || \
     ln -s /etc/machine-id "$R/var/lib/dbus/machine-id" 2>/dev/null || true
 
+# ---------------- init-less guest helpers ---------------------------
+# There is no init/PID 1 in a proot container, so reboot/shutdown fail with
+# "System has not been booted with systemd" and "Failed to talk to init
+# daemon". Replace them with a message that points at the commands that do
+# work, instead of a confusing error.
+for _cmd in reboot poweroff halt shutdown; do
+    cat > "$R/usr/local/bin/$_cmd" <<'LFA_INIT'
+#!/bin/sh
+cat <<'MSG'
+Linux for Android: this is a proot container, not a virtual machine.
+There is no init/systemd (PID 1), so reboot and shutdown cannot work here.
+
+  restart the desktop : open Termux and run  start-linux
+  stop everything     : open Termux and run  stop-linux
+  leave this shell    : exit
+
+MSG
+exit 1
+LFA_INIT
+    chmod 755 "$R/usr/local/bin/$_cmd" 2>/dev/null || true
+done
+
 # ---------------- glycin (gdk-pixbuf >= 2.42.11) --------------------
 # New GTK stacks decode PNG/JPEG through glycin, which sandboxes its loader
 # with bubblewrap. proot cannot create user namespaces, so bwrap always fails

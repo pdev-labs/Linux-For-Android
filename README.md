@@ -65,7 +65,7 @@ hardware, not just simulated. Full details, root causes and evidence:
 | Alpine Linux | ✅ | ⚠️ | desktop renders; panel does not start on edge |
 | Alpine 3.18 (Android 5) | ✅ | ✅ | legacy VNC desktop |
 
-> Test suite: `273` checks, `0` failures on host, Vivo and Oppo.
+> Test suite: `277` checks, `0` failures on host, Vivo and Oppo.
 
 ## 🚀 Key Features
 
@@ -382,6 +382,25 @@ check permissions under `$PREFIX/var/lib/proot-distro`.
 **Cause:** Modern GTK (Kali 2026, Arch, Fedora 44, Void) decodes PNG/JPEG through **glycin**, which sandboxes its loader with bubblewrap. proot cannot create namespaces, so the loader fails and GTK aborts the whole application.
 **Fix:** Update to v1.5.6 or newer (menu **12**). The installer drops a `/usr/local/bin/bwrap` shim that makes glycin fall back to in-process decoding, and installs `glycin-loaders` where the distro splits them out. You should then see `WARNING: Glycin running without sandbox.` in the session log.
 
+### 13. `snapd` fails to configure: "unable to set CAP_SETFCAP effective capability"
+**Symptom:** `apt` ends with `dpkg: error processing package snapd (--configure): ... returned error exit status 1`, and every later `apt` command stops on the same package. This usually appears after installing `ubuntu-desktop` or an app that pulls `snapd` in.
+**Cause:** Snap packages cannot work inside proot. `snapd`'s post-install script needs `CAP_SETFCAP`, mount namespaces and a running systemd — none of which exist in a container without init. It will never configure successfully.
+**Fix:** Update to v1.5.8 or newer and run menu **0 (Repair a Distro / Doctor)**; it purges a broken `snapd` and pins it off so apt stays usable. Manually:
+```bash
+sudo dpkg --purge --force-all snapd
+sudo apt-get -f install
+```
+If you need `ubuntu-desktop`, note that it is only a metapackage — removing `snapd` does not remove the desktop you already installed.
+
+### 14. `reboot` / `shutdown` say "System has not been booted with systemd" or "Failed to talk to init daemon"
+**Cause:** A proot guest is a container, not a VM — there is no PID 1, so there is nothing to reboot. Android owns the kernel.
+**Fix:** Leave the guest with `exit`, then from Termux use `stop-linux` (stop everything) or `start-linux` (restart the desktop). From v1.5.8, `reboot`, `poweroff`, `halt` and `shutdown` inside the guest print this guidance instead of a systemd error.
+
+### 15. Harmless proot warnings you can ignore
+- `Detected unsafe path transition / (owned by pdev) → /dev (owned by root)` — systemd tooling in a package post-install walking into proot's bind-mounted `/dev`. Cosmetic.
+- `Creating group 'kvm' with GID 993` / `render` — package post-installs adding groups; harmless.
+- `Failed to connect to bus: Host is down` — anything that expects a system D-Bus (system services, `systemctl`, `service`) cannot work in proot. Use the manager menu or run services by hand.
+
 ## 🤝 Contributing
 
 Contributions, issues, and feature requests are welcome! 
@@ -396,7 +415,7 @@ installs; needs only `bash`, `coreutils`, `timeout`, and `python3` (plus
 `script` from util-linux for the pty test, skipped if absent):
 ```bash
 chmod +x tests/test-all.sh
-./tests/test-all.sh   # expect: PASS=273 FAIL=0
+./tests/test-all.sh   # expect: PASS=277 FAIL=0
 ```
 
 The suite is deliberately stubbed — it cannot prove a desktop actually

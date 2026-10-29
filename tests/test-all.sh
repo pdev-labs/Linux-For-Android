@@ -348,6 +348,8 @@ printf '%s\n' 3 0 '' 13 | bash "$REPO/install_linux.sh" > "$T/k0.log" 2>&1; rc=$
 check "K repair completes" 'Repair complete!' "$T/k0.log"
 [ -f "$ROOTFS/usr/local/bin/dpkg-statoverride" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: K repair shim not installed"; }
 [ -f "$T/prefix/tmp/lfa-repair.sh" ] && bash -n "$T/prefix/tmp/lfa-repair.sh" && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: K repair script missing/invalid"; }
+check "K repair purges broken snapd" 'dpkg --purge --force-all snapd' "$T/prefix/tmp/lfa-repair.sh"
+check "K repair pins snapd off" '99-proot-no-snap' "$T/prefix/tmp/lfa-repair.sh"
 printf '%s\n' 3 11 2 '' 13 | bash "$REPO/install_linux.sh" > "$T/k11.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: run k11 exit $rc"; }
 check "K browser" 'Hardware Acceleration disabled' "$T/k11.log"
 printf '%s\n' 3 3 '' 13 | bash "$REPO/install_linux.sh" > "$T/k3.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: run k3 exit $rc"; }
@@ -458,6 +460,8 @@ mkdir -p "$GLROOT/usr/libexec/glycin-loaders" "$GLROOT/etc" "$GLROOT/home/guser"
 LFA_ROOT="$GLROOT" LFA_USER=guser sh "$REPO/lib/real-feel.sh" >/dev/null 2>&1
 [ -x "$GLROOT/usr/local/bin/bwrap" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: M2 bwrap shim missing"; }
 check "M2 shim message" 'No permissions to create a new namespace' "$GLROOT/usr/local/bin/bwrap"
+[ -x "$GLROOT/usr/local/bin/reboot" ] && [ -x "$GLROOT/usr/local/bin/shutdown" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: M2 reboot/shutdown shim missing"; }
+check "M2 reboot shim guidance" 'start-linux' "$GLROOT/usr/local/bin/reboot"
 [ -s "$GLROOT/etc/machine-id" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: M2 machine-id missing"; }
 { [ -e "$GLROOT/var/lib/dbus/machine-id" ] || [ -L "$GLROOT/var/lib/dbus/machine-id" ]; } && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: M2 dbus machine-id link missing"; }
 

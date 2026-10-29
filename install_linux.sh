@@ -10,7 +10,7 @@ fi
 
 # Directory containing this script (lib/ lives next to it).
 LFA_DIR="$(cd "$(dirname "$0")" && pwd)"
-LFA_VERSION="1.5.7"
+LFA_VERSION="1.5.8"
 
 # ============================================================
 # Interactive UI (npm-style)
@@ -1150,6 +1150,28 @@ mkdir -p /etc/apt/apt.conf.d
 echo 'APT::Sandbox::User "root";' > /etc/apt/apt.conf.d/99-proot-no-sandbox
 printf '#!/bin/sh\nexit 101\n' > /usr/sbin/policy-rc.d && chmod +x /usr/sbin/policy-rc.d
 rm -f /var/lib/dpkg/statoverride-new /var/lib/dpkg/statoverride-old
+
+# snapd can never work here: its postinst needs CAP_SETFCAP, mount and a
+# systemd init, none of which exist inside proot. Left half-configured it
+# makes EVERY later apt/dpkg run exit non-zero. Purge it and pin it off so
+# apt cannot drag it back in (installing ubuntu-desktop pulls it in).
+echo " -> Neutralising snapd (snaps cannot run inside proot)..."
+if command -v dpkg-query >/dev/null 2>&1; then
+    _snap_state="$(dpkg-query -W -f='${Status}' snapd 2>/dev/null || true)"
+    case "$_snap_state" in
+        ""|*"install ok installed")
+            [ -n "$_snap_state" ] && echo "    snapd is configured; leaving it alone."
+            ;;
+        *)
+            echo "    snapd state: $_snap_state"
+            dpkg --purge --force-all snapd >/dev/null 2>&1 || true
+            mkdir -p /etc/apt/preferences.d
+            printf 'Package: snapd\nPin: release *\nPin-Priority: -1\n' \
+                > /etc/apt/preferences.d/99-proot-no-snap
+            echo "    purged snapd and pinned it off so apt stays usable."
+            ;;
+    esac
+fi
 
 echo " -> Finishing half-configured packages (dpkg --configure -a)..."
 DEBIAN_FRONTEND=noninteractive dpkg --configure -a || true
