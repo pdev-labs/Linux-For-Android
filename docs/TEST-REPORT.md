@@ -87,3 +87,7 @@ VNC backend verified live on Void (direct `Xvnc`) and on legacy Alpine 3.18
 - **Void over VNC:** window manager and desktop start, panel inconsistent.
   Void over X11 is fully correct.
 - **Wayland:** intentionally not supported; all work is X11/VNC.
+- **GNOME (experimental):** shipped but not validated on these devices. It runs
+  `gnome-shell --x11` without `gnome-session`; session services (logind,
+  portals, session manager) are absent, so parts of the desktop are missing.
+  See the warning in the README before installing it.

@@ -221,6 +221,38 @@ check "D wallpaper monitorscreen seed" 'monitorVNC-0 monitorscreen' "$DROOT/usr/
 check "D wallpaper repaint nudge" 'xfdesktop --reload' "$DROOT/usr/local/bin/lfa-set-wallpaper"
 check "D wallpaper autostart" 'Exec=/usr/local/bin/lfa-set-wallpaper --autostart' "$DROOT/home/user/.config/autostart/lfa-wallpaper.desktop"
 
+echo "===== D2: experimental GNOME (warning, VNC default, launcher) ====="
+fresh_env
+printf '%s\n' 2 1 5 y 1 '' 2 1 '' '' '' '' '' '' '' 1 'n' '' 'n' 'n' '' '' '13' \
+| bash "$REPO/install_linux.sh" > "$T/d2.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: run d2 exit $rc"; }
+S=$(setup_sh_of)
+check "D2 warning shown" 'EXPERIMENTAL / BETA' "$T/d2.log"
+check "D2 warning lists breakage" 'gnome-control-center' "$T/d2.log"
+check "D2 requires confirmation" 'I understand this is experimental' "$T/d2.log"
+check "D2 gnome-shell pkg" 'gnome-shell' "$S"
+check "D2 dconf pkg" 'dconf-cli' "$S"
+check "D2 vnc default" 'SERVER="vnc"' "$T/home/.config/linux-for-android/setup.conf"
+check "D2 de saved" 'DE="gnome"' "$T/home/.config/linux-for-android/setup.conf"
+check "D2 de conf" 'DE="gnome"' "$T/prefix/var/lib/proot-distro/installed-rootfs/ubuntu/etc/termux-linux-manager.conf"
+check "D2 launcher wrapper" 'start-gnome-session' "$T/prefix/bin/start-linux"
+check "D2 vnc xstartup session" '/usr/local/bin/start-gnome-session' "$(setup_sh_of)"
+check "D2 guest gets DE" 'LFA_DE="gnome"' "$(setup_sh_of)"
+
+echo "===== D3: declining the GNOME warning falls back to XFCE ====="
+fresh_env
+printf '%s\n' 2 1 5 n 1 1 2 '' '' '' '' '' '' '' 1 'n' '' 'n' 'n' '' '' '13' \
+| bash "$REPO/install_linux.sh" > "$T/d3.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: run d3 exit $rc"; }
+check "D3 cancelled" 'GNOME cancelled' "$T/d3.log"
+check "D3 fell back" 'Falling back to XFCE4' "$T/d3.log"
+check "D3 xfce saved" 'DE="xfce4"' "$T/home/.config/linux-for-android/setup.conf"
+check_absent "D3 no gnome session" 'start-gnome-session' "$(setup_sh_of)"
+
+echo "===== D4: GNOME option hidden where unsupported (alpine) ====="
+fresh_env
+printf '%s\n' 2 8 4 '' '' '' '' '' '' '' 1 'n' '' 'n' 'n' '' '' '13' \
+| bash "$REPO/install_linux.sh" > "$T/d4.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: run d4 exit $rc"; }
+check_absent "D4 alpine no GNOME option" 'GNOME (experimental)' "$T/d4.log"
+
 echo "===== E: guided fedora mate ====="
 fresh_env
 printf '%s\n' 2 4 3 2 1 1 '' '' '' '' '' '' '' 1 'n' '' 'n' 'n' '' '' '13' \
@@ -294,6 +326,7 @@ check "H2 completes" 'Installation complete!' "$T/h2.log"
 check "H2 vnc auto" 'display server auto-set to VNC' "$T/h2.log"
 H2S=$(setup_sh_of)
 check "H2 alpine pinned" 's|/edge/|/v3.18/|g' "$H2S"
+check_absent "H2 legacy no GNOME option" 'GNOME (experimental)' "$T/h2.log"
 check "H2 minimal xfce" 'xfce4-session xfwm4 xfce4-panel' "$H2S"
 H2ROOT="$T/prefix/var/lib/proot-distro/installed-rootfs/h2alpine"
 [ -s "$H2ROOT/usr/share/backgrounds/lfa-default.jpg" ] && cmp -s "$H2ROOT/usr/share/backgrounds/lfa-default.jpg" "$REPO/assets/wallpapers/alpine.jpg" && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: H2 alpine wallpaper not staged"; }
@@ -464,6 +497,19 @@ check "M2 shim message" 'No permissions to create a new namespace' "$GLROOT/usr/
 check "M2 reboot shim guidance" 'start-linux' "$GLROOT/usr/local/bin/reboot"
 [ -s "$GLROOT/etc/machine-id" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: M2 machine-id missing"; }
 { [ -e "$GLROOT/var/lib/dbus/machine-id" ] || [ -L "$GLROOT/var/lib/dbus/machine-id" ]; } && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: M2 dbus machine-id link missing"; }
+
+echo "===== M3: experimental GNOME session wrapper ====="
+GNROOT="$T/gnomeroot"
+LFA_ROOT="$GNROOT" LFA_USER=guser LFA_DE=gnome sh "$REPO/lib/real-feel.sh" >/dev/null 2>&1
+[ -x "$GNROOT/usr/local/bin/start-gnome-session" ] && sh -n "$GNROOT/usr/local/bin/start-gnome-session" && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: M3 GNOME starter missing/invalid"; }
+check "M3 starts shell" 'exec gnome-shell --x11' "$GNROOT/usr/local/bin/start-gnome-session"
+check "M3 applies wallpaper" 'lfa-set-wallpaper --autostart' "$GNROOT/usr/local/bin/start-gnome-session"
+check "M3 session desktop" 'XDG_CURRENT_DESKTOP=GNOME' "$GNROOT/usr/local/bin/start-gnome-session"
+check "M3 x11 capability probe" 'gnome-shell --help' "$GNROOT/usr/local/bin/start-gnome-session"
+check "M3 x11 fallback message" 'no longer supports an X11 session' "$GNROOT/usr/local/bin/start-gnome-session"
+GN2="$T/gnomeroot2"
+LFA_ROOT="$GN2" LFA_USER=guser LFA_DE=xfce4 sh "$REPO/lib/real-feel.sh" >/dev/null 2>&1
+[ ! -e "$GN2/usr/local/bin/start-gnome-session" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: M3 wrapper written for non-GNOME desktop"; }
 
 echo "===== N: apply latest fixes to an older distro ====="
 fresh_env

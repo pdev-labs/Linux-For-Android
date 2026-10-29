@@ -13,6 +13,7 @@
 ## 📖 Table of Contents
 - [About the Project](#-about-the-project)
 - [Verified on Real Hardware](#-verified-on-real-hardware)
+- [GNOME (Experimental)](#-gnome-experimental)
 - [Key Features](#-key-features)
 - [Installation](#-installation)
 - [First-Run Setup](#-first-run-setup)
@@ -65,7 +66,69 @@ hardware, not just simulated. Full details, root causes and evidence:
 | Alpine Linux | ✅ | ⚠️ | desktop renders; panel does not start on edge |
 | Alpine 3.18 (Android 5) | ✅ | ✅ | legacy VNC desktop |
 
-> Test suite: `277` checks, `0` failures on host, Vivo and Oppo.
+> Test suite: `304` checks, `0` failures — the same suite is what runs on the devices.
+
+## 🧪 GNOME (Experimental)
+
+> **Status: BETA / EXPERIMENTAL. It is not a supported desktop. Expect crashes
+> and missing features. Do not use it for anything you depend on.**
+
+> **Hardware validation:** unlike the desktops in the matrix above, GNOME has
+> **not** been validated on the test devices yet. It is shipped from the
+> community-proven recipe (direct `gnome-shell --x11`, no `gnome-session`)
+> and covered by the automated suite only.
+
+Guided setup offers **GNOME (experimental)** as option 5, but only on
+Ubuntu, Debian, Kali, Arch Linux, Fedora and openSUSE, and only on Android 8+.
+It is hidden on Android 5/6, Alpine and Void, where it cannot be installed.
+
+### Why it is experimental
+
+A normal GNOME session starts `gnome-session`, which requires **systemd** and
+**logind** — neither exists inside proot. This option works around that by
+skipping `gnome-session` and launching `gnome-shell --x11` directly inside a
+D-Bus session.
+
+The shell itself runs. The session services that `gnome-session` normally
+starts do not, which is where the breakage comes from.
+
+### What is missing or broken
+
+- Login/logout menu, session saving, session restore
+- Screen locking, idle blanking, suspend/inhibit
+- Some panel/dock entries and the app grid on first login
+- **GNOME Settings (`gnome-control-center`) may crash**, especially the Sound
+  panel. The usual workaround wipes `~/.cache ~/.config ~/.local`, which also
+  wipes your settings.
+- Portals, auto-mount, polkit prompts, UPower/brightness, notifications:
+  partial or absent
+- Extensions that need root or Android files do not work
+- Touch input often only works in mouse mode
+- Video playback around **1–7 FPS** (software rendering)
+- **Termux:X11 crashes the session often.** VNC is pre-selected and is much
+  more stable for GNOME.
+- A package upgrade that updates systemd/gdm can break the session. If that
+  happens, run menu **0 (Doctor)**, then `start-linux` again.
+- GNOME 49+ removed the X11 session. The launcher detects this and refuses
+  with a clear message instead of showing a black screen; use a release with
+  GNOME 48 or older.
+
+### Requirements
+
+- Android 8 or newer (no Android 5/6)
+- **3 GB RAM minimum, 4 GB+ recommended** — it is heavy
+- around **2.5–3 GB** of free storage
+- Ubuntu, Debian, Kali, Arch, Fedora or openSUSE (not Alpine, not Void)
+
+### The warning is not optional
+
+Selecting it prints the full warning and requires an explicit **Yes**. Decline
+and the installer falls back to XFCE4. Bug reports for GNOME are accepted as
+experimental only.
+
+> If you want a stable GNOME-family desktop today, use **MATE** (option 3):
+> same GTK/GNOME 2 heritage, no systemd or compositor requirements, and it is
+> covered by the test suite and the verified matrix above.
 
 ## 🚀 Key Features
 
@@ -146,7 +209,8 @@ Colours turn off automatically with `NO_COLOR=1` or when output is not a termina
   (Debian elsewhere), CLI-only on small/old phones, `user` / `root` / `root`
   credentials, device timezone, `localhost`.
 - **Guided setup** — walks through distro (with a recommendation for your
-  device), desktop, **light/dark wallpaper mode**, display server, hardware
+  device), desktop (XFCE4 / LXDE / MATE / CLI, plus experimental GNOME on
+  supported distros), **light/dark wallpaper mode**, display server, hardware
   acceleration, resolution, software, instance name, username, user + root
   passwords (typed blind), timezone, hostname, prompt style, autostart,
   storage, SSH, and widget — then shows a summary (passwords masked) and
@@ -401,6 +465,17 @@ If you need `ubuntu-desktop`, note that it is only a metapackage — removing `s
 - `Creating group 'kvm' with GID 993` / `render` — package post-installs adding groups; harmless.
 - `Failed to connect to bus: Host is down` — anything that expects a system D-Bus (system services, `systemctl`, `service`) cannot work in proot. Use the manager menu or run services by hand.
 
+### 16. GNOME (experimental) does not start, or the desktop is broken
+**Symptom:** `start-linux` reports the desktop started but the screen stays on the X cursor, or GNOME starts with no dock/settings and crashes at random.
+**Cause:** GNOME is experimental here. It runs `gnome-shell --x11` without `gnome-session`, so the services the session normally provides (systemd user session, logind, portals, session manager) are absent.
+**Fix, in order:**
+1. Read `~/start-linux-session.log` inside the distro.
+2. If it says the X11 session is not supported, your GNOME is 49 or newer — you need a release with GNOME 48 or older.
+3. Switch to **VNC** if you were using Termux:X11; GNOME crashes far more often over X11.
+4. Run menu **0 (Doctor)**, then `start-linux` again (package upgrades can break the session).
+5. If Settings crashes, the only known workaround is to wipe `~/.cache ~/.config ~/.local` — this also deletes your settings.
+6. If it keeps misbehaving, reinstall with **MATE** (option 3): same GNOME heritage, stable, no systemd requirement.
+
 ## 🤝 Contributing
 
 Contributions, issues, and feature requests are welcome! 
@@ -415,7 +490,7 @@ installs; needs only `bash`, `coreutils`, `timeout`, and `python3` (plus
 `script` from util-linux for the pty test, skipped if absent):
 ```bash
 chmod +x tests/test-all.sh
-./tests/test-all.sh   # expect: PASS=277 FAIL=0
+./tests/test-all.sh   # expect: PASS=304 FAIL=0
 ```
 
 The suite is deliberately stubbed — it cannot prove a desktop actually

@@ -10,7 +10,7 @@ fi
 
 # Directory containing this script (lib/ lives next to it).
 LFA_DIR="$(cd "$(dirname "$0")" && pwd)"
-LFA_VERSION="1.5.8"
+LFA_VERSION="1.6.0"
 
 # ============================================================
 # Interactive UI (npm-style)
@@ -586,6 +586,77 @@ setup_ram_mb() {
     printf '%s' "$_m"
 }
 
+# ============================================================
+# GNOME (experimental / beta)
+# ============================================================
+# gnome-session cannot work under proot: there is no systemd user session and
+# no logind seat, so it hands gnome-shell an "Oh no! Something has gone
+# wrong" screen. The community workaround is to skip gnome-session entirely
+# and run `gnome-shell --x11` directly inside a D-Bus session. That produces a
+# real GNOME Shell desktop, but the session services normally started by
+# gnome-session never run, so parts of the desktop are missing or unstable.
+gnome_distro_supported() {
+    case "${DISTRO:-}" in
+        ubuntu|debian|kali|archlinux|fedora|opensuse) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+gnome_available() {
+    [ "${IS_LEGACY:-0}" = "1" ] && return 1
+    gnome_distro_supported
+}
+
+gnome_experimental_warning() {
+    echo ""
+    echo "${C_YELLOW}${C_BOLD}================================================================${C_RESET}"
+    echo "${C_YELLOW}${C_BOLD}  GNOME  -  EXPERIMENTAL / BETA  -  READ THIS FIRST${C_RESET}"
+    echo "${C_YELLOW}${C_BOLD}================================================================${C_RESET}"
+    echo ""
+    echo "  This is a real GNOME Shell (40+), not GNOME Flashback. It is NOT a"
+    echo "  supported desktop and it will misbehave. Install it only to try it."
+    echo ""
+    echo "${C_BOLD}  How it works${C_RESET}"
+    echo "  A normal GNOME session starts gnome-session, which needs systemd and"
+    echo "  logind. Neither exists inside proot. So this option skips"
+    echo "  gnome-session completely and launches 'gnome-shell --x11' directly"
+    echo "  in a D-Bus session."
+    echo ""
+    echo "${C_BOLD}  What will be missing or broken${C_RESET}"
+    echo "   - Login/logout menu, session saving and session restore"
+    echo "   - Screen locking, idle blanking, suspend/inhibit"
+    echo "   - Some panel/dock entries and the app grid at first login"
+    echo "   - GNOME Settings (gnome-control-center) may crash, especially the"
+    echo "     Sound panel. The usual 'fix' wipes ~/.cache ~/.config ~/.local,"
+    echo "     which also wipes your settings."
+    echo "   - Portals, auto-mount, polkit prompts, UPower/brightness, and"
+    echo "     notifications are partial or absent"
+    echo "   - Extensions that need root or Android files do not work"
+    echo "   - Touch input often only works in mouse mode"
+    echo "   - Video playback is roughly 1-7 FPS (software rendering)"
+    echo "   - Termux:X11 crashes the session often; VNC is more stable, so"
+    echo "     VNC is pre-selected here"
+    echo "   - A package upgrade that updates systemd/gdm can break the session."
+    echo "     If that happens, run menu 0 (Doctor) and start it again."
+    echo ""
+    echo "${C_BOLD}  Requirements${C_RESET}"
+    echo "   - Android 8+ (no Android 5/6, no Alpine, no Void)"
+    echo "   - 3 GB RAM minimum, 4 GB+ recommended (it is heavy)"
+    echo "   - about 2.5-3 GB of free storage"
+    echo ""
+    echo "${C_YELLOW}  Bug reports for this desktop are accepted as experimental only.${C_RESET}"
+    echo ""
+    if ! ui_confirm "I understand this is experimental and may crash - continue with GNOME?" n; then
+        echo ""
+        echo "[*] GNOME cancelled."
+        return 1
+    fi
+    echo ""
+    echo "[*] GNOME selected (experimental). VNC is recommended; you can still"
+    echo "    choose Termux:X11 in the next step, but it is less stable."
+    return 0
+}
+
 setup_save() {
     mkdir -p "$(dirname "$SETUP_CONF")"
     cat > "$SETUP_CONF" <<EOF
@@ -702,11 +773,14 @@ setup_guided() {
     # 2. Desktop
     local _de _dedef
     if [ "$IS_LEGACY" = "1" ] || [ "$(setup_ram_mb)" -le 2048 ]; then _de="None (CLI only)"; _dedef=4; else _de="XFCE4"; _dedef=1; fi
-    if ! ui_select "Choose Desktop Environment (suggested: $_de)" "$_dedef" \
-        "1|XFCE4|light, familiar, great on phones" \
-        "2|LXDE|ultra light, minimal" \
-        "3|MATE|classic GNOME 2 feel" \
-        "4|None (CLI only)|terminal only - lightest and fastest"; then
+    local -a _deitems=(
+        "1|XFCE4|light, familiar, great on phones"
+        "2|LXDE|ultra light, minimal"
+        "3|MATE|classic GNOME 2 feel"
+        "4|None (CLI only)|terminal only - lightest and fastest"
+    )
+    gnome_available && _deitems+=("5|GNOME (experimental)|BETA - may crash; read the warning")
+    if ! ui_select "Choose Desktop Environment (suggested: $_de)" "$_dedef" "${_deitems[@]}"; then
         show_menu
         return
     fi
@@ -715,7 +789,12 @@ setup_guided() {
         2) DE="lxde" ;;
         3) DE="mate" ;;
         4) DE="none" ;;
+        5) DE="gnome" ;;
     esac
+    if [ "$DE" = "gnome" ] && ! gnome_experimental_warning; then
+        echo "[*] Falling back to XFCE4."
+        DE="xfce4"
+    fi
     if [ "$DISTRO" = "alpine" ] && [ "$DE" = "lxde" ]; then
         echo "[*] LXDE is not packaged for Alpine -> using XFCE4 instead."
         DE="xfce4"
@@ -743,7 +822,9 @@ setup_guided() {
             echo "[*] Legacy Android: display server auto-set to VNC, HW acceleration off."
             SERVER="vnc"
         else
-            if ! ui_select "Choose Display Server" "1" \
+            local _srvdef=1
+            [ "$DE" = "gnome" ] && _srvdef=2
+            if ! ui_select "Choose Display Server" "$_srvdef" \
                 "1|Termux:X11|hardware acceleration, faster, smoother" \
                 "2|VNC|software rendering, works everywhere, slower"; then
                 show_menu
@@ -753,6 +834,10 @@ setup_guided() {
                 1) SERVER="x11" ;;
                 2) SERVER="vnc" ;;
             esac
+            if [ "$DE" = "gnome" ] && [ "$SERVER" = "x11" ]; then
+                echo "[!] GNOME over Termux:X11 is known to crash the app often."
+                echo "    VNC is more stable for GNOME - you can still continue."
+            fi
             if ! ui_select "Hardware acceleration (VirGL GPU passthrough)?" "1" \
                 "1|On|recommended for X11" \
                 "2|Off|use if the screen is black or glitchy"; then
@@ -1316,7 +1401,7 @@ upgrade_existing() {
 
     # 3. Realistic shell: prompt, banner, hostname command, clean env.
     if [ -f "$LFA_DIR/lib/real-feel.sh" ]; then
-        LFA_ROOT="$ROOTFS" LFA_USER="$LINUX_USER" \
+        LFA_ROOT="$ROOTFS" LFA_USER="$LINUX_USER" LFA_DE="$DE" \
             LFA_HOSTNAME="${HOSTNAME:-localhost}" LFA_PSTYLE="${PSTYLE:-minimal}" \
             sh "$LFA_DIR/lib/real-feel.sh" || true
         # Name proot-mapped Android GIDs inside the guest so `groups` stops
@@ -1350,6 +1435,7 @@ upgrade_existing() {
             xfce4|xfce) SES="startxfce4" ;;
             lxde)       SES="startlxde" ;;
             mate)       SES="mate-session" ;;
+            gnome)      SES="/usr/local/bin/start-gnome-session" ;;
         esac
         if [ -n "$SES" ]; then
             mkdir -p "$XVNC" "$XCFG"
@@ -1780,6 +1866,10 @@ if [ "$SERVER" == "x11" ]; then
         nohup proot-distro login $NO_SYSVIPC $DISTRO --user "$X11_USER" --shared-tmp -- bash -c "mkdir -p /tmp/.X11-unix; chmod 1777 /tmp/.X11-unix; export XDG_RUNTIME_DIR=/tmp/xdg-\$USER; mkdir -p "\$XDG_RUNTIME_DIR"; chmod 700 "\$XDG_RUNTIME_DIR"; export PULSE_SERVER=127.0.0.1; export DISPLAY=:1; $VIRGL_ENV if command -v dbus-run-session >/dev/null 2>&1; then dbus-run-session -- startlxde > \$HOME/start-linux-session.log 2>&1; elif command -v dbus-launch >/dev/null 2>&1; then dbus-launch --exit-with-session startlxde > \$HOME/start-linux-session.log 2>&1; else startlxde > \$HOME/start-linux-session.log 2>&1; fi" &
     elif [ "$DE" == "mate" ]; then
         nohup proot-distro login $NO_SYSVIPC $DISTRO --user "$X11_USER" --shared-tmp -- bash -c "mkdir -p /tmp/.X11-unix; chmod 1777 /tmp/.X11-unix; export XDG_RUNTIME_DIR=/tmp/xdg-\$USER; mkdir -p "\$XDG_RUNTIME_DIR"; chmod 700 "\$XDG_RUNTIME_DIR"; export PULSE_SERVER=127.0.0.1; export DISPLAY=:1; $VIRGL_ENV if command -v dbus-run-session >/dev/null 2>&1; then dbus-run-session -- mate-session > \$HOME/start-linux-session.log 2>&1; elif command -v dbus-launch >/dev/null 2>&1; then dbus-launch --exit-with-session mate-session > \$HOME/start-linux-session.log 2>&1; else mate-session > \$HOME/start-linux-session.log 2>&1; fi" &
+    elif [ "$DE" == "gnome" ]; then
+        # Experimental: gnome-session is skipped (no systemd/logind in proot);
+        # start-gnome-session runs lfa-set-wallpaper then `gnome-shell --x11`.
+        nohup proot-distro login $NO_SYSVIPC $DISTRO --user "$X11_USER" --shared-tmp -- bash -c "mkdir -p /tmp/.X11-unix; chmod 1777 /tmp/.X11-unix; export XDG_RUNTIME_DIR=/tmp/xdg-\$USER; mkdir -p "\$XDG_RUNTIME_DIR"; chmod 700 "\$XDG_RUNTIME_DIR"; export PULSE_SERVER=127.0.0.1; export DISPLAY=:1; $VIRGL_ENV if command -v dbus-run-session >/dev/null 2>&1; then dbus-run-session -- /usr/local/bin/start-gnome-session > \$HOME/start-linux-session.log 2>&1; else /usr/local/bin/start-gnome-session > \$HOME/start-linux-session.log 2>&1; fi" &
     fi
     echo "If the screen stays on the X cursor, the desktop failed to start:"
     echo "  cat ~/start-linux-session.log   (inside the distro) for the reason."
@@ -1797,6 +1887,7 @@ elif [ "$SERVER" == "vnc" ]; then
         VNC_SES="startxfce4"
         [ "$DE" = "lxde" ] && VNC_SES="startlxde"
         [ "$DE" = "mate" ] && VNC_SES="mate-session"
+        [ "$DE" = "gnome" ] && VNC_SES="/usr/local/bin/start-gnome-session"
         nohup proot-distro login $NO_SYSVIPC $DISTRO --user "$X11_USER" --shared-tmp -- bash -c "export PULSE_SERVER=127.0.0.1; mkdir -p \$HOME/.vnc \$HOME/.config/tigervnc; printf 'geometry=%s\n' '$RESOLUTION' > \$HOME/.vnc/config; printf 'geometry=%s\n' '$RESOLUTION' > \$HOME/.config/tigervnc/config; if command -v vncserver >/dev/null 2>&1; then $VIRGL_ENV vncserver :1; rc=\$?; [ \$rc -eq 0 ] || exit \$rc; else $VIRGL_ENV Xvnc :1 -geometry $RESOLUTION -depth 24 -rfbauth \$HOME/.config/tigervnc/passwd -SecurityTypes VncAuth > \$HOME/.vnc-xvnc.log 2>&1 & sleep 2; DISPLAY=:1 dbus-run-session -- $VNC_SES > \$HOME/start-linux-session.log 2>&1; fi; while :; do sleep 3600; done" > "$VNC_LOG" 2>&1 &
         echo $! > "$VNC_PIDFILE"
         echo "VNC server started on port 5901 (log: $VNC_LOG)."
@@ -2074,11 +2165,14 @@ install_linux() {
     RESOLUTION="1280x720"
     COLOR_MODE="light"
 
-    if ! ui_select "Choose Desktop Environment" "1" \
-        "1|XFCE4|recommended, light GUI" \
-        "2|LXDE|very light GUI" \
-        "3|MATE|classic GNOME, stable" \
-        "4|None (CLI only)|terminal only"; then
+    local -a _deitems=(
+        "1|XFCE4|recommended, light GUI"
+        "2|LXDE|very light GUI"
+        "3|MATE|classic GNOME, stable"
+        "4|None (CLI only)|terminal only"
+    )
+    gnome_available && _deitems+=("5|GNOME (experimental)|BETA - may crash; read the warning")
+    if ! ui_select "Choose Desktop Environment" "1" "${_deitems[@]}"; then
         show_menu
         return
     fi
@@ -2087,7 +2181,19 @@ install_linux() {
         2) DE="lxde" ;;
         3) DE="mate" ;;
         4) DE="none" ;;
+        5) DE="gnome" ;;
     esac
+    if [ "$DE" = "gnome" ] && ! gnome_experimental_warning; then
+        echo "[*] Falling back to XFCE4."
+        DE="xfce4"
+    fi
+    fi
+    # GNOME is experimental and only packaged for a few distros on Android 8+.
+    # A saved setup.conf may still carry DE=gnome from another device/distro.
+    if [ "$DE" = "gnome" ] && ! gnome_available; then
+        echo "[!] GNOME is not available for $DISTRO on this device"
+        echo "    (experimental; Android 8+, no Alpine/Void). Using XFCE4 instead."
+        DE="xfce4"
     fi
     # Alpine repos ship no LXDE meta-package (and no startlxde). Fall back
     # to XFCE4 rather than installing a desktop that cannot start.
@@ -2104,7 +2210,9 @@ install_linux() {
             echo "[*] Legacy Android detected: Termux:X11 unavailable -> using VNC."
             SERVER="vnc"
         else
-            if ! ui_select "Choose Display Server" "1" \
+            local _srvdef=1
+            [ "$DE" = "gnome" ] && _srvdef=2
+            if ! ui_select "Choose Display Server" "$_srvdef" \
                 "1|Termux:X11|hardware acceleration, faster" \
                 "2|VNC|software rendering, slower"; then
                 show_menu
@@ -2114,6 +2222,10 @@ install_linux() {
                 1) SERVER="x11" ;;
                 2) SERVER="vnc" ;;
             esac
+            if [ "$DE" = "gnome" ] && [ "$SERVER" = "x11" ]; then
+                echo "[!] GNOME over Termux:X11 is known to crash the app often."
+                echo "    VNC is more stable for GNOME - you can still continue."
+            fi
         fi
         
         if [ "$SERVER" == "vnc" ]; then
@@ -2272,6 +2384,10 @@ install_linux() {
             XFCE_PKG="xfce4 xfce4-goodies dbus-x11"
             LXDE_PKG="lxde dbus-x11"
             MATE_PKG="mate-desktop-environment dbus-x11"
+            # GNOME (experimental): gnome-shell only; gnome-session is NOT
+            # used (it needs systemd + logind). Avoid the ubuntu-desktop
+            # metapackage so snapd (unusable in proot) is never pulled in.
+            GNOME_PKG="gnome-shell gnome-terminal gnome-control-center nautilus gnome-tweaks gnome-settings-daemon dbus-x11 x11-utils dconf-cli"
             VNC_PKG="tigervnc-standalone-server"
             LOADER_PKG="glycin-loaders"
             SUDO_PKG=""
@@ -2300,6 +2416,7 @@ install_linux() {
             XFCE_PKG="xfce4 xfce4-goodies dbus"
             LXDE_PKG="lxde dbus"
             MATE_PKG="mate dbus"
+            GNOME_PKG="gnome-shell gnome-terminal gnome-control-center nautilus gnome-tweaks gnome-settings-daemon dbus xorg-xrandr"
             VNC_PKG="tigervnc"
             LOADER_PKG="glycin"
             SUDO_PKG=""
@@ -2324,6 +2441,7 @@ install_linux() {
             XFCE_PKG="xfce4-session xfce4-panel xfdesktop xfwm4 dbus-x11"
             LXDE_PKG="lxde-common lxsession dbus-x11"
             MATE_PKG="mate-desktop dbus-x11"
+            GNOME_PKG="gnome-shell gnome-terminal gnome-control-center nautilus gnome-tweaks gnome-settings-daemon dbus-x11 xrandr"
             VNC_PKG="tigervnc-server"
             LOADER_PKG="glycin-loaders"
             SUDO_PKG=""
@@ -2348,6 +2466,7 @@ install_linux() {
             XFCE_PKG="patterns-xfce-xfce dbus-1-daemon dbus-1-tools"
             LXDE_PKG="patterns-lxde-lxde dbus-1-daemon dbus-1-tools"
             MATE_PKG="patterns-mate-mate dbus-1-daemon dbus-1-tools"
+            GNOME_PKG="gnome-shell gnome-terminal gnome-control-center nautilus gnome-tweaks gnome-settings-daemon dbus-1-daemon dbus-1-tools xrandr"
             VNC_PKG="tigervnc"
             LOADER_PKG="glycin-loaders"
             SUDO_PKG=""
@@ -2372,6 +2491,7 @@ install_linux() {
             XFCE_PKG="xfce4 dbus dejavu-fonts-ttf"
             LXDE_PKG="lxde dbus dejavu-fonts-ttf"
             MATE_PKG="mate dbus dejavu-fonts-ttf"
+            GNOME_PKG=""
             VNC_PKG="tigervnc"
             LOADER_PKG="glycin-loaders"
             SUDO_PKG=""
@@ -2406,10 +2526,12 @@ install_linux() {
                 UPDATE_CMD="sed -i 's|/edge/|/v3.18/|g' /etc/apk/repositories && apk update && apk upgrade"
                 XFCE_PKG="xfce4-session xfwm4 xfce4-panel xfce4-settings xfce4-terminal xfdesktop dbus dbus-x11 font-dejavu"
                 LOADER_PKG=""
+                GNOME_PKG=""
             else
                 UPDATE_CMD="apk update && apk upgrade"
                 XFCE_PKG="xfce4 xfce4-terminal dbus"
                 LOADER_PKG="glycin-loaders-all"
+                GNOME_PKG=""
             fi
             INSTALL_CMD="apk add"
             LXDE_PKG="xfce4 xfce4-terminal dbus"
@@ -2537,6 +2659,7 @@ EOF
     if [ "$DE" == "xfce4" ]; then APT_PKGS="$APT_PKGS $XFCE_PKG"; fi
     if [ "$DE" == "lxde" ]; then APT_PKGS="$APT_PKGS $LXDE_PKG"; fi
     if [ "$DE" == "mate" ]; then APT_PKGS="$APT_PKGS $MATE_PKG"; fi
+    if [ "$DE" == "gnome" ]; then APT_PKGS="$APT_PKGS $GNOME_PKG"; fi
     if [ "$SERVER" == "vnc" ]; then APT_PKGS="$APT_PKGS $VNC_PKG"; fi
     APT_PKGS=$(echo "$APT_PKGS" | xargs)
     
@@ -2942,6 +3065,7 @@ EOF
             xfce4|xfce) _vnc_ses="startxfce4" ;;
             lxde)       _vnc_ses="startlxde" ;;
             mate)       _vnc_ses="mate-session" ;;
+            gnome)      _vnc_ses="/usr/local/bin/start-gnome-session" ;;
         esac
         if [ -n "$_vnc_ses" ]; then
             cat << EOF >> "$SETUP_SCRIPT"
@@ -2999,7 +3123,7 @@ EOF
     if [ -f "$PREFIX/tmp/lfa-real-feel.sh" ]; then
         cat << 'EOF' >> "$SETUP_SCRIPT"
 echo " -> Applying Linux polish (prompt, welcome, hostname, environment)..."
-LFA_USER="__LUSER__" LFA_HOSTNAME="__HOSTNAME__" LFA_PSTYLE="__PSTYLE__" bash /tmp/lfa-real-feel.sh || true
+LFA_USER="__LUSER__" LFA_DE="__DE__" LFA_HOSTNAME="__HOSTNAME__" LFA_PSTYLE="__PSTYLE__" bash /tmp/lfa-real-feel.sh || true
 EOF
     fi
 
@@ -3013,6 +3137,7 @@ MISSING_CORE=""
 if [ "$DE" = "xfce4" ] && ! command -v xfce4-session >/dev/null 2>&1; then MISSING_CORE="\$MISSING_CORE xfce4-session"; fi
 if [ "$DE" = "lxde" ] && ! command -v startlxde >/dev/null 2>&1; then MISSING_CORE="\$MISSING_CORE lxde"; fi
 if [ "$DE" = "mate" ] && ! command -v mate-session >/dev/null 2>&1; then MISSING_CORE="\$MISSING_CORE mate-session"; fi
+if [ "$DE" = "gnome" ] && ! command -v gnome-shell >/dev/null 2>&1; then MISSING_CORE="\$MISSING_CORE gnome-shell"; fi
 if [ "$SERVER" = "vnc" ] && ! command -v vncserver >/dev/null 2>&1 && ! command -v Xvnc >/dev/null 2>&1; then MISSING_CORE="\$MISSING_CORE vncserver"; fi
 if [ "$SERVER" = "vnc" ] && [ ! -s /home/$LINUX_USER/.config/tigervnc/passwd ] && [ ! -s /home/$LINUX_USER/.vnc/passwd ]; then MISSING_CORE="\$MISSING_CORE vnc-password"; fi
 if [ -n "\$MISSING_CORE" ]; then
@@ -3028,7 +3153,7 @@ EOF
 
     # Substitute setup-chosen values (see comment at first sed call site).
     sed -i "s/__LUSER__/$LINUX_USER/g; s/__UPASS_B64__/$UPASS_B64/g; s/__RPASS_B64__/$RPASS_B64/g; s/__SPASS_B64__/$SPASS_B64/g" "$SETUP_SCRIPT"
-    sed -i "s#__TZ__#${TIMEZONE:-UTC}#g; s#__HOSTNAME__#${HOSTNAME:-localhost}#g; s/__PSTYLE__/${PSTYLE:-minimal}/g" "$SETUP_SCRIPT"
+    sed -i "s#__TZ__#${TIMEZONE:-UTC}#g; s#__HOSTNAME__#${HOSTNAME:-localhost}#g; s/__PSTYLE__/${PSTYLE:-minimal}/g; s/__DE__/${DE:-none}/g" "$SETUP_SCRIPT"
 
     echo "[*] Executing setup inside $INSTANCE_NAME (this will take a while)..."
     # Alpine base ships busybox sh only: pre-install bash/sudo/shadow via sh

@@ -177,6 +177,39 @@ mkdir -p "$R/var/lib/dbus" 2>/dev/null || true
 [ -e "$R/var/lib/dbus/machine-id" ] || \
     ln -s /etc/machine-id "$R/var/lib/dbus/machine-id" 2>/dev/null || true
 
+# ---------------- GNOME Shell (experimental) ------------------------
+# gnome-session cannot run under proot (no systemd user session, no logind),
+# so GNOME is started by launching gnome-shell on X11 directly. This wrapper
+# also applies the wallpaper, because XDG autostart entries are only processed
+# by gnome-session, which we deliberately do not run.
+if [ "${LFA_DE:-}" = "gnome" ] || [ -x "$R/usr/bin/gnome-shell" ] || \
+   [ -x "$R/usr/local/bin/gnome-shell" ]; then
+    cat > "$R/usr/local/bin/start-gnome-session" <<'LFA_GNOME'
+#!/bin/sh
+# Linux for Android: experimental GNOME Shell session (proot).
+export XDG_CURRENT_DESKTOP=GNOME
+export XDG_SESSION_DESKTOP=gnome
+export XDG_SESSION_TYPE=x11
+export GDK_BACKEND=x11
+[ -n "$HOME" ] && cd "$HOME" 2>/dev/null || true
+
+# gnome-session is not running, so nothing else applies the wallpaper.
+if [ -x /usr/local/bin/lfa-set-wallpaper ]; then
+    /usr/local/bin/lfa-set-wallpaper --autostart >/dev/null 2>&1 || true
+fi
+
+# GNOME 49+ removed the X11 session; without it GNOME cannot run in proot.
+if gnome-shell --help 2>&1 | grep -q -- '--x11'; then
+    exec gnome-shell --x11
+fi
+echo "This GNOME release no longer supports an X11 session (--x11)." >&2
+echo "GNOME cannot run inside proot without X11. Use XFCE/MATE instead, or" >&2
+echo "pin a distribution release that ships GNOME 48 or older." >&2
+exit 1
+LFA_GNOME
+    chmod 755 "$R/usr/local/bin/start-gnome-session" 2>/dev/null || true
+fi
+
 # ---------------- init-less guest helpers ---------------------------
 # There is no init/PID 1 in a proot container, so reboot/shutdown fail with
 # "System has not been booted with systemd" and "Failed to talk to init
