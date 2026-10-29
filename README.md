@@ -12,6 +12,7 @@
 
 ## 📖 Table of Contents
 - [About the Project](#-about-the-project)
+- [Verified on Real Hardware](#-verified-on-real-hardware)
 - [Key Features](#-key-features)
 - [Installation](#-installation)
 - [First-Run Setup](#-first-run-setup)
@@ -41,6 +42,30 @@ Currently supported distributions:
 > (musl) and **Debian** (auto-switches to bullseye, glibc 2.31) are verified
 > working there — modern glibc distros (bookworm, Ubuntu mantic, Fedora
 > 39, …) cannot execute on a 3.10 kernel.
+
+## ✅ Verified on Real Hardware
+
+Every distribution below was installed **and its desktop launched** on physical
+hardware, not just simulated. Full details, root causes and evidence:
+**[docs/TEST-REPORT.md](docs/TEST-REPORT.md)**.
+
+| Device | Android | Kernel | Backend |
+|---|---|---|---|
+| Vivo V2437 | 16 (SDK 36) | 6.1.145 | Termux:X11 **and** VNC |
+| Oppo A37fw | 5.1.1 (SDK 22) | 3.10 | VNC (legacy mode) |
+
+| Distro | Install | Live desktop | Notes |
+|---|---|---|---|
+| Ubuntu 24.04 | ✅ | ✅ | light and dark, clean first login |
+| Kali Rolling | ✅ | ✅ | |
+| Fedora 44 | ✅ | ✅ | |
+| openSUSE Tumbleweed | ✅ | ✅ | |
+| Arch Linux ARM | ✅ | ✅ | |
+| Void Linux | ✅ | ✅ | |
+| Alpine Linux | ✅ | ⚠️ | desktop renders; panel does not start on edge |
+| Alpine 3.18 (Android 5) | ✅ | ✅ | legacy VNC desktop |
+
+> Test suite: `273` checks, `0` failures on host, Vivo and Oppo.
 
 ## 🚀 Key Features
 
@@ -155,12 +180,17 @@ This configuration was tested end-to-end on Android 5.1.1 (kernel 3.10, aarch64)
   Fedora, Kali, Arch or Void here: their modern glibc cannot execute on a
   3.10 kernel (verified: instant failure at the first guest command), and
   Kali has no legacy plugin at all.
-- **Desktop:** `None (CLI only)` for 1–2 GB RAM phones; LXDE/XFCE + VNC only
-  if you have headroom (needs a VNC Viewer app, password `root`).
+- **Desktop:** `None (CLI only)` for 1–2 GB RAM phones; XFCE + VNC is now
+  verified working there too (**3m32s, 204 MB** for Alpine 3.18) if you have
+  headroom. You need a VNC Viewer app on the phone.
 - **Software selector:** keep it light (`git`, `htop`…). Skip browsers and
   LibreOffice on old phones.
 - Keep **~1 GB free** before installing; CLI systems are small (Alpine
   ~35 MB, Debian ~150 MB plus package cache).
+
+> On legacy devices the installer pins Alpine to the **v3.18** branch. The
+> proot-distro image ships *edge* repositories, and edge glib/GTK abort on the
+> 3.10 kernel (`ENOSYS: Function not implemented`), which kills the desktop.
 
 ### 4. Day-to-day notes
 - `start-linux` / `terminal-linux` always ask: **root** or **user** terminal.
@@ -342,6 +372,16 @@ check permissions under `$PREFIX/var/lib/proot-distro`.
 ### 10. Installation seems frozen at "Setting up elementary-xfce-icon-theme..."
 **Fix:** Be patient! This specific package contains tens of thousands of tiny icon files. Because `proot` must translate every single file operation via your phone's CPU, unpacking thousands of files takes significantly longer than on a native PC (sometimes 10 to 20 minutes on mid-range phones). Keep Termux open and let it finish!
 
+### 11. Desktop is black, or says "Unable to contact settings server"
+**Symptom:** Termux:X11 opens, `start-linux` reports the desktop started, but you only see a black screen (or an XFCE error about the settings server). The session log shows `dbus-update-activation-environment: unable to connect to D-Bus`.
+**Cause:** Two proot-specific problems. `dbus-launch` forks a daemon that dies instantly under proot, and some images ship an empty `/etc/machine-id`, which stops D-Bus from starting at all.
+**Fix:** Update to v1.5.6 or newer (menu **12 — Apply Latest Fixes** on an existing install). The launchers now prefer `dbus-run-session` and the installer generates a machine-id. If you are on an older install, run menu 12, then `stop-linux` and `start-linux` again.
+
+### 12. GTK crashes with "Gtk:ERROR ... Bail out!" and the desktop vanishes
+**Symptom:** The XFCE session starts and immediately dies. `~/start-linux-session.log` shows `Gtk:ERROR:...ensure_surface_for_gicon: assertion failed` followed by `Bail out!` and a `bwrap` command line.
+**Cause:** Modern GTK (Kali 2026, Arch, Fedora 44, Void) decodes PNG/JPEG through **glycin**, which sandboxes its loader with bubblewrap. proot cannot create namespaces, so the loader fails and GTK aborts the whole application.
+**Fix:** Update to v1.5.6 or newer (menu **12**). The installer drops a `/usr/local/bin/bwrap` shim that makes glycin fall back to in-process decoding, and installs `glycin-loaders` where the distro splits them out. You should then see `WARNING: Glycin running without sandbox.` in the session log.
+
 ## 🤝 Contributing
 
 Contributions, issues, and feature requests are welcome! 
@@ -358,6 +398,10 @@ installs; needs only `bash`, `coreutils`, `timeout`, and `python3` (plus
 chmod +x tests/test-all.sh
 ./tests/test-all.sh   # expect: PASS=273 FAIL=0
 ```
+
+The suite is deliberately stubbed — it cannot prove a desktop actually
+appears. The results of doing exactly that on two physical devices are in
+**[docs/TEST-REPORT.md](docs/TEST-REPORT.md)**.
 
 ## 📝 License
 
