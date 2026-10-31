@@ -9,7 +9,7 @@ This release is a hardening pass driven by the audit in `issues.md`
 
 | Check | Result |
 |---|---|
-| Host suite (`./tests/test-all.sh`) | `PASS=330 FAIL=0` |
+| Host suite (`./tests/test-all.sh`) | `PASS=344 FAIL=0` |
 | `shellcheck -S warning install_linux.sh lib/*.sh tests/*.sh` | clean |
 | `bash -n` / `sh -n` on every script | clean |
 | CLI surface (`--version`, `--help`, unknown option) | exit 0 / 0 / 2 |
@@ -27,7 +27,7 @@ below ran on the phone itself, over SSH, with `LFA_VERSION="1.7.0"`.
 
 | Check | Result |
 |---|---|
-| `./tests/test-all.sh` on the phone | `PASS=339 FAIL=0` |
+| `./tests/test-all.sh` on the phone | `PASS=344 FAIL=0` |
 | `./install_linux.sh --version` | `Linux for Android Manager 1.7.0` |
 | `./install_linux.sh --help` | lists all flags, exit 0 |
 | `./install_linux.sh --list` | `ubuntu` |
