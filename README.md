@@ -3,7 +3,7 @@
   <p><b>Run a real Linux desktop — Ubuntu, Debian, Kali, Arch, Fedora, openSUSE, Void or Alpine — on an Android phone.<br>One script, no root, verified on a 2016 phone and a 2026 phone.</b></p>
   <p>
     <a href="https://github.com/pdev-labs/Linux-For-Android/actions/workflows/ci.yml"><img src="https://github.com/pdev-labs/Linux-For-Android/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-    <img src="https://img.shields.io/github/v/release/pdev-labs/Linux-For-Android?sort=semver" alt="Latest release">
+    <img src="https://img.shields.io/github/v/release/pdev-labs/Linux-For-Android" alt="Latest release">
     <img src="https://img.shields.io/badge/Android-5.1%20%E2%86%92%2016-blue" alt="Android 5.1 to 16">
     <img src="https://img.shields.io/badge/distros-8-green" alt="8 distributions">
     <img src="https://img.shields.io/badge/License-GPL%203.0-orange" alt="License">

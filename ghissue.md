@@ -13,9 +13,9 @@ Status column is maintained by hand; see `tracker.md` for code work.
 | # | Item | ★ | ⏱ | Status |
 |---|---|---|---|---|
 | G1 | **Version numbering is broken.** Tags run to `v4.6.0` (Jul), the current release is `v1.6.1` (Oct), and `v4.6.0` is an ancestor of `main`. Decide: renumber forward (v5.0.0) or document the reset in `CHANGELOG.md` and mark v2–v4 historical. | ★★★★★ | 1 h | partial — documented in `CHANGELOG.md`; renumbering the old tags is a history rewrite |
-| G2 | **Description is out of date** — it lists Ubuntu/Debian/Arch/Fedora/openSUSE/Void but omits **Kali, Alpine, Android 5/6 and GNOME**. | ★★★★ | 5 min | open — GitHub setting |
-| G3 | **Missing topics:** `gnome`, `vnc`, `x11`, `android-5`, `termux-desktop`, `linux-desktop-android`, `alpine-linux`. | ★★★ | 5 min | open — GitHub setting |
-| G4 | **Homepage URL empty** — point it at the latest release or `docs/`. | ★★★ | 2 min | open — GitHub setting |
+| G2 | **Description is out of date** — it lists Ubuntu/Debian/Arch/Fedora/openSUSE/Void but omits **Kali, Alpine, Android 5/6 and GNOME**. | ★★★★ | 5 min | done — description names all 8 distros, Android 5.1→16, no root |
+| G3 | **Missing topics:** `gnome`, `vnc`, `x11`, `android-5`, `termux-desktop`, `linux-desktop-android`, `alpine-linux`. | ★★★ | 5 min | done — 20 topics, including vnc/gnome/alpine-linux/android-5 |
+| G4 | **Homepage URL empty** — point it at the latest release or `docs/`. | ★★★ | 2 min | done — points at the latest release |
 | G5 | **40 of 94 commits are authored by `pdev@local`**, so half the contribution graph is invisible. Re-attribute them. | ★★★★ | 30 min | open — history rewrite |
 
 ## P1 — Proof it works (highest visual impact)
@@ -48,13 +48,13 @@ Status column is maintained by hand; see `tracker.md` for code work.
 | # | Item | ★ | ⏱ | Status |
 |---|---|---|---|---|
 | G21 | **CI workflow**: `shellcheck` + `bash -n` + `tests/test-all.sh` on push/PR. Add the badge. | ★★★★★ | 1 h | done — `.github/workflows/ci.yml` |
-| G22 | **Protect `main`** (require PR + passing checks, block force-push) and enable delete-branch-on-merge. | ★★★★ | 5 min | open — GitHub setting |
-| G23 | **Release assets**: versioned `install_linux.sh` + `SHA256SUMS` attached to every release. | ★★★★ | 30 min | open — done at release time |
+| G22 | **Protect `main`** (require PR + passing checks, block force-push) and enable delete-branch-on-merge. | ★★★★ | 5 min | partial — delete-branch-on-merge enabled; branch protection left to the owner |
+| G23 | **Release assets**: versioned `install_linux.sh` + `SHA256SUMS` attached to every release. | ★★★★ | 30 min | done — v1.7.0 ships `install_linux.sh` + `SHA256SUMS` |
 | G24 | **Pinned install instructions** (`git clone --branch vX.Y.Z`), so users do not install an unreviewed HEAD. | ★★★★ | 10 min | done — pinned `--branch` clone |
-| G25 | **Release automation** (tag → notes → assets) instead of manual `gh release create`. | ★★★ | 2 h | open |
+| G25 | **Release automation** (tag → notes → assets) instead of manual `gh release create`. | ★★★ | 2 h | partial — `gh release create` is scripted by hand, not by a workflow |
 | G26 | **Milestones per release** (Projects is enabled but empty). | ★★★ | 15 min | open |
 | G27 | **Area labels**: `area: installer`, `distro: alpine`, `backend: vnc`, `needs-hardware`, `regression`. | ★★★ | 10 min | open |
-| G28 | **Enable Discussions** + pinned "post your device" thread; disable the empty Wiki. | ★★★ | 10 min | open |
+| G28 | **Enable Discussions** + pinned "post your device" thread; disable the empty Wiki. | ★★★ | 10 min | done — Discussions on, empty Wiki disabled |
 
 ## P4 — Documentation inside the repo
 

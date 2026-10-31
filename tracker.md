@@ -31,13 +31,13 @@ Lint: `shellcheck -S warning` clean · `bash -n` clean · CI workflow added.
 
 | Group | Total | Done | Partial | Open | Notes |
 |---|---|---|---|---|---|
-| G1–G5 repo facts | 5 | 0 | 1 | 4 | version reset documented; description/topics/homepage changed via API |
+| G1–G5 repo facts | 5 | 3 | 1 | 1 | description/topics/homepage done; version reset documented; commit re-attribution open |
 | G6–G12 proof | 7 | 4 | 0 | 3 | screenshots, numbers, matrix, hard-problems done; GIF/photo open |
 | G13–G20 health files | 8 | 7 | 1 | 0 | only funding/SUPPORT account bits left |
-| G21–G28 automation | 8 | 1 | 0 | 7 | CI done; protection/assets/milestones need repo settings |
+| G21–G28 automation | 8 | 3 | 2 | 3 | CI + assets + discussions done; protection/milestones/automation left |
 | G29–G35 docs | 7 | 7 | 0 | 0 | architecture, decisions, index, issues link, badges, ToC |
 | G36–G40 polish | 5 | 3 | 1 | 1 | logo/GIF and troubleshooting screenshots open |
-| **Total** | **40** | **22** | **3** | **15** | |
+| **Total** | **40** | **27** | **5** | **8** | |
 
 ---
 
