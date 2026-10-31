@@ -29,8 +29,12 @@ REAL_PREFIX="${PREFIX:-}"   # Termux provides bash/coreutils here
 export REAL_PREFIX
 command -v timeout >/dev/null 2>&1 || { echo "need 'timeout' (coreutils)"; exit 2; }
 
-T="$REPO/.test-tmp"
-rm -rf "$T"
+# #40: work outside the repo; clean up on every exit path.
+LFA_EXPECTED_VERSION="$(sed -n 's/^LFA_VERSION="\([^"]*\)"/\1/p' "$REPO/install_linux.sh" | head -n1)"
+T="$(mktemp -d "${TMPDIR:-/tmp}/lfa-test.XXXXXX")" || exit 2
+export LFA_TEST_TMP="$T"
+cleanup_tmp() { [ -n "${T:-}" ] && rm -rf "$T" 2>/dev/null || true; }
+trap cleanup_tmp EXIT INT TERM
 mkdir -p "$T/fakebin"
 
 # ---------------- stub commands ----------------
@@ -39,6 +43,14 @@ cat > "$T/fakebin/pkg" <<'EOF'
 echo "STUB-PKG: $*"
 exit 0
 EOF
+# Controllable free space so the preflight check can be tested in both ways.
+cat > "$T/fakebin/df" <<'EOF'
+#!/bin/bash
+_avail="${FAKE_DF_AVAIL_KB:-200000000}"
+echo "Filesystem 1024-blocks Used Available Capacity Mounted"
+echo "/dev/fake $_avail 0 $_avail 1% ${1:-/}"
+EOF
+chmod +x "$T/fakebin/df"
 cat > "$T/fakebin/proot-distro" <<'EOF'
 #!/bin/bash
 echo "STUB-PD: $*" >&2
@@ -53,6 +65,17 @@ case "$1" in
         fi ;;
     install)
         if [ "$2" = "--help" ]; then
+            if [ "${PD_LONG_HELP:-0}" = "1" ]; then
+                # Regression: >64 KiB of help makes `... | grep -q` die with
+                # SIGPIPE under `set -o pipefail` (issue found on hardware).
+                echo "USAGE: proot-distro install [OPTIONS] (IMAGE:TAG or URL or FILE)"
+                _i=0
+                while [ "$_i" -lt 3000 ]; do
+                    echo "filler line $_i .................................................."
+                    _i=$((_i+1))
+                done
+                exit 0
+            fi
             if [ "${PD_V5:-0}" = "1" ]; then echo "USAGE: proot-distro install [OPTIONS] (IMAGE:TAG or URL or FILE)";
             elif [ "${PD_V4:-0}" = "1" ]; then echo "Usage: install [--override-alias ALIAS] DISTRO";
             else echo "Usage: install ALIAS"; fi
@@ -120,10 +143,11 @@ chmod +x "$T/fakebin/"*
 # ---------------- helpers ----------------
 pass=0; fail=0
 fresh_env() { # reset HOME/PREFIX, keep stubs
-    rm -rf "$T/home" "$T/prefix"
+    rm -rf "${T:?}/home" "${T:?}/prefix"
     mkdir -p "$T/home" "$T/prefix/bin" "$T/prefix/tmp"
     export HOME="$T/home" PREFIX="$T/prefix" \
         PATH="$T/fakebin${REAL_PREFIX:+:$REAL_PREFIX/bin}:/usr/bin:/bin" TERM=""
+    export LFA_KEEP_SETUP_SCRIPT=1   # inspect the generated guest script
     unset GETPROP_SDK FREE_MB PD_V4
 }
 run_script() { # $1=logname, rest of stdin via caller pipe; needs $T/tmpin set
@@ -137,6 +161,18 @@ check() { # $1 desc, $2 literal, $3 file
 check_absent() {
     if grep -qF -- "$2" "$3" 2>/dev/null; then fail=$((fail+1)); echo "FAIL: $1 (unexpected [$2])";
     else pass=$((pass+1)); fi
+}
+# Wait until a freshly spawned process has a visible command line. A fixed
+# sleep is not enough on a loaded phone: bash may still be loading.
+wait_cmdline() { # $1 pid, $2 substring
+    local _i=0
+    while [ "$_i" -lt 40 ]; do
+        if tr '\0' ' ' < "/proc/$1/cmdline" 2>/dev/null | grep -qF -- "$2"; then
+            return 0
+        fi
+        sleep 0.1; _i=$((_i+1))
+    done
+    return 1
 }
 check_re() {
     if grep -qE -- "$2" "$3" 2>/dev/null; then pass=$((pass+1));
@@ -171,10 +207,14 @@ printf '%s\n' 2 9 2 4 99 'x y' '' '' 'Bad Name!' 'dev' '' 's3cret' '' 'oppo-test
 S=$(setup_sh_of)
 check "C user" 'useradd -m -s /bin/bash dev' "$S"
 check_re "C chpasswd" "printf '%s:%s\\\\n' \"dev\"" "$S"
-check "C shim b64" 'SUDO_SHIM_B64=' "$S"
+check "C shim hash" 'SUDO_HASH=' "$S"
+check "C shim salt" 'SUDO_SALT=' "$S"
+check_absent "C no shim b64" 'SUDO_SHIM_B64=' "$S"
 check_absent "C placeholders" '__LUSER__' "$S"
 check_absent "C placeholders" '__UPASS_B64__' "$S"
 check_absent "C placeholders" '__SPASS_B64__' "$S"
+check_absent "C placeholders" '__SPASS_HASH__' "$S"
+check_absent "C placeholders" '__SPASS_SALT__' "$S"
 check_absent "C placeholders" '__TZ__' "$S"
 check "C start user" '--user "$X11_USER"' "$T/prefix/bin/start-linux"
 check_absent "C start placeholders" '__LUSER__' "$T/prefix/bin/start-linux"
@@ -525,16 +565,107 @@ printf '999999\n' > "$SP/tmp/.X1-lock"
 ( PREFIX="$SP"; . "$T/prefix/bin/lfa-lib.sh"; lfa_clear_stale_x1 )
 [ ! -e "$SP/tmp/.X11-unix/X1" ] && [ ! -e "$SP/tmp/.X1-lock" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: M4 stale X1 socket/lock not removed"; }
 : > "$SP/tmp/.X11-unix/X1"
-bash -c 'exec -a "Xvnc :1" sleep 5' &
+# exec -a on a multicall binary (Termux's sleep is coreutils) fails there,
+# so exec a real ELF (bash) and give it the X server's argv[0] instead.
+# "sleep 5; :" stops bash from exec-optimising itself away, which would
+# replace argv[0] with "sleep" and make the fixture useless.
+bash -c 'exec -a "Xvnc :1" "$BASH" -c "sleep 5; :"' &
 FAKE_X=$!
-sleep 0.3
+wait_cmdline "$FAKE_X" "Xvnc"
 printf '%s\n' "$FAKE_X" > "$SP/tmp/.X1-lock"
 ( PREFIX="$SP"; . "$T/prefix/bin/lfa-lib.sh"; lfa_clear_stale_x1 )
 [ -e "$SP/tmp/.X11-unix/X1" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: M4 live X server socket was removed"; }
 kill "$FAKE_X" 2>/dev/null
 wait "$FAKE_X" 2>/dev/null
+
+# Same thing with an absolute argv[0] (what proot does for a guest Xvnc):
+# detection must compare the basename, not anchor on the first character.
+bash -c 'exec -a "/usr/bin/Xvnc :1" "$BASH" -c "sleep 5; :"' &
+FAKE_P=$!
+wait_cmdline "$FAKE_P" "/usr/bin/Xvnc"
+printf '%s\n' "$FAKE_P" > "$SP/tmp/.X1-lock"
+: > "$SP/tmp/.X11-unix/X1"
+( PREFIX="$SP"; . "$T/prefix/bin/lfa-lib.sh"; lfa_clear_stale_x1 )
+if [ -e "$SP/tmp/.X11-unix/X1" ]; then pass=$((pass+1)); else
+    fail=$((fail+1))
+    echo "FAIL: M4 path-prefixed X server socket was removed"
+    echo "      alive=$(kill -0 "$FAKE_P" 2>/dev/null && echo yes || echo no) lock=$(cat "$SP/tmp/.X1-lock" 2>/dev/null)"
+    echo "      cmd=$(tr '\0' ' ' < "/proc/$FAKE_P/cmdline" 2>/dev/null | head -c 120)"
+fi
+kill "$FAKE_P" 2>/dev/null
+wait "$FAKE_P" 2>/dev/null
 ( PREFIX="$SP"; . "$T/prefix/bin/lfa-lib.sh"; lfa_clear_stale_x1 )
 [ ! -e "$SP/tmp/.X11-unix/X1" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: M4 socket not released after server exit"; }
+
+echo "===== M5: CLI surface (--version/--help/--list) exits cleanly ====="
+bash "$REPO/install_linux.sh" --version > "$T/cli.log" 2>&1; rc=$?
+[ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: M5 --version exit $rc"; }
+check "M5 version printed" 'Linux for Android Manager' "$T/cli.log"
+check "M5 version matches" "$LFA_EXPECTED_VERSION" "$T/cli.log"
+bash "$REPO/install_linux.sh" --help > "$T/cli2.log" 2>&1; rc=$?
+[ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: M5 --help exit $rc"; }
+check "M5 usage shows --doctor" '--doctor' "$T/cli2.log"
+bash "$REPO/install_linux.sh" --bogus > "$T/cli3.log" 2>&1; rc=$?
+[ "$rc" = "2" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: M5 unknown option exit $rc"; }
+# Use a throwaway prefix so M6 below can still read the generated lib.
+mkdir -p "$T/emptyprefix"
+PREFIX="$T/emptyprefix" HOME="$T/home" bash "$REPO/install_linux.sh" --list > "$T/cli4.log" 2>&1; rc=$?
+[ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: M5 --list exit $rc"; }
+check "M5 list empty message" 'No distributions installed.' "$T/cli4.log"
+
+echo "===== M6: pidfile verification refuses unrelated processes ====="
+( . "$T/prefix/bin/lfa-lib.sh" 2>/dev/null || true
+  bash -c 'exec -a "Xvnc :1" "$BASH" -c "sleep 5; :"' &
+  FAKE_X=$!
+  wait_cmdline "$FAKE_X" "Xvnc"
+  if ( type lfa_pid_matches >/dev/null 2>&1 ) \
+     && lfa_pid_matches "$FAKE_X" "Xvnc" 2>/dev/null \
+     && ! lfa_pid_matches "$FAKE_X" "proot-distro" 2>/dev/null; then
+      exit 0
+  fi
+  exit 1 ) && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: M6 pid verification"; }
+
+echo "===== M7: disk preflight refuses a full device ====="
+fresh_env
+printf '%s\n' 2 1 1 1 1 2 '2 12 14' '' '' '' '' '' '' 1 'n' '' 'n' 'n' '' '' '13' \
+| FAKE_DF_AVAIL_KB=100000 bash "$REPO/install_linux.sh" > "$T/disk.log" 2>&1; rc=$?
+[ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: M7 run exit $rc"; }
+check "M7 refuses" 'Not enough free space' "$T/disk.log"
+check_absent "M7 no install completed" 'Installation complete' "$T/disk.log"
+
+echo "===== M8: interrupt safety (EXIT trap removes the secret-bearing script) ====="
+fresh_env
+( printf '%s\n' 2 1 1 1 1 2 '2 12 14' '' '' '' '' '' '' 1 'n' '' 'n' 'n' '' '' '13' \
+  | LFA_KEEP_SETUP_SCRIPT=0 bash "$REPO/install_linux.sh" >/dev/null 2>&1 )
+ls "$T/prefix/tmp/gui_setup_"* >/dev/null 2>&1 && { fail=$((fail+1)); echo "FAIL: M8 setup script left behind"; } || pass=$((pass+1))
+
+echo "===== M9: --diagnostics bundle is created and redacted ====="
+fresh_env
+DROOT="$T/prefix/var/lib/proot-distro/installed-rootfs/diaginst"
+mkdir -p "$DROOT/etc" "$DROOT/usr"
+printf 'USER_NAME="user"\nUSER_PASS="hunter2"\nVNC_PASSPHRASE="s3cr3t"\n' \
+    > "$DROOT/etc/termux-linux-manager.conf"
+bash "$REPO/install_linux.sh" --diagnostics > "$T/diag.log" 2>&1; rc=$?
+[ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: M9 --diagnostics exit $rc"; }
+DARCHIVE="$(sed -n 's/^Diagnostics written to: //p' "$T/diag.log" | head -n1)"
+if [ -s "$DARCHIVE" ]; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: M9 no archive"; fi
+tar -xzOf "$DARCHIVE" ./report.txt > "$T/report.txt" 2>/dev/null
+check "M9 report names version" "$LFA_EXPECTED_VERSION" "$T/report.txt"
+check "M9 report lists the distro" "diaginst" "$T/report.txt"
+tar -xzOf "$DARCHIVE" ./configs/diaginst.conf > "$T/conf-redacted.txt" 2>/dev/null
+check "M9 config kept non-secret keys" 'USER_NAME="user"' "$T/conf-redacted.txt"
+check "M9 secret redacted" 'REDACTED' "$T/conf-redacted.txt"
+check_absent "M9 no plaintext user password" 'hunter2' "$T/conf-redacted.txt"
+check_absent "M9 no plaintext vnc password" 's3cr3t' "$T/conf-redacted.txt"
+
+echo "===== M10: large help output does not break the proot-distro probe ====="
+fresh_env
+printf '%s\n' 2 1 1 1 1 2 '2 12 14' '' '' '' '' '' '' 1 'n' '' 'n' 'n' '' '' '13' \
+| PD_V5=1 PD_LONG_HELP=1 bash "$REPO/install_linux.sh" > "$T/longhelp.log" 2>&1; rc=$?
+[ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: M10 run exit $rc"; }
+check_absent "M10 v5 not misdetected" "knows no" "$T/longhelp.log"
+check "M10 install proceeded" 'Installing ' "$T/longhelp.log"
+check "M10 image install used" 'STUB-PD-INSTALL-OK: install --name' "$T/longhelp.log"
 
 echo "===== N: apply latest fixes to an older distro ====="
 fresh_env
@@ -620,7 +751,7 @@ mkdir -p "$T/prefix/bin"
 cp "$T/fakebin/proot-distro" "$T/prefix/bin/proot-distro"
 chmod +x "$T/prefix/bin/proot-distro"
 MODERN=$(PREFIX="$T/prefix" PATH="$T/fakebin${REAL_PREFIX:+:$REAL_PREFIX/bin}:/usr/bin:/bin" PD_V5=1 bash -c '
-source <(sed -n "/^pd_is_v4()/,/^}/p" "$1")
+source <(sed -n "/^lfa_match()/,/^}/p" "$1"; sed -n "/^pd_is_v4()/,/^}/p" "$1")
 pd_is_v4 && echo MODERN || echo LEGACY
 ' _ "$REPO/install_linux.sh")
 [ "$MODERN" = "MODERN" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: R pd_is_v4 did not detect v5 ($MODERN)"; }
@@ -677,7 +808,7 @@ check "V keepalive launcher" 'while :; do sleep 3600; done' "$T/prefix/bin/start
 check "V vnc config geometry" '.config/tigervnc/config' "$T/prefix/bin/start-linux"
 check "V xvnc fallback" 'Xvnc :1 -geometry' "$T/prefix/bin/start-linux"
 check "V vnc session var" 'VNC_SES="startxfce4"' "$T/prefix/bin/start-linux"
-check "V clears stale runtime" 'rm -rf "$PREFIX/tmp/xdg-$X11_USER"' "$T/prefix/bin/start-linux"
+check "V clears stale runtime" 'rm -rf "$PREFIX/tmp/xdg-$X11_USER-$DISTRO"' "$T/prefix/bin/start-linux"
 check "V clears dbus sockets" 'rm -f "$PREFIX"/tmp/dbus-*' "$T/prefix/bin/start-linux"
 check "V clears stale X1 socket" 'rm -f "$PREFIX/tmp/.X11-unix/X1"' "$T/prefix/bin/start-linux"
 check_absent "V no legacy vncserver flags" 'vncserver -geometry' "$T/prefix/bin/start-linux"
@@ -729,5 +860,21 @@ LFA_ROOT="$CLIROOT" LFA_USER=cliuser LFA_DISTRO=ubuntu LFA_DE=none LFA_MODE=dark
 [ ! -e "$CLIROOT/usr/share/backgrounds/lfa-default.jpg" ] && [ ! -e "$CLIROOT/home/cliuser" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: X CLI-only wallpaper not skipped"; }
 
 echo ""
+# #29: the README must state the real numbers, or the docs rot silently.
+if [ "$fail" -eq 0 ]; then
+    if ! grep -qF "PASS=$pass FAIL=0" "$REPO/README.md" 2>/dev/null; then
+        echo "FAIL: README does not state the real result (PASS=$pass FAIL=0)."
+        fail=$((fail+1))
+    fi
+    if ! grep -qF "\`$pass\` checks" "$REPO/README.md" 2>/dev/null; then
+        echo "FAIL: README check count is stale (expected \`$pass\` checks)."
+        fail=$((fail+1))
+    fi
+    if ! grep -qF "expect: PASS=$pass FAIL=0" "$REPO/README.md" 2>/dev/null; then
+        echo "FAIL: README test-suite example is stale (expected PASS=$pass)."
+        fail=$((fail+1))
+    fi
+fi
+
 echo "PASS=$pass FAIL=$fail"
 [ "$fail" = "0" ]

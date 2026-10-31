@@ -1,16 +1,43 @@
 #!/bin/bash
 
-# Exit immediately if a command exits with a non-zero status
+# Exit immediately if a command exits with a non-zero status, and let a
+# failure anywhere in a pipeline fail the whole pipeline.
 set -e
+set -o pipefail
 
+# --help / --version must work anywhere (docs, packaging, CI); everything
+# else needs a Termux environment.
 if [ -z "$PREFIX" ]; then
-    echo "Error: This script must be run inside Termux."
-    exit 1
+    case "${1:-}" in
+        -h|--help|-V|--version) ;;
+        *)
+            echo "Error: This script must be run inside Termux."
+            exit 1
+            ;;
+    esac
 fi
 
 # Directory containing this script (lib/ lives next to it).
 LFA_DIR="$(cd "$(dirname "$0")" && pwd)"
-LFA_VERSION="1.6.1"
+LFA_VERSION="1.7.0"
+
+# ------------------------------------------------------------
+# Interrupt safety and temporary artifacts.
+# The guest setup script carries the install passwords (obfuscated) and is
+# staged in $PREFIX/tmp, which every distro shares as /tmp. Track everything
+# written there and remove it on every exit path, including Ctrl-C and a
+# failed install (a stray copy used to survive forever).
+# ------------------------------------------------------------
+LFA_TMP_ARTIFACTS=()
+lfa_track_tmp() { LFA_TMP_ARTIFACTS+=("$1"); }
+lfa_cleanup() {
+    [ "${LFA_KEEP_SETUP_SCRIPT:-0}" = "1" ] && return 0
+    local _f
+    for _f in ${LFA_TMP_ARTIFACTS[@]+"${LFA_TMP_ARTIFACTS[@]}"}; do
+        rm -f "$_f" 2>/dev/null || true
+    done
+}
+trap lfa_cleanup EXIT INT TERM
 
 # ============================================================
 # Interactive UI (npm-style)
@@ -32,6 +59,8 @@ else
     C_RED=""; C_GREEN=""; C_YELLOW=""; C_BLUE=""; C_MAGENTA=""
     C_CYAN=""; C_WHITE=""; C_GRAY=""; C_BGREEN=""; C_BCYAN=""; C_BRED=""
 fi
+export C_RESET C_BOLD C_DIM C_RED C_GREEN C_YELLOW C_BLUE C_MAGENTA \
+       C_CYAN C_WHITE C_GRAY C_BGREEN C_BCYAN C_BRED
 
 ui_clear() {
     if [ "$UI_TTY" = "1" ]; then printf '\033[2J\033[H'; fi
@@ -290,7 +319,10 @@ ui_multi() {
     return 0
 }
 
+LFA_NONINTERACTIVE="${LFA_NONINTERACTIVE:-0}"
+
 ui_pause() {
+    [ "$LFA_NONINTERACTIVE" = "1" ] && return 0
     printf '\n  %sPress Enter to continue...%s' "$C_DIM" "$C_RESET"
     IFS= read -r _ || true
 }
@@ -320,7 +352,13 @@ detect_environment() {
         IS_LEGACY=1
     fi
     # Non-Android shells (PC debugging) report SDK 0 -> treat as modern
-    # so script syntax can still be tested.
+    # so script syntax can still be tested, but say so instead of silently
+    # behaving differently.
+    if [ "$ANDROID_SDK" = "0" ] && [ "${LFA_SDK_WARNED:-0}" != "1" ]; then
+        echo "[!] Could not read the Android version (getprop unavailable)."
+        echo "    Legacy-device handling is disabled for this run."
+        LFA_SDK_WARNED=1
+    fi
 
     IS_32BIT_ARM=0
     case "$ARCH" in
@@ -388,6 +426,12 @@ install_proot_distro_from_source() {
             cp -r "$PREFIX/tmp"/proot-distro-4.2.0/* "$SRC_DIR"/ 2>/dev/null || true
         fi
     fi
+    # No published checksum exists for GitHub tag archives (they are not
+    # byte-stable), so validate the tree instead of trusting the download.
+    if [ -f "$SRC_DIR/proot-distro.sh" ] && ! grep -q "$PD_LEGACY_TAG\|4\.2\.0" "$SRC_DIR/proot-distro.sh" 2>/dev/null; then
+        echo "[!] proot-distro source does not look like $PD_LEGACY_TAG; refusing to install it."
+        rm -rf "$SRC_DIR"
+    fi
     if [ -f "$SRC_DIR/install.sh" ]; then
         # install.sh respects TERMUX_PREFIX/TERMUX_ANDROID_HOME from env,
         # so this also works on Termux forks with non-standard paths.
@@ -406,6 +450,18 @@ install_proot_distro_from_source() {
     return 1
 }
 
+# `producer | grep -q` is unsafe with `set -o pipefail`: grep exits at the
+# first match, the producer dies with SIGPIPE (141), and the pipeline is
+# reported as failed even though the match succeeded. This helper keeps the
+# text in a variable and uses bash's own regex engine instead.
+lfa_match() { # $1 text, $2 extended regex (case-insensitive)
+    local _t="$1" _p="$2" _rc
+    shopt -s nocasematch
+    [[ "$_t" =~ $_p ]]; _rc=$?
+    shopt -u nocasematch
+    return $_rc
+}
+
 # Verify the installed proot-distro actually knows distro $1.
 # Frozen Android 5 repos ship a pre---override-alias proot-distro build
 # whose plugin dir can be empty -> every install fails with
@@ -418,13 +474,14 @@ verify_proot_distro_plugin() {
     # shows created containers, not available distro plugins, so checking it
     # would reject every not-yet-installed image (e.g. alpine:latest).
     if command -v proot-distro >/dev/null 2>&1 && \
-       proot-distro install --help 2>&1 | grep -iqE "(IMAGE:TAG|Docker image|registry)"; then
+       lfa_match "$(proot-distro install --help 2>&1)" '(IMAGE:TAG|Docker image|registry)'; then
         return 0
     fi
     # NOTE: proot-distro prints EVERYTHING (including 'list' results)
     # to stderr via msg(), so capture 2>&1 here, not 2>/dev/null.
     set +e
-    if command -v proot-distro >/dev/null 2>&1 && proot-distro list 2>&1 | grep -qw "$WANT"; then
+    if command -v proot-distro >/dev/null 2>&1 && \
+       lfa_match "$(proot-distro list 2>&1)" "(^|[^[:alnum:]_])$WANT([^[:alnum:]_]|$)"; then
         set -e
         return 0
     fi
@@ -437,7 +494,7 @@ verify_proot_distro_plugin() {
     fi
     echo "[!] proot-distro has no '$WANT' plugin (stale pre-$PD_LEGACY_TAG pkg build?). Repairing from $PD_LEGACY_TAG sources..."
     install_proot_distro_from_source || { set -e; return 1; }
-    if proot-distro list 2>&1 | grep -qw "$WANT"; then
+    if lfa_match "$(proot-distro list 2>&1)" "(^|[^[:alnum:]_])$WANT([^[:alnum:]_]|$)"; then
         set -e
         return 0
     fi
@@ -506,7 +563,7 @@ ensure_dependencies() {
 # Detection is file-based (no execution), safe on modern builds too:
 # v5+ pkg builds keep working untouched.
 pd_login_flags() {
-    if command -v proot >/dev/null 2>&1 && ! proot --help 2>&1 | grep -q "sysvipc"; then
+    if command -v proot >/dev/null 2>&1 && ! lfa_match "$(proot --help 2>&1)" 'sysvipc'; then
         if [ -f "$PREFIX/bin/proot-distro" ] && grep -q "no-sysvipc" "$PREFIX/bin/proot-distro" 2>/dev/null; then
             echo "--no-sysvipc"
         fi
@@ -521,7 +578,7 @@ pd_is_v4() {
     # images and restores from a single archive argument (`restore FILE`).
     [ -f "$PREFIX/bin/proot-distro" ] || return 1
     grep -q "DISTRO_PLUGINS_DIR" "$PREFIX/bin/proot-distro" 2>/dev/null && return 0
-    proot-distro restore --help 2>&1 | grep -q "BACKUP_FILE"
+    lfa_match "$(proot-distro restore --help 2>&1)" 'BACKUP_FILE' 
 }
 
 # Legacy devices need the bullseye plug-in (shipped in ./plugins), which
@@ -540,10 +597,56 @@ deploy_legacy_plugins() {
 }
 
 # ============================================================
+# Desktop / display-server questions.
+# Guided setup and the install wizard used to carry two copies of these
+# menus; adding GNOME meant editing both. One implementation now.
+# ============================================================
+ask_desktop_environment() {   # $1 = suggestion label, $2 = default index
+    local _suggest="${1:-XFCE4}" _def="${2:-1}"
+    local -a _items=(
+        "1|XFCE4|light, familiar, great on phones"
+        "2|LXDE|ultra light, minimal"
+        "3|MATE|classic GNOME 2 feel"
+        "4|None (CLI only)|terminal only - lightest and fastest"
+    )
+    gnome_available && _items+=("5|GNOME (experimental)|BETA - may crash; read the warning")
+    ui_select "Choose Desktop Environment (suggested: $_suggest)" "$_def" "${_items[@]}" || return 1
+    case "$UI_SELECTED" in
+        1) DE="xfce4" ;;
+        2) DE="lxde" ;;
+        3) DE="mate" ;;
+        4) DE="none" ;;
+        5) DE="gnome" ;;
+    esac
+    if [ "$DE" = "gnome" ] && ! gnome_experimental_warning; then
+        echo "[*] Falling back to XFCE4."
+        DE="xfce4"
+    fi
+    return 0
+}
+
+ask_display_server() {        # $1 = default index (1=x11, 2=vnc)
+    local _def="${1:-1}"
+    ui_select "Choose Display Server" "$_def" \
+        "1|Termux:X11|hardware acceleration, faster, smoother" \
+        "2|VNC|software rendering, works everywhere, slower" || return 1
+    case "$UI_SELECTED" in
+        1) SERVER="x11" ;;
+        2) SERVER="vnc" ;;
+    esac
+    if [ "$DE" = "gnome" ] && [ "$SERVER" = "x11" ]; then
+        echo "[!] GNOME over Termux:X11 is known to crash the app often."
+        echo "    VNC is more stable for GNOME - you can still continue."
+    fi
+    return 0
+}
+
+# ============================================================
 # Guided setup questionnaire (integrated first screen).
 # Asks everything up front, saves answers to setup.conf for unattended
 # re-runs, then hands off to install_linux() with SETUP_ANSWERED=1 so no
-# question is asked twice. Passwords are stored base64-encoded only.
+# question is asked twice. Passwords are base64-encoded (obfuscation, not
+# encryption) in a mode-0600 file; treat that file as a secret.
 # ============================================================
 SETUP_CONF="$HOME/.config/linux-for-android/setup.conf"
 # Wallpaper mode: light (default) or dark. Guided setup asks for GUI
@@ -568,6 +671,24 @@ setup_read_secret() {
     printf -v "$1" '%s' "$__val"
 }
 
+setup_confirm_secret() {
+    # Like setup_read_secret, but asks twice on a real terminal. There is no
+    # password-reset path inside the guest, so a typo is unrecoverable.
+    # When stdin is piped (tests/CI) it asks once, as before.
+    local __var="$1" __prompt="$2" __dflt="$3" __a="" __b=""
+    if [ ! -t 0 ]; then
+        setup_read_secret "$__var" "$__prompt" "$__dflt"
+        return 0
+    fi
+    while true; do
+        setup_read_secret __a "$__prompt" "$__dflt"
+        setup_read_secret __b "  Repeat to confirm: " "$__a"
+        [ "$__a" = "$__b" ] && break
+        echo "[!] Passwords do not match, try again."
+    done
+    printf -v "$__var" '%s' "$__a"
+}
+
 setup_guess_timezone() {
     local _tz=""
     _tz=$(getprop persist.sys.timezone 2>/dev/null || true)
@@ -575,6 +696,40 @@ setup_guess_timezone() {
         ""|*[!A-Za-z0-9_+./-]*|*..*|/*|*/) _tz="UTC" ;;
     esac
     printf '%s' "${_tz:-UTC}"
+}
+
+# Rough free-space requirement (MB) for an install of this shape.
+setup_required_mb() {
+    if [ "${DE:-none}" = "gnome" ]; then
+        printf '3500'
+    elif [ "${DE:-none}" != "none" ]; then
+        printf '2500'
+    else
+        printf '900'
+    fi
+}
+
+# shellcheck disable=SC2120  # $1 is optional (defaults to $PREFIX)
+lfa_free_mb() {
+    df -Pk "${1:-$PREFIX}" 2>/dev/null | awk 'NR==2 {print int($4/1024)}'
+}
+
+# Refuse to start a multi-gigabyte install on a nearly full device: it would
+# die halfway through apt and leave a half-configured rootfs behind.
+lfa_check_disk_space() {
+    local _need _have
+    _need="$(setup_required_mb)"
+    _have="$(lfa_free_mb)"
+    case "$_have" in ''|*[!0-9]*) return 0 ;; esac
+    if [ "$_have" -lt "$_need" ]; then
+        echo ""
+        echo "[!] Not enough free space: this install needs about ${_need} MB,"
+        echo "    and only ${_have} MB is free on the Termux filesystem."
+        echo "    Remove another distro or clear Downloads, then re-run."
+        return 1
+    fi
+    echo "[*] Free space check: ${_have} MB available, ${_need} MB needed."
+    return 0
 }
 
 setup_ram_mb() {
@@ -661,7 +816,8 @@ setup_save() {
     mkdir -p "$(dirname "$SETUP_CONF")"
     cat > "$SETUP_CONF" <<EOF
 # Linux-for-Android setup answers (reused on re-install, chmod 600).
-# Passwords are base64-encoded, never plaintext.
+# Passwords are base64-encoded (reversible) - the file mode is what protects
+# them, so keep it 0600 and never copy it around.
 DISTRO="$DISTRO"
 DE="$DE"
 SERVER="$SERVER"
@@ -773,27 +929,9 @@ setup_guided() {
     # 2. Desktop
     local _de _dedef
     if [ "$IS_LEGACY" = "1" ] || [ "$(setup_ram_mb)" -le 2048 ]; then _de="None (CLI only)"; _dedef=4; else _de="XFCE4"; _dedef=1; fi
-    local -a _deitems=(
-        "1|XFCE4|light, familiar, great on phones"
-        "2|LXDE|ultra light, minimal"
-        "3|MATE|classic GNOME 2 feel"
-        "4|None (CLI only)|terminal only - lightest and fastest"
-    )
-    gnome_available && _deitems+=("5|GNOME (experimental)|BETA - may crash; read the warning")
-    if ! ui_select "Choose Desktop Environment (suggested: $_de)" "$_dedef" "${_deitems[@]}"; then
+    if ! ask_desktop_environment "$_de" "$_dedef"; then
         show_menu
         return
-    fi
-    case "$UI_SELECTED" in
-        1) DE="xfce4" ;;
-        2) DE="lxde" ;;
-        3) DE="mate" ;;
-        4) DE="none" ;;
-        5) DE="gnome" ;;
-    esac
-    if [ "$DE" = "gnome" ] && ! gnome_experimental_warning; then
-        echo "[*] Falling back to XFCE4."
-        DE="xfce4"
     fi
     if [ "$DISTRO" = "alpine" ] && [ "$DE" = "lxde" ]; then
         echo "[*] LXDE is not packaged for Alpine -> using XFCE4 instead."
@@ -824,19 +962,9 @@ setup_guided() {
         else
             local _srvdef=1
             [ "$DE" = "gnome" ] && _srvdef=2
-            if ! ui_select "Choose Display Server" "$_srvdef" \
-                "1|Termux:X11|hardware acceleration, faster, smoother" \
-                "2|VNC|software rendering, works everywhere, slower"; then
+            if ! ask_display_server "$_srvdef"; then
                 show_menu
                 return
-            fi
-            case "$UI_SELECTED" in
-                1) SERVER="x11" ;;
-                2) SERVER="vnc" ;;
-            esac
-            if [ "$DE" = "gnome" ] && [ "$SERVER" = "x11" ]; then
-                echo "[!] GNOME over Termux:X11 is known to crash the app often."
-                echo "    VNC is more stable for GNOME - you can still continue."
             fi
             if ! ui_select "Hardware acceleration (VirGL GPU passthrough)?" "1" \
                 "1|On|recommended for X11" \
@@ -902,11 +1030,18 @@ setup_guided() {
         echo "Lowercase letters, digits, _ or -, must start with a letter or _."
     done
     _pw=""
-    setup_read_secret _pw "Password for $SETUP_USER [default: root]: " "root"
+    setup_confirm_secret _pw "Password for $SETUP_USER [default: root]: " "root"
+    [ "$_pw" = "root" ] && echo "[!] Using the default password 'root' - anyone with the phone can log in."
     SETUP_USER_B64="$(b64enc "$_pw")"
     _pw=""
-    setup_read_secret _pw "Root password [default: root]: " "root"
+    setup_confirm_secret _pw "Root password [default: root]: " "root"
+    [ "$_pw" = "root" ] && echo "[!] Using the default root password 'root'."
     SETUP_ROOT_B64="$(b64enc "$_pw")"
+    # VNC authentication only uses the first 8 characters of the password.
+    if [ "${SERVER:-}" = "vnc" ] && [ "${#_pw}" -gt 8 ]; then
+        echo "[!] This password is ${#_pw} characters, but VNC only uses the first 8"
+        echo "    ('${_pw:0:8}'). Type that shorter version in your VNC client."
+    fi
     _pw=""
     echo "[*] This password doubles as the VNC and sudo-ritual password."
     # 9-10. Timezone + hostname
@@ -977,8 +1112,182 @@ setup_load_saved() {
     install_linux
 }
 
+# ------------------------------------------------------------
+# Non-interactive entry points. Everything interactive stays available,
+# but the script can now be introspected and scripted:
+#   --help / --version / --list / --doctor / --yes (quick setup) / --debug
+# ------------------------------------------------------------
+# --debug keeps the generated guest script *and* tees an execution trace to a
+# file, so a failure can be read afterwards instead of scrolled past.
+lfa_enable_debug_log() {
+    local log="$HOME/.config/linux-for-android/debug.log"
+    mkdir -p "$(dirname "$log")" 2>/dev/null || return 0
+    exec 19>>"$log" 2>/dev/null || return 0
+    export BASH_XTRACEFD=19
+    PS4='+ \${BASH_SOURCE##*/}:\$LINENO: '
+    set -x
+    echo "[debug] $(date -Is) LFA_VERSION=$LFA_VERSION" >&19
+}
+
+lfa_usage() {
+    cat <<HELP
+Linux for Android Manager ${LFA_VERSION}
+
+Usage: ./install_linux.sh [options]
+
+  -h, --help       show this help and exit
+  -V, --version    print the version and exit
+      --list       list installed distributions and exit
+      --doctor     repair the selected distribution and exit
+      --yes        run quick setup (all defaults) without menus
+      --debug      keep the guest setup script and write a debug log
+      --diagnostics  write a redacted support bundle to $HOME and exit
+HELP
+}
+
+# One cheap, cached check against the GitHub API. Never blocks: 3s timeout,
+# result cached for a day, silent on any failure, disabled in tests/CI and
+# by LFA_NO_UPDATE_CHECK=1.
+lfa_check_update() {
+    [ "${LFA_NO_UPDATE_CHECK:-0}" = "1" ] && return 0
+    [ "${UI_TTY:-0}" = "1" ] || return 0
+    local cache="$HOME/.config/linux-for-android/update-check" latest=""
+    mkdir -p "$(dirname "$cache")" 2>/dev/null || true
+    if [ -s "$cache" ] && [ -n "$(find "$cache" -mtime -1 2>/dev/null)" ]; then
+        latest="$(cat "$cache" 2>/dev/null)"
+    elif command -v curl >/dev/null 2>&1; then
+        latest="$(curl -fsSL --max-time 3 \
+            https://api.github.com/repos/pdev-labs/Linux-For-Android/releases/latest 2>/dev/null \
+            | sed -n 's/.*"tag_name": *"v\([^"]*\)".*/\1/p' | head -n1)"
+        case "$latest" in ''|*[!0-9.]*) latest="" ;; esac
+        if [ -n "$latest" ]; then
+            printf '%s' "$latest" > "$cache" 2>/dev/null || true
+        fi
+    fi
+    if [ -n "$latest" ] && [ "$latest" != "$LFA_VERSION" ]; then
+        echo ""
+        echo "[*] A newer release is available: v$latest (you are on v$LFA_VERSION)."
+        echo "    Update with: git -C \"$LFA_DIR\" pull --ff-only"
+    fi
+    return 0
+}
+
+# A single file to attach to a bug report instead of "here is my terminal
+# scrollback" (#50). Secrets are stripped; everything else is the state that
+# actually matters when a desktop does not start.
+lfa_diagnostics() {
+    local out stage inst conf f
+    out="$HOME/lfa-diagnostics-$(date +%Y%m%d-%H%M%S).tar.gz"
+    stage="$(mktemp -d "$PREFIX/tmp/lfa-diag.XXXXXX")" || {
+        echo "Could not create a temporary directory." >&2
+        return 1
+    }
+    mkdir -p "$stage/logs" "$stage/launchers" "$stage/configs"
+
+    {
+        echo "Linux for Android diagnostics"
+        echo "generated:   $(date -Is)"
+        echo "version:     $LFA_VERSION"
+        echo "device:      $(getprop ro.product.model 2>/dev/null || echo unknown)"
+        echo "sdk:         $(getprop ro.build.version.sdk 2>/dev/null || echo unknown)"
+        echo "arch:        $(uname -m)"
+        echo "kernel:      $(uname -r)"
+        echo "termux:      ${TERMUX_VERSION:-unknown}"
+        echo "prefix:      $PREFIX"
+        echo "report tail: $(tail -c 200 "$HOME/.config/linux-for-android/debug.log" 2>/dev/null | tr '\n' ' ')"
+        echo ""
+        echo "--- free space ---"
+        df -Pk "$PREFIX" 2>/dev/null || echo unavailable
+        echo ""
+        echo "--- memory ---"
+        free -m 2>/dev/null | head -3 || echo unavailable
+        echo ""
+        echo "--- installed distributions ---"
+        pd_instances 2>/dev/null || echo none
+        echo ""
+        echo "--- running display processes ---"
+        pgrep -af 'termux-x11|Xvnc|gnome-shell|xfce4-session|mate-session|lxsession' 2>/dev/null || echo none
+        echo ""
+        echo "--- display sockets ---"
+        ls -l "$PREFIX/tmp/.X11-unix" 2>/dev/null || echo none
+    } > "$stage/report.txt" 2>&1
+
+    # Manager config, with anything secret removed before it is written.
+    while IFS= read -r inst; do
+        [ -n "$inst" ] || continue
+        conf="$(pd_conf "$inst" 2>/dev/null)"
+        if [ -f "$conf" ]; then
+            sed -E 's/^([A-Z_]*(PASS|PASSWD|SECRET|TOKEN|KEY)[A-Z_]*)="?.*"?$/\1="REDACTED"/' \
+                "$conf" > "$stage/configs/$inst.conf" 2>/dev/null || true
+        fi
+    done < <(pd_instances 2>/dev/null)
+
+    for f in start-linux stop-linux terminal-linux lfa-lib.sh; do
+        [ -f "$PREFIX/bin/$f" ] && cp "$PREFIX/bin/$f" "$stage/launchers/" 2>/dev/null || true
+    done
+
+    for f in "$HOME"/start-linux-session.log "$HOME"/.vnc/*.log "$PREFIX"/tmp/lfa-*.log; do
+        [ -f "$f" ] && cp "$f" "$stage/logs/" 2>/dev/null || true
+    done
+
+    if tar -czf "$out" -C "$stage" . 2>/dev/null; then
+        rm -rf "$stage" 2>/dev/null || true
+        chmod 600 "$out" 2>/dev/null || true
+        echo "Diagnostics written to: $out"
+        echo "Passwords and tokens are already removed; attach this file to a bug report."
+        return 0
+    fi
+    rm -rf "$stage" 2>/dev/null || true
+    echo "Could not create $out" >&2
+    return 1
+}
+
+lfa_run_cli() {
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            -h|--help)    lfa_usage; exit 0 ;;
+            -V|--version) echo "Linux for Android Manager $LFA_VERSION"; exit 0 ;;
+            --debug)
+                LFA_KEEP_SETUP_SCRIPT=1
+                export LFA_KEEP_SETUP_SCRIPT
+                lfa_enable_debug_log
+                shift ;;
+            --list)
+                detect_environment
+                local _n
+                _n="$(pd_instances)"
+                if [ -z "$_n" ]; then
+                    echo "No distributions installed."
+                else
+                    echo "Installed distributions:"
+                    echo "$_n" | sed 's/^/  - /'
+                fi
+                exit 0 ;;
+            --doctor)
+                detect_environment
+                LFA_NONINTERACTIVE=1
+                repair_linux
+                exit $? ;;
+            --diagnostics)
+                detect_environment
+                lfa_diagnostics
+                exit $? ;;
+            --yes|-y)
+                detect_environment
+                LFA_NONINTERACTIVE=1
+                setup_quick
+                exit 0 ;;
+            *)
+                echo "Unknown option: $1" >&2
+                lfa_usage >&2
+                exit 2 ;;
+        esac
+    done
+}
+
 setup_entry() {
     detect_environment
+    lfa_check_update
     if [ "$UI_TTY" = "1" ]; then
         UI_NOTE="$ARCH · Android SDK ${ANDROID_SDK:-0} · legacy=${IS_LEGACY:-0}"
     else
@@ -1135,7 +1444,7 @@ pd_instance_exists() {
 
 select_installed_instance() {
     INSTANCE_NAME=""
-    DISTROS=($(pd_instances))
+    mapfile -t DISTROS < <(pd_instances)
     if [ ${#DISTROS[@]} -eq 0 ]; then
         echo "No distributions installed."
         ui_pause
@@ -1156,6 +1465,7 @@ select_installed_instance() {
     if [ -n "$INSTANCE_NAME" ]; then
         CONF_FILE="$(pd_conf "$INSTANCE_NAME")"
         if [ -f "$CONF_FILE" ]; then
+            # shellcheck source=/dev/null
             source "$CONF_FILE"
         fi
     fi
@@ -1172,10 +1482,10 @@ system_dashboard() {
     free -m || echo "Memory stats unavailable."
     echo "-----------------------------------------"
     echo "Termux Storage Usage (Total Size):"
-    du -sh $PREFIX 2>/dev/null | awk '{print $1}'
+    du -sh "$PREFIX" 2>/dev/null | awk '{print $1}' || true
     echo "-----------------------------------------"
     echo "Available Phone Storage:"
-    df -h /data 2>/dev/null | awk 'NR==2 {print $4}'
+    df -h /data 2>/dev/null | awk 'NR==2 {print $4}' || echo "unavailable"
     echo "========================================="
     ui_pause
     show_menu
@@ -1278,7 +1588,8 @@ REPAIR
 
 # Install the shim host-side (no proot needed) and run the repair script.
 run_guest_repair() {
-    local ROOTFS="$(pd_rootfs "$INSTANCE_NAME")"
+    local ROOTFS
+    ROOTFS="$(pd_rootfs "$INSTANCE_NAME")"
 
     if [ ! -d "$ROOTFS/var/lib/dpkg" ]; then
         echo "[*] $INSTANCE_NAME is not dpkg-based (Alpine/Fedora/...); nothing to repair."
@@ -1292,6 +1603,7 @@ run_guest_repair() {
     fi
 
     write_guest_repair_script
+    # shellcheck disable=SC2046  # flag list, not one argument
     proot-distro login $(pd_login_flags) "$INSTANCE_NAME" --shared-tmp -- bash /tmp/lfa-repair.sh
 }
 
@@ -1313,6 +1625,9 @@ repair_linux() {
 
 # Guest-side migration tweaks for an already-installed distro.
 write_guest_upgrade_script() {
+    if [ -f "$LFA_DIR/lib/uid0-build.sh" ]; then
+        cp "$LFA_DIR/lib/uid0-build.sh" "$PREFIX/tmp/lfa-uid0-build.sh"
+    fi
     cat > "$PREFIX/tmp/lfa-upgrade.sh" << 'UPGRADE'
 #!/bin/bash
 # Staged by install_linux.sh. Applies fixes that older installs miss.
@@ -1325,16 +1640,13 @@ if [ -f /etc/apt/sources.list ] && grep -q 'deb.debian.org/debian-security bulls
 fi
 
 # 2. uid0 emulation library (only when missing; needs a transient gcc).
-if [ -d /var/lib/dpkg ] && [ ! -f /usr/local/lib/libuid0.so ] && [ -f /tmp/uid0.c ]; then
+#    The build itself lives in lib/uid0-build.sh, shared with the installer.
+if [ -d /var/lib/dpkg ] && [ ! -s /usr/local/lib/libuid0.so ]; then
     echo " -> Rebuilding uid0 emulation library (one-time)..."
     apt-get update -qq >/dev/null 2>&1 || true
-    apt-get install -y gcc >/dev/null 2>&1 || true
-    if command -v gcc >/dev/null 2>&1; then
-        gcc -shared -nostdlib -O2 -o /usr/local/lib/libuid0.so /tmp/uid0.c             && chmod 644 /usr/local/lib/libuid0.so             && echo "    uid0 library rebuilt."
-    else
-        echo "    [!] gcc unavailable; sudo stays ritual-only."
+    if [ -f /tmp/lfa-uid0-build.sh ]; then
+        sh /tmp/lfa-uid0-build.sh
     fi
-    apt-get purge -y gcc >/dev/null 2>&1 || true
     apt-get autoremove -y >/dev/null 2>&1 || true
 fi
 rm -f /tmp/uid0.c
@@ -1355,8 +1667,10 @@ upgrade_existing() {
     select_installed_instance
     if [ -z "$INSTANCE_NAME" ]; then return; fi
 
-    local ROOTFS="$(pd_rootfs "$INSTANCE_NAME")"
-    local CONF="$ROOTFS/etc/termux-linux-manager.conf"
+    local ROOTFS
+    ROOTFS="$(pd_rootfs "$INSTANCE_NAME")"
+    local CONF
+    CONF="$ROOTFS/etc/termux-linux-manager.conf"
     local LEGACY_CONF="$PREFIX/var/lib/proot-distro/installed-rootfs/$INSTANCE_NAME/etc/termux-linux-manager.conf"
 
     # proot-distro v4 uses containers/<name>/rootfs; older versions of this
@@ -1373,6 +1687,7 @@ upgrade_existing() {
     HOSTNAME="localhost"; TIMEZONE="UTC"; NEED_VIRGL="1"; COLOR_MODE="light"
     if [ -f "$CONF" ]; then
         # shellcheck disable=SC1090
+        # shellcheck source=/dev/null
         source "$CONF" 2>/dev/null || true
     fi
     LINUX_USER="${USER_NAME:-user}"
@@ -1406,6 +1721,7 @@ upgrade_existing() {
             sh "$LFA_DIR/lib/real-feel.sh" || true
         # Name proot-mapped Android GIDs inside the guest so `groups` stops
         # warning "cannot find name for group ID N" on every login.
+        # shellcheck disable=SC2046  # flag list, not one argument
         proot-distro login $(pd_login_flags) "$INSTANCE_NAME" -- sh -c '
             gids="$(awk "/^Groups:/{for(i=2;i<=NF;i++) print \$i}" /proc/self/status 2>/dev/null)"
             for u in root "$1"; do gids="$gids $(id -G "$u" 2>/dev/null)"; done
@@ -1469,6 +1785,39 @@ EOF
     write_launchers
     echo "[*] Launchers regenerated (start-linux / terminal-linux / stop-linux)."
 
+    # 5b. A release can add packages an older install never had (dconf-cli
+    # for GNOME, glycin loaders, ...). Report them with the exact command
+    # instead of silently leaving a half-migrated distro.
+    local _missing=""
+    case "$DE" in
+        xfce4) [ -x "$ROOTFS/usr/bin/xfce4-session" ] || _missing="$_missing xfce4-session" ;;
+        lxde)  [ -x "$ROOTFS/usr/bin/startlxde" ] || _missing="$_missing lxde" ;;
+        mate)  [ -x "$ROOTFS/usr/bin/mate-session" ] || _missing="$_missing mate-session" ;;
+        gnome)
+            [ -x "$ROOTFS/usr/bin/gnome-shell" ] || _missing="$_missing gnome-shell"
+            [ -x "$ROOTFS/usr/bin/dconf" ] || _missing="$_missing dconf-cli"
+            ;;
+    esac
+    if [ "${SERVER:-none}" = "vnc" ]; then
+        if [ ! -x "$ROOTFS/usr/bin/vncserver" ] && [ ! -x "$ROOTFS/usr/bin/Xvnc" ]; then
+            _missing="$_missing tigervnc"
+        fi
+    fi
+    if [ -n "$_missing" ]; then
+        echo ""
+        echo "[!] This distro is missing components newer releases need:$_missing"
+        case "$DISTRO" in
+            ubuntu|debian|kali) echo "    Install with: proot-distro login $INSTANCE_NAME -- apt-get install -y$_missing" ;;
+            fedora)             echo "    Install with: proot-distro login $INSTANCE_NAME -- dnf install -y$_missing" ;;
+            opensuse)           echo "    Install with: proot-distro login $INSTANCE_NAME -- zypper install -y$_missing" ;;
+            archlinux)          echo "    Install with: proot-distro login $INSTANCE_NAME -- pacman -S --noconfirm$_missing" ;;
+            void)               echo "    Install with: proot-distro login $INSTANCE_NAME -- xbps-install -y$_missing" ;;
+            alpine)             echo "    Install with: proot-distro login $INSTANCE_NAME -- apk add$_missing" ;;
+            *)                  echo "    Install them with your package manager inside $INSTANCE_NAME." ;;
+        esac
+        echo "    Or re-run the installer for a clean install."
+    fi
+
     # 6. Refresh the legacy bullseye plugin, if this device uses it.
     if [ -f "$PREFIX/etc/proot-distro/bullseye.sh" ] && [ -f "$LFA_DIR/plugins/bullseye.sh" ]; then
         cp "$LFA_DIR/plugins/bullseye.sh" "$PREFIX/etc/proot-distro/bullseye.sh"
@@ -1480,6 +1829,7 @@ EOF
     if [ -d "$ROOTFS/var/lib/dpkg" ] && [ -f "$LFA_DIR/lib/uid0.c" ]; then
         cp "$LFA_DIR/lib/uid0.c" "$PREFIX/tmp/uid0.c"
         write_guest_upgrade_script
+        # shellcheck disable=SC2046  # flag list, not one argument
         proot-distro login $(pd_login_flags) "$INSTANCE_NAME" --shared-tmp -- bash /tmp/lfa-upgrade.sh || true
     fi
 
@@ -1498,6 +1848,7 @@ update_linux() {
     # Heal the guest first: stale statoverride rows and half-configured
     # packages make apt fail, and are repaired automatically here.
     run_guest_repair || true
+    # shellcheck disable=SC2046  # flag list, not one argument
     proot-distro login $(pd_login_flags) "$INSTANCE_NAME" --user root -- bash -c "export DEBIAN_FRONTEND=noninteractive; $UPDATE_CMD"
     echo "========================================="
     ui_ok "Update complete!"
@@ -1639,6 +1990,7 @@ optimize_browser() {
 
     if [ "$OPT_CHOICE" == "1" ]; then
         echo "[*] Optimizing Chromium for Hardware Accelerated Video Decoding..."
+        # shellcheck disable=SC2046  # flag list, not one argument
         proot-distro login $(pd_login_flags) "$INSTANCE_NAME" -- bash -c '
 mkdir -p /etc
 echo "--ignore-gpu-blocklist --enable-gpu-rasterization --enable-zero-copy --use-gl=egl" > /etc/lfa-chromium-flags
@@ -1662,6 +2014,7 @@ fi
         echo "========================================="
     elif [ "$OPT_CHOICE" == "2" ]; then
         echo "[*] Removing Hardware Acceleration Overrides..."
+        # shellcheck disable=SC2046  # flag list, not one argument
         proot-distro login $(pd_login_flags) "$INSTANCE_NAME" -- bash -c '
 rm -f /etc/lfa-chromium-flags
 '
@@ -1734,27 +2087,61 @@ lfa_conf() {
 # Only a real X server counts: this script line itself mentions Xvnc, so a
 # `pgrep -f` match is not proof that anything is running.
 lfa_x1_server_pid() {
-    local pid lock="$PREFIX/tmp/.X1-lock" c
+    local pid lock="$PREFIX/tmp/.X1-lock" c a0
+    # Is this argv[0] one of the X servers we care about? Compare the basename:
+    # inside proot the binary is exec'd with an absolute path, and the launcher
+    # itself is a bash line that merely *mentions* Xvnc, so neither a bare
+    # `pgrep -f Xvnc` nor an anchored `^Xvnc` is correct.
+    lfa_is_x_server() {
+        a0="${1%% *}"
+        a0="${a0##*/}"
+        case "$a0" in
+            Xvnc|Xtigervnc|Xorg|X|termux-x11) return 0 ;;
+        esac
+        return 1
+    }
     if [ -f "$lock" ]; then
         pid=$(tr -dc '0-9' < "$lock" 2>/dev/null)
         if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
             c=$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null)
-            case "$c" in
-                Xvnc*|Xtigervnc*|Xorg*|X\ *|termux-x11*) echo "$pid"; return 0 ;;
-            esac
+            if lfa_is_x_server "$c"; then
+                case " $c " in *" :1 "*) echo "$pid"; return 0 ;; esac
+            fi
         fi
     fi
-    for pid in $(pgrep -f '^(Xvnc|Xtigervnc|Xorg|X|termux-x11) ' 2>/dev/null); do
-        c=$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null)
-        case "$c" in
-            *' :1 '*|*' :1') echo "$pid"; return 0 ;;
-        esac
+    # No usable lock (or it points at something else): scan /proc directly.
+    # pgrep -f is avoided on purpose - its pattern language differs between
+    # procps and busybox builds, and the match must be on argv[0].
+    for c in /proc/[0-9]*/cmdline; do
+        [ -r "$c" ] || continue
+        pid="${c#/proc/}"; pid="${pid%/cmdline}"
+        [ "$pid" = "$$" ] && continue
+        local _cmd
+        _cmd=$(tr '\0' ' ' < "$c" 2>/dev/null) || continue
+        [ -n "$_cmd" ] || continue
+        lfa_is_x_server "$_cmd" || continue
+        case " $_cmd " in *" :1 "*) echo "$pid"; return 0 ;; esac
     done
     return 1
 }
 lfa_clear_stale_x1() {
     lfa_x1_server_pid >/dev/null 2>&1 && return 0
     rm -f "$PREFIX/tmp/.X11-unix/X1" "$PREFIX/tmp/.X1-lock" 2>/dev/null || true
+}
+# A pidfile can outlive its process: after a reboot the recorded PID may
+# belong to something completely unrelated. Verify the command line before
+# signalling anything.
+lfa_pid_matches() {   # $1 = pid, rest = patterns that must appear in cmdline
+    local _pid="$1" _cmd _pat
+    shift
+    [ -n "$_pid" ] || return 1
+    kill -0 "$_pid" 2>/dev/null || return 1
+    _cmd="$(tr '\0' ' ' < "/proc/$_pid/cmdline" 2>/dev/null)" || return 1
+    [ -n "$_cmd" ] || return 1
+    for _pat in "$@"; do
+        case "$_cmd" in *"$_pat"*) return 0 ;; esac
+    done
+    return 1
 }
 EOF
     chmod +x "$PREFIX/bin/lfa-lib.sh"
@@ -1767,9 +2154,10 @@ else
     lfa_instances() { ls -1 "$PREFIX/var/lib/proot-distro/installed-rootfs" 2>/dev/null; }
     lfa_rootfs() { echo "$PREFIX/var/lib/proot-distro/installed-rootfs/$1"; }
     lfa_conf() { echo "$(lfa_rootfs "$1")/etc/termux-linux-manager.conf"; }
-    lfa_clear_stale_x1() { pgrep -f '^(Xvnc|Xtigervnc|Xorg|X|termux-x11) ' >/dev/null 2>&1 && return 0; rm -f "$PREFIX/tmp/.X11-unix/X1" "$PREFIX/tmp/.X1-lock" 2>/dev/null; }
+    lfa_clear_stale_x1() { local _p=999999; [ -f "$PREFIX/tmp/.X1-lock" ] && _p=$(tr -dc '0-9' < "$PREFIX/tmp/.X1-lock" 2>/dev/null); [ -n "$_p" ] && kill -0 "$_p" 2>/dev/null && return 0; rm -f "$PREFIX/tmp/.X11-unix/X1" "$PREFIX/tmp/.X1-lock" 2>/dev/null; }
+    lfa_pid_matches() { local _p="$1" _c; shift; [ -n "$_p" ] || return 1; kill -0 "$_p" 2>/dev/null || return 1; _c="$(tr '\0' ' ' < "/proc/$_p/cmdline" 2>/dev/null)" || return 1; for _pat in "$@"; do case "$_c" in *"$_pat"*) return 0 ;; esac; done; return 1; }
 fi
-DISTROS=($(lfa_instances))
+mapfile -t DISTROS < <(lfa_instances)
 if [ ${#DISTROS[@]} -eq 0 ]; then
     echo "No distributions installed. Please run install_linux.sh first."
     exit 1
@@ -1863,12 +2251,17 @@ if [ "$SERVER" == "x11" ]; then
     # An install that chose VNC never pulled the X11 packages. Switching the
     # distro to X11 later (re-install / menu 12) used to dead-end here.
     if ! command -v termux-x11 >/dev/null 2>&1; then
+        _x11log="$PREFIX/tmp/lfa-x11-install.log"
         echo "Termux:X11 is not installed yet - installing it now..."
-        { pkg install -y x11-repo && pkg install -y termux-x11-nightly; } >/dev/null 2>&1 || true
+        echo "  (log: $_x11log)"
+        { pkg install -y x11-repo && pkg install -y termux-x11-nightly; } \
+            >> "$_x11log" 2>&1 || true
     fi
     if ! command -v termux-x11 >/dev/null 2>&1; then
-        echo "ERROR: Termux:X11 backend requested but 'termux-x11' is not installed."
-        echo "Fix it with:  pkg install x11-repo && pkg install termux-x11-nightly"
+        echo "ERROR: Termux:X11 could not be installed."
+        echo "Read the log:  tail -n 20 \"$PREFIX/tmp/lfa-x11-install.log\""
+        echo "Common cause: the Termux mirror is mid-sync. Retry with:"
+        echo "  pkg update && pkg install x11-repo && pkg install termux-x11-nightly"
         echo "or switch this distro to VNC by re-running the installer."
         exit 1
     fi
@@ -1876,7 +2269,7 @@ if [ "$SERVER" == "x11" ]; then
     # Every distro shares $PREFIX/tmp. A dead D-Bus or X socket left by a
     # previous session makes the new desktop reuse a dead bus ("Unable to
     # contact settings server"). Clear this user's per-session state first.
-    rm -rf "$PREFIX/tmp/xdg-$X11_USER" 2>/dev/null || true
+    rm -rf "$PREFIX/tmp/xdg-$X11_USER-$DISTRO" "$PREFIX/tmp/xdg-$X11_USER" 2>/dev/null || true
     rm -f "$PREFIX"/tmp/dbus-* 2>/dev/null || true
     rm -rf "$(lfa_rootfs "$DISTRO")/home/$X11_USER/.dbus/session-bus" 2>/dev/null || true
     # /tmp is shared with the guest. Pre-create the ICE socket directory as
@@ -1888,22 +2281,27 @@ if [ "$SERVER" == "x11" ]; then
     # a dead socket. Drop them only when no real X server holds display :1.
     lfa_clear_stale_x1
     nohup termux-x11 :1 >/dev/null 2>&1 &
-    sleep 2
+    # Wait for the socket instead of guessing: slow devices need longer,
+    # fast ones should not be delayed.
+    for _i in $(seq 1 15); do
+        [ -S "$PREFIX/tmp/.X11-unix/X1" ] && break
+        sleep 1
+    done
     # XDG_RUNTIME_DIR is required by xfce4-session/dbus; without it the
     # session dies instantly and Termux:X11 shows only the root 'X' cursor.
     # Session output goes to ~/start-linux-session.log so failures are
     # visible instead of hidden.
     echo "Starting $DISTRO desktop as '$X11_USER' (session log: ~/start-linux-session.log)..."
     if [ "$DE" == "xfce4" ]; then
-        nohup proot-distro login $NO_SYSVIPC $DISTRO --user "$X11_USER" --shared-tmp -- bash -c "mkdir -p /tmp/.X11-unix; chmod 1777 /tmp/.X11-unix; export XDG_RUNTIME_DIR=/tmp/xdg-\$USER; mkdir -p "\$XDG_RUNTIME_DIR"; chmod 700 "\$XDG_RUNTIME_DIR"; export PULSE_SERVER=127.0.0.1; export DISPLAY=:1; $VIRGL_ENV if command -v dbus-run-session >/dev/null 2>&1; then dbus-run-session -- startxfce4 > \$HOME/start-linux-session.log 2>&1; elif command -v dbus-launch >/dev/null 2>&1; then dbus-launch --exit-with-session startxfce4 > \$HOME/start-linux-session.log 2>&1; else startxfce4 > \$HOME/start-linux-session.log 2>&1; fi" &
+        nohup proot-distro login $NO_SYSVIPC $DISTRO --user "$X11_USER" --shared-tmp -- bash -c "mkdir -p /tmp/.X11-unix; chmod 1777 /tmp/.X11-unix; export XDG_RUNTIME_DIR=/tmp/xdg-\$USER-$DISTRO; mkdir -p "\$XDG_RUNTIME_DIR"; chmod 700 "\$XDG_RUNTIME_DIR"; export LANG=\${LANG:-C.UTF-8}; export PULSE_SERVER=127.0.0.1; export DISPLAY=:1; $VIRGL_ENV if command -v dbus-run-session >/dev/null 2>&1; then dbus-run-session -- startxfce4 > \$HOME/start-linux-session.log 2>&1; elif command -v dbus-launch >/dev/null 2>&1; then dbus-launch --exit-with-session startxfce4 > \$HOME/start-linux-session.log 2>&1; else startxfce4 > \$HOME/start-linux-session.log 2>&1; fi" &
     elif [ "$DE" == "lxde" ]; then
-        nohup proot-distro login $NO_SYSVIPC $DISTRO --user "$X11_USER" --shared-tmp -- bash -c "mkdir -p /tmp/.X11-unix; chmod 1777 /tmp/.X11-unix; export XDG_RUNTIME_DIR=/tmp/xdg-\$USER; mkdir -p "\$XDG_RUNTIME_DIR"; chmod 700 "\$XDG_RUNTIME_DIR"; export PULSE_SERVER=127.0.0.1; export DISPLAY=:1; $VIRGL_ENV if command -v dbus-run-session >/dev/null 2>&1; then dbus-run-session -- startlxde > \$HOME/start-linux-session.log 2>&1; elif command -v dbus-launch >/dev/null 2>&1; then dbus-launch --exit-with-session startlxde > \$HOME/start-linux-session.log 2>&1; else startlxde > \$HOME/start-linux-session.log 2>&1; fi" &
+        nohup proot-distro login $NO_SYSVIPC $DISTRO --user "$X11_USER" --shared-tmp -- bash -c "mkdir -p /tmp/.X11-unix; chmod 1777 /tmp/.X11-unix; export XDG_RUNTIME_DIR=/tmp/xdg-\$USER-$DISTRO; mkdir -p "\$XDG_RUNTIME_DIR"; chmod 700 "\$XDG_RUNTIME_DIR"; export LANG=\${LANG:-C.UTF-8}; export PULSE_SERVER=127.0.0.1; export DISPLAY=:1; $VIRGL_ENV if command -v dbus-run-session >/dev/null 2>&1; then dbus-run-session -- startlxde > \$HOME/start-linux-session.log 2>&1; elif command -v dbus-launch >/dev/null 2>&1; then dbus-launch --exit-with-session startlxde > \$HOME/start-linux-session.log 2>&1; else startlxde > \$HOME/start-linux-session.log 2>&1; fi" &
     elif [ "$DE" == "mate" ]; then
-        nohup proot-distro login $NO_SYSVIPC $DISTRO --user "$X11_USER" --shared-tmp -- bash -c "mkdir -p /tmp/.X11-unix; chmod 1777 /tmp/.X11-unix; export XDG_RUNTIME_DIR=/tmp/xdg-\$USER; mkdir -p "\$XDG_RUNTIME_DIR"; chmod 700 "\$XDG_RUNTIME_DIR"; export PULSE_SERVER=127.0.0.1; export DISPLAY=:1; $VIRGL_ENV if command -v dbus-run-session >/dev/null 2>&1; then dbus-run-session -- mate-session > \$HOME/start-linux-session.log 2>&1; elif command -v dbus-launch >/dev/null 2>&1; then dbus-launch --exit-with-session mate-session > \$HOME/start-linux-session.log 2>&1; else mate-session > \$HOME/start-linux-session.log 2>&1; fi" &
+        nohup proot-distro login $NO_SYSVIPC $DISTRO --user "$X11_USER" --shared-tmp -- bash -c "mkdir -p /tmp/.X11-unix; chmod 1777 /tmp/.X11-unix; export XDG_RUNTIME_DIR=/tmp/xdg-\$USER-$DISTRO; mkdir -p "\$XDG_RUNTIME_DIR"; chmod 700 "\$XDG_RUNTIME_DIR"; export LANG=\${LANG:-C.UTF-8}; export PULSE_SERVER=127.0.0.1; export DISPLAY=:1; $VIRGL_ENV if command -v dbus-run-session >/dev/null 2>&1; then dbus-run-session -- mate-session > \$HOME/start-linux-session.log 2>&1; elif command -v dbus-launch >/dev/null 2>&1; then dbus-launch --exit-with-session mate-session > \$HOME/start-linux-session.log 2>&1; else mate-session > \$HOME/start-linux-session.log 2>&1; fi" &
     elif [ "$DE" == "gnome" ]; then
         # Experimental: gnome-session is skipped (no systemd/logind in proot);
         # start-gnome-session runs lfa-set-wallpaper then `gnome-shell --x11`.
-        nohup proot-distro login $NO_SYSVIPC $DISTRO --user "$X11_USER" --shared-tmp -- bash -c "mkdir -p /tmp/.X11-unix; chmod 1777 /tmp/.X11-unix; export XDG_RUNTIME_DIR=/tmp/xdg-\$USER; mkdir -p "\$XDG_RUNTIME_DIR"; chmod 700 "\$XDG_RUNTIME_DIR"; export PULSE_SERVER=127.0.0.1; export DISPLAY=:1; $VIRGL_ENV if command -v dbus-run-session >/dev/null 2>&1; then dbus-run-session -- /usr/local/bin/start-gnome-session > \$HOME/start-linux-session.log 2>&1; else /usr/local/bin/start-gnome-session > \$HOME/start-linux-session.log 2>&1; fi" &
+        nohup proot-distro login $NO_SYSVIPC $DISTRO --user "$X11_USER" --shared-tmp -- bash -c "mkdir -p /tmp/.X11-unix; chmod 1777 /tmp/.X11-unix; export XDG_RUNTIME_DIR=/tmp/xdg-\$USER-$DISTRO; mkdir -p "\$XDG_RUNTIME_DIR"; chmod 700 "\$XDG_RUNTIME_DIR"; export PULSE_SERVER=127.0.0.1; export DISPLAY=:1; $VIRGL_ENV if command -v dbus-run-session >/dev/null 2>&1; then dbus-run-session -- /usr/local/bin/start-gnome-session > \$HOME/start-linux-session.log 2>&1; else /usr/local/bin/start-gnome-session > \$HOME/start-linux-session.log 2>&1; fi" &
     fi
     echo "If the screen stays on the X cursor, the desktop failed to start:"
     echo "  cat ~/start-linux-session.log   (inside the distro) for the reason."
@@ -1912,7 +2310,7 @@ elif [ "$SERVER" == "vnc" ]; then
     if [ -z "$RESOLUTION" ]; then RESOLUTION="1280x720"; fi
     VNC_PIDFILE="$PREFIX/tmp/lfa-vnc-$DISTRO.pid"
     VNC_LOG="$PREFIX/tmp/lfa-vnc-$DISTRO.log"
-    if [ -f "$VNC_PIDFILE" ] && kill -0 "$(cat "$VNC_PIDFILE")" 2>/dev/null; then
+    if [ -f "$VNC_PIDFILE" ] && lfa_pid_matches "$(cat "$VNC_PIDFILE" 2>/dev/null)" "proot-distro" "proot"; then
         echo "VNC server is already running on port 5901."
     else
         lfa_clear_stale_x1
@@ -1925,12 +2323,23 @@ elif [ "$SERVER" == "vnc" ]; then
         [ "$DE" = "gnome" ] && VNC_SES="/usr/local/bin/start-gnome-session"
         nohup proot-distro login $NO_SYSVIPC $DISTRO --user "$X11_USER" --shared-tmp -- bash -c "export PULSE_SERVER=127.0.0.1; mkdir -p \$HOME/.vnc \$HOME/.config/tigervnc; printf 'geometry=%s\n' '$RESOLUTION' > \$HOME/.vnc/config; printf 'geometry=%s\n' '$RESOLUTION' > \$HOME/.config/tigervnc/config; if command -v vncserver >/dev/null 2>&1; then $VIRGL_ENV vncserver :1; rc=\$?; [ \$rc -eq 0 ] || exit \$rc; else $VIRGL_ENV Xvnc :1 -geometry $RESOLUTION -depth 24 -rfbauth \$HOME/.config/tigervnc/passwd -SecurityTypes VncAuth > \$HOME/.vnc-xvnc.log 2>&1 & sleep 2; DISPLAY=:1 dbus-run-session -- $VNC_SES > \$HOME/start-linux-session.log 2>&1; fi; while :; do sleep 3600; done" > "$VNC_LOG" 2>&1 &
         echo $! > "$VNC_PIDFILE"
+        printf 'Waiting for VNC on port 5901'
+        for _i in $(seq 1 20); do
+            if (exec 3<>/dev/tcp/127.0.0.1/5901) 2>/dev/null; then
+                echo " - ready."
+                break
+            fi
+            printf '.'
+            sleep 1
+        done
+        (exec 3<>/dev/tcp/127.0.0.1/5901) 2>/dev/null || \
+            echo " (not listening yet - check $VNC_LOG)"
         echo "VNC server started on port 5901 (log: $VNC_LOG)."
     fi
 fi
 EOF
     chmod +x $PREFIX/bin/start-linux
-    sed -i "s/__LUSER__/$LINUX_USER/g" $PREFIX/bin/start-linux
+    sed -i "s/__LUSER__/$LINUX_USER/g" "$PREFIX/bin/start-linux"
     
     cat << 'EOF' > $PREFIX/bin/stop-linux
 #!/bin/bash
@@ -1940,9 +2349,9 @@ else
     lfa_instances() { ls -1 "$PREFIX/var/lib/proot-distro/installed-rootfs" 2>/dev/null; }
     lfa_rootfs() { echo "$PREFIX/var/lib/proot-distro/installed-rootfs/$1"; }
     lfa_conf() { echo "$(lfa_rootfs "$1")/etc/termux-linux-manager.conf"; }
-    lfa_clear_stale_x1() { pgrep -f '^(Xvnc|Xtigervnc|Xorg|X|termux-x11) ' >/dev/null 2>&1 && return 0; rm -f "$PREFIX/tmp/.X11-unix/X1" "$PREFIX/tmp/.X1-lock" 2>/dev/null; }
+    lfa_clear_stale_x1() { local _p=999999; [ -f "$PREFIX/tmp/.X1-lock" ] && _p=$(tr -dc '0-9' < "$PREFIX/tmp/.X1-lock" 2>/dev/null); [ -n "$_p" ] && kill -0 "$_p" 2>/dev/null && return 0; rm -f "$PREFIX/tmp/.X11-unix/X1" "$PREFIX/tmp/.X1-lock" 2>/dev/null; }
 fi
-DISTROS=($(lfa_instances))
+mapfile -t DISTROS < <(lfa_instances)
 if [ ${#DISTROS[@]} -eq 0 ]; then
     echo "No distributions installed."
     exit 1
@@ -1991,13 +2400,23 @@ fi
 
 if [ "$SERVER" == "x11" ]; then
     echo "Stopping Termux:X11..."
-    pkill -f "^termux-x11" 2>/dev/null || true
+    # Match the display we own, not every Termux:X11 the user may have
+    # started (this script manages display :1 only).
+    for _p in $(pgrep -f '^termux-x11 .* :1( |$)' 2>/dev/null); do
+        kill "$_p" 2>/dev/null || true
+    done
 elif [ "$SERVER" == "vnc" ]; then
     echo "Stopping VNC Server..."
     VNC_PIDFILE="$PREFIX/tmp/lfa-vnc-$DISTRO.pid"
     if [ -f "$VNC_PIDFILE" ]; then
         VNC_PID="$(cat "$VNC_PIDFILE" 2>/dev/null || true)"
-        [ -n "$VNC_PID" ] && kill "$VNC_PID" 2>/dev/null || true
+        if [ -n "$VNC_PID" ]; then
+            if lfa_pid_matches "$VNC_PID" "proot-distro" "proot" "Xvnc"; then
+                kill "$VNC_PID" 2>/dev/null || true
+            else
+                echo "  (stale pidfile: PID $VNC_PID is not our VNC session, ignored)"
+            fi
+        fi
         rm -f "$VNC_PIDFILE"
     fi
     proot-distro login $NO_SYSVIPC $DISTRO --user "$VNC_USER" --shared-tmp -- bash -c "vncserver -kill :1" 2>/dev/null || true
@@ -2010,7 +2429,7 @@ sleep 2
 lfa_clear_stale_x1
 EOF
     chmod +x $PREFIX/bin/stop-linux
-    sed -i "s/__LUSER__/$LINUX_USER/g" $PREFIX/bin/stop-linux
+    sed -i "s/__LUSER__/$LINUX_USER/g" "$PREFIX/bin/stop-linux"
 
     cat << 'EOF' > $PREFIX/bin/terminal-linux
 #!/bin/bash
@@ -2022,9 +2441,9 @@ else
     lfa_instances() { ls -1 "$PREFIX/var/lib/proot-distro/installed-rootfs" 2>/dev/null; }
     lfa_rootfs() { echo "$PREFIX/var/lib/proot-distro/installed-rootfs/$1"; }
     lfa_conf() { echo "$(lfa_rootfs "$1")/etc/termux-linux-manager.conf"; }
-    lfa_clear_stale_x1() { pgrep -f '^(Xvnc|Xtigervnc|Xorg|X|termux-x11) ' >/dev/null 2>&1 && return 0; rm -f "$PREFIX/tmp/.X11-unix/X1" "$PREFIX/tmp/.X1-lock" 2>/dev/null; }
+    lfa_clear_stale_x1() { local _p=999999; [ -f "$PREFIX/tmp/.X1-lock" ] && _p=$(tr -dc '0-9' < "$PREFIX/tmp/.X1-lock" 2>/dev/null); [ -n "$_p" ] && kill -0 "$_p" 2>/dev/null && return 0; rm -f "$PREFIX/tmp/.X11-unix/X1" "$PREFIX/tmp/.X1-lock" 2>/dev/null; }
 fi
-DISTROS=($(lfa_instances))
+mapfile -t DISTROS < <(lfa_instances)
 if [ ${#DISTROS[@]} -eq 0 ]; then
     echo "No distributions installed. Please run install_linux.sh first."
     exit 1
@@ -2070,7 +2489,7 @@ else
 fi
 EOF
     chmod +x $PREFIX/bin/terminal-linux
-    sed -i "s/__LUSER__/$LINUX_USER/g" $PREFIX/bin/terminal-linux
+    sed -i "s/__LUSER__/$LINUX_USER/g" "$PREFIX/bin/terminal-linux"
     cat << 'EOF' > ~/.shortcuts/Terminal-Linux
 #!/bin/bash
 terminal-linux
@@ -2083,7 +2502,8 @@ uninstall_linux() {
     select_installed_instance
     if [ -z "$INSTANCE_NAME" ]; then return; fi
 
-    local ROOTFS="$(pd_rootfs "$INSTANCE_NAME")"
+    local ROOTFS
+    ROOTFS="$(pd_rootfs "$INSTANCE_NAME")"
     local SIZE=""
     [ -d "$ROOTFS" ] && SIZE="$(du -sh "$ROOTFS" 2>/dev/null | awk '{print $1}')"
     local STATE="ok"
@@ -2135,12 +2555,31 @@ uninstall_linux() {
         echo "Backups, if any, were left in $HOME."
     fi
 
+    # Termux-side leftovers (#49): pidfiles, logs, runtime dirs and the
+    # home-screen shortcut. Only remove what belongs to this instance, and
+    # only when no other distro is installed.
+    local _leftovers
+    for _leftovers in \
+        "$PREFIX/tmp/lfa-vnc-$INSTANCE_NAME.pid" \
+        "$PREFIX/tmp/lfa-vnc-$INSTANCE_NAME.log" \
+        "$PREFIX/tmp/gui_setup_"*.sh; do
+        [ -e "$_leftovers" ] && rm -f "$_leftovers" 2>/dev/null || true
+    done
+    # shellcheck disable=SC2115  # glob is prefixed, cannot escape $PREFIX/tmp
+    rm -rf "$PREFIX/tmp/xdg-"*"-$INSTANCE_NAME" 2>/dev/null || true
+    if [ -z "$(pd_instances)" ]; then
+        rm -f "$HOME/.shortcuts/Start-Linux" 2>/dev/null || true
+        rm -f "$HOME/.termux/boot/start-linux-services.sh" 2>/dev/null || true
+        echo "Removed the home-screen shortcut and boot script (no distros left)."
+    fi
+
     ui_pause
     show_menu
 }
 
 install_linux() {
-    local INSTALL_START="$(date +%s)"
+    local INSTALL_START
+    INSTALL_START="$(date +%s)"
     echo ""
     echo "========================================="
     echo "   Linux Installation Wizard             "
@@ -2208,27 +2647,9 @@ install_linux() {
     RESOLUTION="1280x720"
     COLOR_MODE="light"
 
-    local -a _deitems=(
-        "1|XFCE4|recommended, light GUI"
-        "2|LXDE|very light GUI"
-        "3|MATE|classic GNOME, stable"
-        "4|None (CLI only)|terminal only"
-    )
-    gnome_available && _deitems+=("5|GNOME (experimental)|BETA - may crash; read the warning")
-    if ! ui_select "Choose Desktop Environment" "1" "${_deitems[@]}"; then
+    if ! ask_desktop_environment "XFCE4" "1"; then
         show_menu
         return
-    fi
-    case "$UI_SELECTED" in
-        1) DE="xfce4" ;;
-        2) DE="lxde" ;;
-        3) DE="mate" ;;
-        4) DE="none" ;;
-        5) DE="gnome" ;;
-    esac
-    if [ "$DE" = "gnome" ] && ! gnome_experimental_warning; then
-        echo "[*] Falling back to XFCE4."
-        DE="xfce4"
     fi
     fi
     # GNOME is experimental and only packaged for a few distros on Android 8+.
@@ -2255,19 +2676,9 @@ install_linux() {
         else
             local _srvdef=1
             [ "$DE" = "gnome" ] && _srvdef=2
-            if ! ui_select "Choose Display Server" "$_srvdef" \
-                "1|Termux:X11|hardware acceleration, faster" \
-                "2|VNC|software rendering, slower"; then
+            if ! ask_display_server "$_srvdef"; then
                 show_menu
                 return
-            fi
-            case "$UI_SELECTED" in
-                1) SERVER="x11" ;;
-                2) SERVER="vnc" ;;
-            esac
-            if [ "$DE" = "gnome" ] && [ "$SERVER" = "x11" ]; then
-                echo "[!] GNOME over Termux:X11 is known to crash the app often."
-                echo "    VNC is more stable for GNOME - you can still continue."
             fi
         fi
         
@@ -2371,7 +2782,7 @@ install_linux() {
     deploy_legacy_plugins
     # Stale pre-v4 pkg builds lack --override-alias, so custom instance
     # names silently install under the wrong name. Upgrade those to v4.2.0.
-    if [ "$IS_LEGACY" = "1" ] && ! proot-distro install --help 2>&1 | grep -q "override-alias"; then
+    if [ "$IS_LEGACY" = "1" ] && ! lfa_match "$(proot-distro install --help 2>&1)" 'override-alias'; then
         echo "[!] proot-distro predates --override-alias; upgrading to v4.2.0..."
         install_proot_distro_from_source || {
             echo "FATAL: proot-distro upgrade failed. Cannot continue."
@@ -2382,21 +2793,31 @@ install_linux() {
         deploy_legacy_plugins
     fi
 
+    # Refuse to start when the device cannot hold the result (issue #14).
+    if ! lfa_check_disk_space; then
+        ui_pause
+        show_menu
+        return
+    fi
+
     echo "[*] Installing $DISTRO (as $INSTANCE_NAME)..."
     verify_proot_distro_plugin "$PD_ALIAS" || {
         ui_pause
         show_menu
         return
     }
-    if proot-distro install --help 2>&1 | grep -iqE "(IMAGE:TAG|Docker image|registry)"; then
+    if lfa_match "$(proot-distro install --help 2>&1)" '(IMAGE:TAG|Docker image|registry)'; then
+        # Rolling releases only publish a moving tag, so the image reference
+        # is recorded in the manager config and can be overridden per install
+        # (LFA_IMAGE_* env vars) to reproduce a known-good build.
         case "$DISTRO" in
-            ubuntu) IMAGE="ubuntu:24.04" ;;
-            debian) IMAGE="debian:stable" ;;
-            kali) IMAGE="kalilinux/kali-rolling:latest" ;;
-            fedora) IMAGE="fedora:latest" ;;
-            opensuse) IMAGE="opensuse/tumbleweed:latest" ;;
-            void) IMAGE="ghcr.io/void-linux/void-musl:latest" ;;
-            alpine) IMAGE="alpine:latest" ;;
+            ubuntu) IMAGE="${LFA_IMAGE_UBUNTU:-ubuntu:24.04}" ;;
+            debian) IMAGE="${LFA_IMAGE_DEBIAN:-debian:stable}" ;;
+            kali) IMAGE="${LFA_IMAGE_KALI:-kalilinux/kali-rolling:latest}" ;;
+            fedora) IMAGE="${LFA_IMAGE_FEDORA:-fedora:latest}" ;;
+            opensuse) IMAGE="${LFA_IMAGE_OPENSUSE:-opensuse/tumbleweed:latest}" ;;
+            void) IMAGE="${LFA_IMAGE_VOID:-ghcr.io/void-linux/void-musl:latest}" ;;
+            alpine) IMAGE="${LFA_IMAGE_ALPINE:-alpine:latest}" ;;
             archlinux)
                 CPU_ARCH=$(uname -m)
                 if [[ "$CPU_ARCH" == *"aarch64"* || "$CPU_ARCH" == *"arm64"* || "$CPU_ARCH" == *"armv8"* ]]; then
@@ -2415,6 +2836,10 @@ install_linux() {
     ROOTFS="$(pd_rootfs "$INSTANCE_NAME")"
     mkdir -p "$PREFIX/tmp"
     SETUP_SCRIPT="$PREFIX/tmp/gui_setup_$$.sh"
+    # Created 0600 *before* the first write: it will hold the install
+    # passwords, and $PREFIX/tmp is shared with every guest as /tmp.
+    ( umask 077; : > "$SETUP_SCRIPT" ) 2>/dev/null || true
+    lfa_track_tmp "$SETUP_SCRIPT"
     if [ -f "$LFA_DIR/lib/real-feel.sh" ]; then
         cp "$LFA_DIR/lib/real-feel.sh" "$PREFIX/tmp/lfa-real-feel.sh"
     fi
@@ -2607,7 +3032,11 @@ install_linux() {
     if ! echo "$LINUX_USER" | grep -Eq '^[a-z_][a-z0-9_-]*$'; then LINUX_USER="user"; fi
     UPASS_B64="${SETUP_USER_B64:-cm9vdA==}"
     RPASS_B64="${SETUP_ROOT_B64:-cm9vdA==}"
-    SPASS_B64="$UPASS_B64"
+    # Salted hash for the sudo ritual (never the password itself).
+    SPASS_SALT="$(od -An -N8 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n')"
+    [ -n "$SPASS_SALT" ] || SPASS_SALT="lfa-$(date +%s)"
+    SPASS_HASH="$(printf '%s' "${SPASS_SALT}$(printf '%s' "$UPASS_B64" | base64 -d 2>/dev/null)" | sha256sum 2>/dev/null | cut -d' ' -f1)"
+    [ -n "$SPASS_HASH" ] || SPASS_HASH=""
     mkdir -p "$ROOTFS/etc"
     echo "DISTRO=\"$DISTRO\"" > "$ROOTFS/etc/termux-linux-manager.conf"
     echo "DE=\"$DE\"" >> "$ROOTFS/etc/termux-linux-manager.conf"
@@ -2620,6 +3049,9 @@ install_linux() {
     echo "HOSTNAME=\"${HOSTNAME:-localhost}\"" >> "$ROOTFS/etc/termux-linux-manager.conf"
     echo "NEED_VIRGL=\"${NEED_VIRGL:-1}\"" >> "$ROOTFS/etc/termux-linux-manager.conf"
     echo "PSTYLE=\"${PSTYLE:-minimal}\"" >> "$ROOTFS/etc/termux-linux-manager.conf"
+    if [ -n "${IMAGE:-}" ]; then
+        echo "IMAGE=\"$IMAGE\"" >> "$ROOTFS/etc/termux-linux-manager.conf"
+    fi
     
     # (Removed broken universal wallpaper download)
     
@@ -2735,17 +3167,16 @@ EOF
         SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
         if [ -f "$SCRIPT_DIR/lib/uid0.c" ]; then
             cp "$SCRIPT_DIR/lib/uid0.c" "$PREFIX/tmp/uid0.c"
+            if [ -f "$SCRIPT_DIR/lib/uid0-build.sh" ]; then
+                cp "$SCRIPT_DIR/lib/uid0-build.sh" "$PREFIX/tmp/lfa-uid0-build.sh"
+            fi
             cat << 'EOF' >> "$SETUP_SCRIPT"
 echo " -> Building uid0 emulation library (lets sudo satisfy dpkg)..."
-apt-get install -y gcc || true
-if command -v gcc >/dev/null 2>&1; then
-    gcc -shared -nostdlib -O2 -o /usr/local/lib/libuid0.so /tmp/uid0.c && chmod 644 /usr/local/lib/libuid0.so && echo "    uid0 library ready." || echo "[!] uid0 build failed (sudo stays ritual-only)."
+if [ -f /tmp/lfa-uid0-build.sh ]; then
+    sh /tmp/lfa-uid0-build.sh
 else
-    echo "[!] gcc unavailable, skipping uid0 build (sudo stays ritual-only)."
+    echo "[!] lib/uid0-build.sh missing; sudo stays ritual-only."
 fi
-rm -f /tmp/uid0.c
-apt-get purge -y gcc 2>/dev/null || true
-apt-get autoremove -y 2>/dev/null || true
 echo " -> Letting apt methods skip privilege dropping (no setgroups in proot)..."
 mkdir -p /etc/apt/apt.conf.d
 echo 'APT::Sandbox::User "root";' > /etc/apt/apt.conf.d/99-proot-no-sandbox
@@ -2770,9 +3201,18 @@ EOF
                 cat << 'EOF' >> "$SETUP_SCRIPT"
 apt-get install -y wget gpg apt-transport-https ca-certificates
 mkdir -p /etc/apt/keyrings
-wget -qO- https://packages.microsoft.com/keys/microsoft.asc | gpg --dearmor > packages.microsoft.gpg
-install -D -o root -g root -m 644 packages.microsoft.gpg /etc/apt/keyrings/packages.microsoft.gpg
-echo "deb [arch=amd64,arm64,armhf signed-by=/etc/apt/keyrings/packages.microsoft.gpg] https://packages.microsoft.com/repos/code stable main" > /etc/apt/sources.list.d/vscode.list
+wget -qO- https://packages.microsoft.com/keys/microsoft.asc > /tmp/ms.asc
+# Verify the published key fingerprint before trusting it for apt.
+if ! lfa_match "$(gpg --show-keys --with-fingerprint /tmp/ms.asc 2>/dev/null)" 'BC528686B50D79E339D3721CEB3E94ADBE1229CF'; then
+    echo "[!] Microsoft signing key fingerprint did not match - refusing to add the VS Code repo."
+else
+    gpg --dearmor < /tmp/ms.asc > packages.microsoft.gpg
+    install -D -o root -g root -m 644 packages.microsoft.gpg /etc/apt/keyrings/packages.microsoft.gpg
+fi
+rm -f /tmp/ms.asc
+if [ -s /etc/apt/keyrings/packages.microsoft.gpg ]; then
+    echo "deb [arch=amd64,arm64,armhf signed-by=/etc/apt/keyrings/packages.microsoft.gpg] https://packages.microsoft.com/repos/code stable main" > /etc/apt/sources.list.d/vscode.list
+fi
 rm -f packages.microsoft.gpg
 apt-get update -y
 EOF
@@ -2854,9 +3294,14 @@ cat << 'SUDO' > /usr/local/bin/sudo
 # its exit status. When /usr/local/lib/libuid0.so exists (built during
 # setup on apt distros, see lib/uid0.c), it is preloaded so uid-gated tools
 # like dpkg proceed; files still land owned by you either way.
-# The accepted password is stored base64-encoded (never plaintext): the
-# typed password is encoded the same way before comparing.
-SUDO_SHIM_B64="__SPASS_B64__"
+# The accepted password is stored as a salted SHA-256 hash, so reading this
+# file no longer reveals it (the file is also mode 0700).
+SUDO_SALT="__SPASS_SALT__"
+SUDO_HASH="__SPASS_HASH__"
+
+_sha256() {
+    printf '%s' "$1" | sha256sum 2>/dev/null | cut -d' ' -f1
+}
 
 usage() {
     echo "usage: sudo [-u user] [-i|-s] [-E] [-H] [-n] [-v] [-k] [-p prompt] [command [args...]]" >&2
@@ -2949,7 +3394,11 @@ tries=0
 authed=0
 while [ "$tries" -lt 3 ]; do
     if ! ask_password; then authed=-1; break; fi
-    if [ "$(printf '%s' "$_pw" | base64 2>/dev/null | tr -d '\n')" = "$SUDO_SHIM_B64" ]; then authed=1; break; fi
+    if [ -z "$SUDO_HASH" ] || ! command -v sha256sum >/dev/null 2>&1; then
+        echo "sudo: this shim is not configured (re-run menu 12)" >&2
+        exit 1
+    fi
+    if [ "$(_sha256 "$SUDO_SALT$_pw")" = "$SUDO_HASH" ]; then authed=1; break; fi
     tries=$((tries + 1))
     [ "$tries" -lt 3 ] && echo "Sorry, try again." >&2
 done
@@ -2985,7 +3434,7 @@ fi
 if [ "$KEEP_ENV" -ne 1 ]; then HOME=/root; export HOME; fi
 exec "$@"
 SUDO
-chmod +x /usr/local/bin/sudo
+chmod 700 /usr/local/bin/sudo
 EOF
     
     if [ "$INSTALL_IDE" == "1" ]; then
@@ -3001,8 +3450,14 @@ echo " -> Installing Google Antigravity IDE (official ARM64 build)..."
 $INSTALL_CMD $AG_DEPS || true
 AG_PAGE="\$(curl -fsSL --compressed https://antigravity.google/download/ 2>/dev/null || true)"
 AG_URL="\$(printf '%s' "\$AG_PAGE" | grep -oE 'https://[^"]*/linux-arm/Antigravity%20IDE\.tar\.gz' | head -n1)"
+# Only follow links from the vendor's own hosts: the page is scraped, so it
+# must not be able to point us at an arbitrary server.
+case "\$AG_URL" in
+    https://antigravity.google/*|https://*.google.com/*|https://*.googleapis.com/*|https://*.gvt1.com/*) ;;
+    *) AG_URL="" ;;
+esac
 if [ -z "\$AG_URL" ]; then
-    echo "[!] Could not resolve the latest Antigravity URL; using known release."
+    echo "[!] Could not resolve a trusted Antigravity URL; using the pinned release."
     AG_URL="https://edgedl.me.gvt1.com/edgedl/release2/j0qc3/antigravity/stable/2.5.5-4923483625488384/linux-arm/Antigravity%20IDE.tar.gz"
 fi
 mkdir -p /opt/antigravity-ide
@@ -3039,7 +3494,8 @@ EOF
 echo " -> Installing Firefox (official ARM64 build, no snap)..."
 apt-get install -y curl ca-certificates xz-utils || true
 mkdir -p /opt
-if curl -fL --retry 3 'https://download.mozilla.org/?product=firefox-latest-ssl&os=linux64-aarch64&lang=en-US' -o /tmp/firefox.tar.xz; then
+if curl -fL --retry 3 'https://download.mozilla.org/?product=firefox-latest-ssl&os=linux64-aarch64&lang=en-US' -o /tmp/firefox.tar.xz \
+   && tar -tJf /tmp/firefox.tar.xz >/dev/null 2>&1; then
     tar -xJf /tmp/firefox.tar.xz -C /opt
     rm -f /tmp/firefox.tar.xz
     cat > /usr/local/bin/firefox <<'WRAP'
@@ -3166,7 +3622,8 @@ EOF
     if [ -f "$PREFIX/tmp/lfa-real-feel.sh" ]; then
         cat << 'EOF' >> "$SETUP_SCRIPT"
 echo " -> Applying Linux polish (prompt, welcome, hostname, environment)..."
-LFA_USER="__LUSER__" LFA_DE="__DE__" LFA_HOSTNAME="__HOSTNAME__" LFA_PSTYLE="__PSTYLE__" bash /tmp/lfa-real-feel.sh || true
+LFA_USER="__LUSER__" LFA_DE="__DE__" LFA_HOSTNAME="__HOSTNAME__" LFA_PSTYLE="__PSTYLE__" bash /tmp/lfa-real-feel.sh \
+    || echo "[!] Shell polish failed; the prompt may look plain (re-run menu 12)."
 EOF
     fi
 
@@ -3195,7 +3652,8 @@ echo "    Core session components verified."
 EOF
 
     # Substitute setup-chosen values (see comment at first sed call site).
-    sed -i "s/__LUSER__/$LINUX_USER/g; s/__UPASS_B64__/$UPASS_B64/g; s/__RPASS_B64__/$RPASS_B64/g; s/__SPASS_B64__/$SPASS_B64/g" "$SETUP_SCRIPT"
+    sed -i "s/__LUSER__/$LINUX_USER/g; s/__UPASS_B64__/$UPASS_B64/g; s/__RPASS_B64__/$RPASS_B64/g" "$SETUP_SCRIPT"
+    sed -i "s/__SPASS_SALT__/$SPASS_SALT/g; s/__SPASS_HASH__/$SPASS_HASH/g" "$SETUP_SCRIPT"
     sed -i "s#__TZ__#${TIMEZONE:-UTC}#g; s#__HOSTNAME__#${HOSTNAME:-localhost}#g; s/__PSTYLE__/${PSTYLE:-minimal}/g; s/__DE__/${DE:-none}/g" "$SETUP_SCRIPT"
 
     echo "[*] Executing setup inside $INSTANCE_NAME (this will take a while)..."
@@ -3203,6 +3661,7 @@ EOF
     # first, otherwise the 'bash /tmp/...' setup invocation cannot start.
     if [ "$DISTRO" == "alpine" ]; then
         echo "[*] Bootstrapping Alpine base tools (bash, sudo, shadow)..."
+        # shellcheck disable=SC2046  # flag list, not one argument
         proot-distro login $(pd_login_flags) "$INSTANCE_NAME" -- sh -c "apk update && apk add bash sudo shadow"
     elif [ "$DISTRO" == "void" ]; then
         # Void's musl base image has no /bin/bash (and no shadow tools), so
@@ -3210,10 +3669,18 @@ EOF
         echo "[*] Bootstrapping Void base tools (bash, shadow)..."
         # Void's image declares an Entrypoint and has no bash, so `login`
         # refuses to start. `run` executes its image entrypoint with /bin/sh.
+        # shellcheck disable=SC2046
         proot-distro run $(pd_login_flags) "$INSTANCE_NAME" -- /bin/sh -c "xbps-install -Syu && xbps-install -y bash shadow"
     fi
     local _setup_rc=0
+    # shellcheck disable=SC2046  # flag list, not one argument
     proot-distro login $(pd_login_flags) "$INSTANCE_NAME" --shared-tmp -- bash /tmp/gui_setup_$$.sh || _setup_rc=$?
+    # The guest is done with it; do not leave passwords lying in shared /tmp.
+    # The test harness sets LFA_KEEP_SETUP_SCRIPT=1 so it can inspect the
+    # generated script after the run.
+    if [ "${LFA_KEEP_SETUP_SCRIPT:-0}" != "1" ]; then
+        rm -f "$SETUP_SCRIPT" 2>/dev/null || true
+    fi
     if [ "$_setup_rc" -ne 0 ]; then
         echo ""
         echo "========================================="
@@ -3256,7 +3723,8 @@ EOF
             echo "(Run 'passwd' first if you never set a Termux password.)"
             echo "========================================="
         else
-            echo "[!] openssh unavailable, skipping SSH server."
+            echo "[!] openssh is not installed, so the SSH server was not started."
+            echo "    Install it with: pkg install openssh"
         fi
     fi
     if [ "${DO_WIDGET:-0}" = "1" ]; then
@@ -3302,10 +3770,15 @@ EOF
     echo "If you installed the Termux:Widget app, a shortcut is on your home screen!"
     echo "========================================="
     ui_pause
+    [ "$LFA_NONINTERACTIVE" = "1" ] && return 0
     show_menu
 }
 
 # Initialise device profile once so IS_LEGACY / ARCH are set for menu ops
 detect_environment
+
+if [ "$#" -gt 0 ]; then
+    lfa_run_cli "$@"
+fi
 
 setup_entry
