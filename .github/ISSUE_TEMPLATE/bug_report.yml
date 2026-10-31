@@ -1,0 +1,110 @@
+name: Bug report
+description: Something is broken - install, desktop, VNC/X11, or the manager menu
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report. Read
+        [issues.md](https://github.com/pdev-labs/Linux-For-Android/blob/main/issues.md)
+        first - the problem may already be a known limitation.
+
+        For **security** problems use the private advisory link in
+        [SECURITY.md](https://github.com/pdev-labs/Linux-For-Android/blob/main/SECURITY.md)
+        instead of this form.
+
+  - type: dropdown
+    id: issue-area
+    attributes:
+      label: What is affected?
+      options:
+        - Install / setup
+        - Desktop does not start
+        - Display (Termux:X11)
+        - Display (VNC)
+        - Audio
+        - Backup / export / import
+        - Uninstall / menu
+        - GNOME (experimental)
+        - Documentation
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Output of `./install_linux.sh --version`
+      placeholder: "1.6.1"
+    validations:
+      required: true
+
+  - type: input
+    id: device
+    attributes:
+      label: Device and Android version
+      placeholder: "Vivo V2437, Android 16 (SDK 36), aarch64"
+    validations:
+      required: true
+
+  - type: input
+    id: distro
+    attributes:
+      label: Distribution, desktop and backend
+      placeholder: "Ubuntu 24.04, XFCE4, VNC"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: termux-source
+    attributes:
+      label: Where did Termux come from?
+      options:
+        - F-Droid
+        - GitHub releases
+        - Google Play
+        - Other / not sure
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. ./install_linux.sh
+        2. choose Ubuntu -> XFCE4 -> VNC
+        3. start-linux
+        4. ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behaviour
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behaviour and logs
+      description: |
+        Paste the console output and, for desktop problems,
+        `~/start-linux-session.log` from inside the distro.
+      render: shell
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I am on the latest release (or `main`).
+          required: true
+        - label: I searched existing issues and `issues.md`.
+          required: true
+        - label: I did not include any real password in this report.
+          required: true

@@ -1,0 +1,50 @@
+name: Feature request
+description: Suggest a distro, a desktop, a menu option, or a behaviour change
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+      description: Describe the situation, not the solution.
+      placeholder: "On my device, starting the desktop takes two minutes because ..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would you like to happen?
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives you considered
+      description: Including "use another project" is a valid answer.
+
+  - type: dropdown
+    id: scope
+    attributes:
+      label: Scope
+      options:
+        - New distro
+        - New desktop environment
+        - Installer / menu
+        - Desktop session (X11/VNC)
+        - Performance
+        - Documentation
+        - Other
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I checked the roadmap in `issues.md` and `ghissue.md`.
+          required: true
+        - label: I understand Wayland is intentionally not supported.
+          required: true

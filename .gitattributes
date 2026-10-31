@@ -1,0 +1,15 @@
+# Normalise text files; never let git touch binary assets.
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.webp binary
+*.gif binary
+*.tar.gz binary
+*.xz binary
+
+# Shell sources are always LF, even on Windows checkouts.
+*.sh text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf

@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  shellcheck:
+    name: shellcheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install shellcheck
+        run: sudo apt-get update -qq && sudo apt-get install -y shellcheck
+      - name: Lint (warnings are errors)
+        run: shellcheck -S warning install_linux.sh lib/*.sh tests/*.sh
+
+  syntax:
+    name: bash -n
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Parse every script
+        run: |
+          bash -n install_linux.sh
+          for f in lib/*.sh tests/*.sh; do
+            case "$f" in
+              lib/real-feel.sh|lib/wallpaper.sh) sh -n "$f" ;;
+              *) bash -n "$f" ;;
+            esac
+          done
+
+  tests:
+    name: test suite
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install prerequisites
+        run: sudo apt-get update -qq && sudo apt-get install -y shellcheck coreutils
+      - name: Run the suite
+        run: |
+          chmod +x tests/test-all.sh
+          ./tests/test-all.sh
+      - name: CLI surface
+        run: |
+          ./install_linux.sh --version
+          ./install_linux.sh --help

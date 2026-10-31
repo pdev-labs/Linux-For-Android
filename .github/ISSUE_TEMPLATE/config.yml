@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/pdev-labs/Linux-For-Android/security/advisories/new
+    about: Please report security issues privately, never in a public issue.
+  - name: Known issues and limitations
+    url: https://github.com/pdev-labs/Linux-For-Android/blob/main/issues.md
+    about: Check the maintained issue list before opening a report.
+  - name: Troubleshooting guide
+    url: https://github.com/pdev-labs/Linux-For-Android#-comprehensive-troubleshooting-guide
+    about: Phantom process killer, black screen, snapd, dpkg statoverride and more.
