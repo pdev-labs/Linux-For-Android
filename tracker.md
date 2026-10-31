@@ -162,8 +162,12 @@ Lint: `shellcheck -S warning` clean · `bash -n` clean · CI workflow added.
 
 ## Next actions
 
-1. Tag `v1.7.0` and attach the release assets (`install_linux.sh` +
-   `SHA256SUMS`).
-2. Protect `main` (require the CI check), enable delete-branch-on-merge.
-3. Add the social preview image and a demo GIF (needs an upload).
-4. Record a real-hardware photo; the existing screenshots are screen captures.
+Done in this pass: tag `v1.7.0` with `install_linux.sh` + `SHA256SUMS`, green
+CI, description/topics/homepage, Discussions on, Wiki off, delete-branch-on-merge.
+
+Remaining, all of which need an upload or an owner decision:
+
+1. Protect `main` (require the CI check, block force-push) — changes how the
+   maintainer pushes, so it was left to the owner.
+2. Social preview image, demo GIF and a real-hardware photo.
+3. Re-attribute the `pdev@local` commits (history rewrite).
