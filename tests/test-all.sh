@@ -604,6 +604,7 @@ bash "$REPO/install_linux.sh" --version > "$T/cli.log" 2>&1; rc=$?
 [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: M5 --version exit $rc"; }
 check "M5 version printed" 'Linux for Android Manager' "$T/cli.log"
 check "M5 version matches" "$LFA_EXPECTED_VERSION" "$T/cli.log"
+check_absent "M5 version is one line, no device probe" 'Could not read the Android version' "$T/cli.log"
 bash "$REPO/install_linux.sh" --help > "$T/cli2.log" 2>&1; rc=$?
 [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: M5 --help exit $rc"; }
 check "M5 usage shows --doctor" '--doctor' "$T/cli2.log"

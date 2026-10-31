@@ -115,7 +115,7 @@ hardware, not just simulated. Full details, root causes and evidence:
 | Alpine 3.18 (Android 5) | ✅ | ✅ | legacy VNC desktop, panel works | v1.7.0 |
 | Ubuntu GNOME 46 (experimental) | ✅ | ✅ | shell and apps run; session services missing | v1.7.0 |
 
-> Test suite: `343` checks, `0` failures — the same suite is what runs on the
+> Test suite: `344` checks, `0` failures — the same suite is what runs on the
 > devices (`tests/device-matrix.sh`). The table above is **as of v1.7.0**; a
 > row is only marked verified after a real install on the device named above.
 
@@ -667,7 +667,7 @@ installs; needs only `bash`, `coreutils`, `timeout`, and `python3` (plus
 `script` from util-linux for the pty test, skipped if absent):
 ```bash
 chmod +x tests/test-all.sh
-./tests/test-all.sh   # expect: PASS=343 FAIL=0
+./tests/test-all.sh   # expect: PASS=344 FAIL=0
 ```
 
 The suite is deliberately stubbed — it cannot prove a desktop actually

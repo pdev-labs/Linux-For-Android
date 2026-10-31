@@ -77,6 +77,8 @@ deliberately deferred (see `tracker.md`).
 
 - The desktop and display-server menus are a single implementation shared by
   guided setup and the install wizard.
+- `--help` and `--version` answer before the device probe, so they print one
+  line on any machine instead of a "could not read Android version" warning.
 - `README.md` numbers are enforced by the test suite, which fails when the
   documented `PASS=` count goes stale.
 

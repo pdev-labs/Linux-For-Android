@@ -3774,6 +3774,13 @@ EOF
     show_menu
 }
 
+# --help and --version answer a question about the script itself, so they run
+# before the device probe: piping `--version` should print one line, not a
+# getprop warning on a non-Android machine.
+case "${1:-}" in
+    -h|--help|-V|--version) lfa_run_cli "$@" ;;
+esac
+
 # Initialise device profile once so IS_LEGACY / ARCH are set for menu ops
 detect_environment
 

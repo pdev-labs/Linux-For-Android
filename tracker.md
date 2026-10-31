@@ -6,7 +6,7 @@ Status values:
 
 | Status | Meaning |
 |---|---|
-| `done` | code changed, suite green (`PASS=343 FAIL=0`), lint clean |
+| `done` | code changed, suite green (`PASS=344 FAIL=0`), lint clean |
 | `partial` | the main risk is addressed; a documented remainder is listed |
 | `deferred` | deliberately not fixed in this pass, reason recorded |
 | `device` | additionally exercised on the Vivo V2437 |
@@ -126,11 +126,11 @@ Lint: `shellcheck -S warning` clean · `bash -n` clean · CI workflow added.
 
 | When | What | Result |
 |---|---|---|
-| 2026-10-31 | Host suite, every change | `PASS=343 FAIL=0` |
+| 2026-10-31 | Host suite, every change | `PASS=344 FAIL=0` |
 | 2026-10-31 | `shellcheck -S warning` (install + lib + tests) | clean |
 | 2026-10-31 | `bash -n` / `sh -n` on every script | clean |
 | 2026-10-31 | CLI surface on host | `--version`, `--help`, `--bogus` → exit 2 |
-| 2026-10-31 | **Device suite** (Vivo V2437, Android 16) | `PASS=343 FAIL=0` |
+| 2026-10-31 | **Device suite** (Vivo V2437, Android 16) | `PASS=344 FAIL=0` |
 | 2026-10-31 | Device CLI | `--version`, `--help`, `--list`, `--diagnostics` OK |
 | 2026-10-31 | Device diagnostics bundle | `report.txt`, launchers, redacted conf; mode 0600 |
 | 2026-10-31 | Menu 12 on the existing Ubuntu install | statoverride sanitised, snapd pinned, launchers regenerated |
