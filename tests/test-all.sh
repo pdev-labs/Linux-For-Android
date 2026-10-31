@@ -516,9 +516,11 @@ check "M list delegates" 'REAL-CALLED' "$T/m-list.log"
 check "M valid row kept" '/usr/bin/good' "$T/so.db"
 check_absent "M invalid row pruned" 'ghosty' "$T/so.db"
 
-run_shim --add root messagebus 4754 /usr/lib/dbus-1.0/dbus-daemon-launch-helper > "$T/m-add-bad.log" 2>&1
+# A group name that cannot exist on a runner: "messagebus" does exist
+# on Ubuntu, which made this test pass locally and fail in CI.
+run_shim --add root lfa_test_no_such_group 4754 /usr/lib/dbus-1.0/dbus-daemon-launch-helper > "$T/m-add-bad.log" 2>&1
 check "M unknown group skipped" 'unknown group' "$T/m-add-bad.log"
-check_absent "M unknown group not recorded" 'messagebus' "$T/so.db"
+check_absent "M unknown group not recorded" 'lfa_test_no_such_group' "$T/so.db"
 
 run_shim --add root root 4754 /usr/lib/dbus-1.0/dbus-daemon-launch-helper > "$T/m-add.log" 2>&1
 check "M add recorded" 'dbus-daemon-launch-helper' "$T/so.db"
