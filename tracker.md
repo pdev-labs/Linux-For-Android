@@ -6,7 +6,7 @@ Status values:
 
 | Status | Meaning |
 |---|---|
-| `done` | code changed, suite green (`PASS=344 FAIL=0`), lint clean |
+| `done` | code changed, suite green (`PASS=352 FAIL=0`), lint clean |
 | `partial` | the main risk is addressed; a documented remainder is listed |
 | `deferred` | deliberately not fixed in this pass, reason recorded |
 | `device` | additionally exercised on the Vivo V2437 |
@@ -126,11 +126,11 @@ Lint: `shellcheck -S warning` clean · `bash -n` clean · CI workflow added.
 
 | When | What | Result |
 |---|---|---|
-| 2026-10-31 | Host suite, every change | `PASS=344 FAIL=0` |
+| 2026-10-31 | Host suite, every change | `PASS=352 FAIL=0` |
 | 2026-10-31 | `shellcheck -S warning` (install + lib + tests) | clean |
 | 2026-10-31 | `bash -n` / `sh -n` on every script | clean |
 | 2026-10-31 | CLI surface on host | `--version`, `--help`, `--bogus` → exit 2 |
-| 2026-10-31 | **Device suite** (Vivo V2437, Android 16) | `PASS=344 FAIL=0` |
+| 2026-10-31 | **Device suite** (Vivo V2437, Android 16) | `PASS=352 FAIL=0` |
 | 2026-10-31 | Device CLI | `--version`, `--help`, `--list`, `--diagnostics` OK |
 | 2026-10-31 | Device diagnostics bundle | `report.txt`, launchers, redacted conf; mode 0600 |
 | 2026-10-31 | Menu 12 on the existing Ubuntu install | statoverride sanitised, snapd pinned, launchers regenerated |
@@ -139,6 +139,8 @@ Lint: `shellcheck -S warning` clean · `bash -n` clean · CI workflow added.
 | 2026-10-31 | Alpine CLI install on device | `Installation complete! (5m 11s)`, user + sudo ritual work |
 | 2026-10-31 | Alpine uninstall on device | rootfs, pidfile, log and `xdg-*` runtime dir removed (#49) |
 | 2026-10-31 | GitHub repo metadata | description, homepage, 20 topics, Discussions enabled |
+| 2026-11-01 | **All install-menu software on the Vivo** | Python 3.12.3, Git 2.43.0, Node 26.13.0/npm 11.20.0, curl 8.5.0, wget 1.21.4, neofetch 7.1.0, htop 3.3.0, VS Code 1.144.0, Firefox, Chromium, LibreOffice 24.2, VLC, GIMP, Antigravity — every one launches |
+| 2026-11-01 | VS Code via the desktop entry | window opens after the `--no-sandbox` wrapper (#55) |
 
 ### Findings that only appeared on hardware
 
@@ -159,6 +161,10 @@ Lint: `shellcheck -S warning` clean · `bash -n` clean · CI workflow added.
    project: an XFCE session plus the stub suite exceeds the default child
    limit and Android kills the surplus, including `sshd`. Documented in
    `docs/TEST-REPORT.md`; the README already tells users to disable it.
+5. **VS Code, Chromium and Antigravity cannot use their setuid sandbox under
+   proot.** VS Code is the dangerous case: the CLI returns 0 and prints
+   nothing, so it looks like a missing app. v1.7.1 writes `/usr/local/bin`
+   wrappers with `--no-sandbox` and repoints the desktop entries (#55, #56).
 
 ## Next actions
 

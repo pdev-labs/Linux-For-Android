@@ -40,7 +40,7 @@
 # 1. Install Termux from F-Droid (never the Play Store build)
 # 2. Then, in Termux:
 pkg update -y && pkg install git -y
-git clone --depth 1 --branch v1.7.0 https://github.com/pdev-labs/Linux-For-Android.git
+git clone --depth 1 --branch v1.7.1 https://github.com/pdev-labs/Linux-For-Android.git
 cd Linux-For-Android && ./install_linux.sh
 ```
 
@@ -115,7 +115,7 @@ hardware, not just simulated. Full details, root causes and evidence:
 | Alpine 3.18 (Android 5) | ✅ | ✅ | legacy VNC desktop, panel works | v1.7.0 |
 | Ubuntu GNOME 46 (experimental) | ✅ | ✅ | shell and apps run; session services missing | v1.7.0 |
 
-> Test suite: `344` checks, `0` failures — the same suite is what runs on the
+> Test suite: `352` checks, `0` failures — the same suite is what runs on the
 > devices (`tests/device-matrix.sh`). The table above is **as of v1.7.0**; a
 > row is only marked verified after a real install on the device named above.
 
@@ -315,7 +315,7 @@ Pin the version you install. `main` is development and may be mid-change.
 
 ```bash
 pkg update -y && pkg install git -y
-git clone --depth 1 --branch v1.7.0 \
+git clone --depth 1 --branch v1.7.1 \
   https://github.com/pdev-labs/Linux-For-Android.git
 cd Linux-For-Android
 chmod +x install_linux.sh
@@ -499,6 +499,7 @@ Jump to a symptom:
 | `unknown system group 'messagebus' in statoverride` | [#5](#5-dpkg-unrecoverable-fatal-error--unknown-system-group-messagebus-in-statoverride-file) |
 | "Cannot establish any listening sockets" | [#6](#6-cannot-establish-any-listening-sockets---make-sure-an-x-server-isnt-already-running) |
 | Termux:X11 stays open after `stop-linux` | [#7](#7-termuxx11-app-stays-open-after-running-stop-linux) |
+| VS Code / Chromium do not open | [Sandboxed apps](#sandboxed-apps-open-and-close-immediately) |
 | `groups: cannot find name for group ID ...` | [#8](#8-groups-cannot-find-name-for-group-id-99909997-in-a-user-terminal) |
 | Uninstall leaves a ghost distro | [#9](#9-uninstall-says-the-distro-is-gone-but-it-still-appears--incomplete) |
 | Install seems frozen | [#10](#10-installation-seems-frozen-at-setting-up-elementary-xfce-icon-theme) |
@@ -647,6 +648,38 @@ If you need `ubuntu-desktop`, note that it is only a metapackage — removing `s
 7. If Settings crashes, the only known workaround is to wipe `~/.cache ~/.config ~/.local` — this also deletes your settings.
 8. If it keeps misbehaving, reinstall with **MATE** (option 3): same GNOME heritage, stable, no systemd requirement.
 
+### 17. Sandboxed apps open and close immediately
+
+**Symptom:** VS Code, Chromium or Antigravity "does not open" — the command
+returns silently, or the window flashes and disappears. Firefox starts but
+shows *"The security sandbox is disabled"*.
+
+**Why:** Electron and Chromium need a setuid sandbox helper. proot cannot
+create setuid binaries, so the zygote aborts. VS Code is the worst case: its
+CLI exits with status 0 and prints nothing, so it looks like nothing happened.
+
+**Fix:** v1.7.1 writes safe launchers automatically. On an older install run
+**menu 12 (Apply Latest Fixes)**, or recreate them by hand:
+
+```bash
+sudo tee /usr/local/bin/code >/dev/null <<'EOF'
+#!/bin/sh
+exec /usr/share/code/code --no-sandbox --disable-gpu "$@"
+EOF
+sudo chmod 755 /usr/local/bin/code
+```
+
+and make the menu entry use it:
+
+```bash
+sudo sed -i 's|^Exec=/usr/share/code/code |Exec=/usr/local/bin/code |' \
+  /usr/share/applications/com.microsoft.VSCode.desktop
+update-desktop-database /usr/share/applications 2>/dev/null || true
+```
+
+Chromium needs `--no-sandbox --disable-dev-shm-usage`; the menu 12 wrapper adds
+both. This is a proot limitation, not a bug we can fix in the apps.
+
 ## 🤝 Contributing
 
 Contributions, issues, and feature requests are welcome. Read
@@ -667,7 +700,7 @@ installs; needs only `bash`, `coreutils`, `timeout`, and `python3` (plus
 `script` from util-linux for the pty test, skipped if absent):
 ```bash
 chmod +x tests/test-all.sh
-./tests/test-all.sh   # expect: PASS=344 FAIL=0
+./tests/test-all.sh   # expect: PASS=352 FAIL=0
 ```
 
 The suite is deliberately stubbed — it cannot prove a desktop actually

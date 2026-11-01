@@ -285,4 +285,64 @@ LFA_BWRAP
     chmod 755 "$R/usr/local/bin/bwrap" 2>/dev/null || true
 fi
 
+# ---------------- proot-safe GUI launchers ----------------
+# proot cannot provide setuid binaries, so the Chromium/Electron sandbox
+# helpers fail. The symptom is usually "nothing happens": VS Code's CLI
+# exits 0 and no window is ever mapped, Chromium prints a SUID helper error.
+# Write launchers into /usr/local/bin (early in PATH) and copy the desktop
+# entries into /usr/local/share/applications (which shadows /usr/share) so
+# both the shell and the menu use the safe flags. Copies, not edits, so a
+# package upgrade cannot silently reintroduce the sandboxed Exec line.
+if [ -x "$R/usr/share/code/code" ] || [ -x "$R/usr/share/code/bin/code" ]; then
+    _code=/usr/share/code/code
+    [ -x "$R/usr/share/code/bin/code" ] && _code=/usr/share/code/bin/code
+    cat > "$R/usr/local/bin/code" <<LFA_CODE
+#!/bin/sh
+# Linux-for-Android: Electron's setuid sandbox cannot work under proot.
+# Without --no-sandbox the CLI returns 0 and no window is created.
+exec $_code --no-sandbox --disable-gpu "\$@"
+LFA_CODE
+    chmod 755 "$R/usr/local/bin/code" 2>/dev/null || true
+    mkdir -p "$R/usr/local/share/applications" 2>/dev/null || true
+    for _d in com.microsoft.VSCode.desktop com.microsoft.VSCode.UrlHandler.desktop code.desktop; do
+        _src="$R/usr/share/applications/$_d"
+        [ -f "$_src" ] || continue
+        # Point the entry at the wrapper itself: the package file may use
+        # /usr/share/code/code while the CLI is /usr/share/code/bin/code.
+        sed -e "s|^Exec=/usr/share/code/code |Exec=/usr/local/bin/code |" \
+            -e "s|^Exec=/usr/share/code/code\$|Exec=/usr/local/bin/code|" \
+            -e "s|^Exec=/usr/share/code/bin/code |Exec=/usr/local/bin/code |" \
+            -e "s|^Exec=/usr/share/code/bin/code\$|Exec=/usr/local/bin/code|" \
+            "$_src" > "$R/usr/local/share/applications/$_d" 2>/dev/null || true
+    done
+fi
+
+# Chromium: same missing sandbox, plus a /dev/shm that is too small in proot.
+if [ ! -x "$R/usr/local/bin/chromium" ]; then
+    _real=""
+    [ -x "$R/usr/bin/chromium" ] && _real=/usr/bin/chromium
+    [ -z "$_real" ] && [ -x "$R/usr/bin/chromium-browser" ] && _real=/usr/bin/chromium-browser
+    if [ -n "$_real" ]; then
+        cat > "$R/usr/local/bin/chromium" <<LFA_CHROMIUM
+#!/bin/sh
+# Linux-for-Android: no setuid sandbox under proot; flags from menu 11.
+FLAGS="\$(cat /etc/lfa-chromium-flags 2>/dev/null)"
+exec $_real --no-sandbox --disable-dev-shm-usage \$FLAGS "\$@"
+LFA_CHROMIUM
+        chmod 755 "$R/usr/local/bin/chromium" 2>/dev/null || true
+        ln -sf /usr/local/bin/chromium "$R/usr/local/bin/chromium-browser" 2>/dev/null || true
+    fi
+fi
+
+# Antigravity is a Chromium app extracted into /opt (no desktop file).
+if [ -x "$R/opt/antigravity-ide/antigravity-ide" ] && [ ! -x "$R/usr/local/bin/antigravity-ide" ]; then
+    cat > "$R/usr/local/bin/antigravity-ide" <<'LFA_AG'
+#!/bin/sh
+# Linux-for-Android: Chromium app, needs the sandbox disabled under proot.
+exec /opt/antigravity-ide/antigravity-ide --no-sandbox --disable-gpu --use-gl=swiftshader "$@"
+LFA_AG
+    chmod 755 "$R/usr/local/bin/antigravity-ide" 2>/dev/null || true
+    ln -sf /usr/local/bin/antigravity-ide "$R/usr/local/bin/antigravity" 2>/dev/null || true
+fi
+
 exit 0

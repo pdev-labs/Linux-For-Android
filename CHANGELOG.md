@@ -13,6 +13,30 @@ dates, not tag names, define the order — see the table at the bottom.
 
 ## [Unreleased]
 
+## [1.7.1] - 2026-11-01
+
+### Fixed
+
+- **VS Code did not open.** Electron's setuid sandbox cannot work under
+  proot, so `/usr/share/code/code` aborted in the zygote and the `code` CLI
+  still returned 0: from the user's side nothing happened, from the shell
+  nothing was printed. `/usr/local/bin/code` is now a wrapper that passes
+  `--no-sandbox --disable-gpu`, and the desktop entries in
+  `/usr/local/share/applications` point at it, so the menu works too.
+  Applying `menu 12` (or reinstalling) fixes an existing distro.
+- Chromium's proot-safe launcher is now written by the shared guest polish
+  (`lib/real-feel.sh`) instead of only by menu 11, so a fresh Chromium
+  install gets `--no-sandbox --disable-dev-shm-usage` immediately.
+- Antigravity's launcher is recreated during migration if `/opt` survived
+  but `/usr/local/bin/antigravity` did not.
+
+### Verified
+
+- Every application in the install menu on the Vivo V2437: Python 3.12.3,
+  Git 2.43.0, Node 26.13.0/npm 11.20.0, curl 8.5.0, wget 1.21.4,
+  neofetch 7.1.0, htop 3.3.0, VS Code 1.144.0, Firefox, Chromium,
+  LibreOffice Writer 24.2, VLC, GIMP and Antigravity IDE — all launch.
+
 ## [1.7.0] - 2026-10-31
 
 Security and correctness pass over the whole installer, from the audit in
@@ -130,7 +154,8 @@ deliberately deferred (see `tracker.md`).
 Newest first. `v4.x` is *older* than `v1.5.x`; see the note at the top.
 
 | Tag | Date |
-|---|---|
+|---|---|---|
+| v1.7.1 | 2026-11-01 |
 | v1.7.0 | 2026-10-31 |
 | v1.6.1 | 2026-10-29 |
 | v1.6.0 | 2026-10-29 |

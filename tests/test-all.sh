@@ -670,6 +670,30 @@ check_absent "M10 v5 not misdetected" "knows no" "$T/longhelp.log"
 check "M10 install proceeded" 'Installing ' "$T/longhelp.log"
 check "M10 image install used" 'STUB-PD-INSTALL-OK: install --name' "$T/longhelp.log"
 
+echo "===== M11: proot-safe GUI launchers (VS Code, Chromium, Antigravity) ====="
+G11="$T/guiapps"
+mkdir -p "$G11/usr/share/code" "$G11/usr/share/applications" "$G11/usr/bin" \
+         "$G11/opt/antigravity-ide"
+printf '#!/bin/sh\n' > "$G11/usr/share/code/code"
+printf '#!/bin/sh\n' > "$G11/usr/bin/chromium"
+printf '#!/bin/sh\n' > "$G11/opt/antigravity-ide/antigravity-ide"
+chmod +x "$G11/usr/share/code/code" "$G11/usr/bin/chromium" \
+         "$G11/opt/antigravity-ide/antigravity-ide"
+printf '[Desktop Entry]\nExec=/usr/share/code/code %%F\n' \
+    > "$G11/usr/share/applications/com.microsoft.VSCode.desktop"
+LFA_ROOT="$G11" LFA_USER=guser sh "$REPO/lib/real-feel.sh" >/dev/null 2>&1
+check "M11 code wrapper disables sandbox" '--no-sandbox' "$G11/usr/local/bin/code"
+check "M11 code wrapper execs the real binary" '/usr/share/code/code' "$G11/usr/local/bin/code"
+check "M11 code desktop entry patched" \
+      'Exec=/usr/local/bin/code' \
+      "$G11/usr/local/share/applications/com.microsoft.VSCode.desktop"
+check "M11 chromium wrapper disables sandbox" '--no-sandbox' "$G11/usr/local/bin/chromium"
+check "M11 chromium wrapper handles shm" '--disable-dev-shm-usage' "$G11/usr/local/bin/chromium"
+[ -L "$G11/usr/local/bin/antigravity" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: M11 antigravity wrapper missing"; }
+check "M11 antigravity sandbox" '--no-sandbox' "$G11/usr/local/bin/antigravity-ide"
+sh -n "$G11/usr/local/bin/code" && sh -n "$G11/usr/local/bin/chromium" \
+    && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: M11 wrapper syntax"; }
+
 echo "===== N: apply latest fixes to an older distro ====="
 fresh_env
 NROOT="$T/prefix/var/lib/proot-distro/installed-rootfs/oldinst"

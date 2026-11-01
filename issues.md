@@ -297,3 +297,34 @@ Verified on 2026-10-31: the 17 assets are already **1920×1080** (2.1 MB total),
 not 4K as originally assumed. There are no per-resolution variants, so a
 720p session decodes a 1080p image, which is a negligible cost. No change made;
 the original finding was wrong.
+
+---
+
+## Post-release findings (v1.7.1, 2026-11-01)
+
+These were found by launching every application in the install menu on the
+Vivo after v1.7.0 shipped. Both are fixed in v1.7.1.
+
+### 55. Electron apps fail silently under proot — fixed in v1.7.1
+
+VS Code's zygote aborts because proot cannot provide the setuid sandbox, but
+the `code` CLI returns 0 and prints nothing: the user sees "VS Code does not
+open". The same applies to Chromium and Antigravity. Fixed by writing
+`/usr/local/bin/{code,chromium,antigravity}` wrappers with
+`--no-sandbox` (and `--disable-gpu` / `--disable-dev-shm-usage`) and pointing
+the desktop entries at the wrapper.
+
+### 56. Chromium's safe launcher only existed after menu 11 — fixed in v1.7.1
+
+A fresh install that selected Chromium got the package but no
+`--no-sandbox` wrapper, so the browser aborted with the SUID sandbox error.
+The wrapper is now created by the shared guest polish, so install and
+migration both produce it.
+
+### 57. VS Code can restore an off-screen window position — documented
+
+A user-data directory created against a taller virtual screen can restore
+bounds that put the window at `y=627` on a 726-pixel-tall Termux:X11 screen,
+leaving only a strip visible. Deleting `~/.config/Code` (or `--user-data-dir`)
+restores the default bounds; the new `--no-sandbox` wrapper plus the
+troubleshooting entry make the normal case reliable.

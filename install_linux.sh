@@ -19,7 +19,7 @@ fi
 
 # Directory containing this script (lib/ lives next to it).
 LFA_DIR="$(cd "$(dirname "$0")" && pwd)"
-LFA_VERSION="1.7.0"
+LFA_VERSION="1.7.1"
 
 # ------------------------------------------------------------
 # Interrupt safety and temporary artifacts.
