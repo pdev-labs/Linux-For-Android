@@ -1,9 +1,10 @@
-# Test report — v1.5.7
+# Test report — v1.7.1
 
-## v1.7.0 verification (2026-10-31)
+## v1.7.1 verification (2026-11-01)
 
 This release is a hardening pass driven by the audit in `issues.md`
-(54 findings: 36 fixed, 13 partial, 5 deferred — see `tracker.md`).
+(54 findings: 38 fixed, 11 partial, 5 deferred — see `tracker.md`;
+post-release findings #55–#57 were fixed in v1.7.1).
 
 ### Automated
 
@@ -23,12 +24,12 @@ system-bus and locale checks.
 ### Device — Vivo V2437, Android 16 (SDK 36), aarch64
 
 The repository was copied to `~/Linux-For-Android` in Termux and every check
-below ran on the phone itself, over SSH, with `LFA_VERSION="1.7.0"`.
+below ran on the phone itself, over SSH, with `LFA_VERSION="1.7.1"`.
 
 | Check | Result |
 |---|---|
 | `./tests/test-all.sh` on the phone | `PASS=356 FAIL=0` |
-| `./install_linux.sh --version` | `Linux for Android Manager 1.7.0` |
+| `./install_linux.sh --version` | `Linux for Android Manager 1.7.1` |
 | `./install_linux.sh --help` | lists all flags, exit 0 |
 | `./install_linux.sh --list` | `ubuntu` |
 | `./install_linux.sh --diagnostics` | bundle written, `report.txt` + redacted config, mode 0600 |
@@ -36,6 +37,7 @@ below ran on the phone itself, over SSH, with `LFA_VERSION="1.7.0"`.
 | `start-linux` (Ubuntu 24.04 · XFCE4 · Termux:X11) | desktop live; `xfce4-session`, `xfwm4`, `xfce4-panel`, `xfdesktop` running |
 | `stop-linux` | `termux-x11` gone, `.X11-unix` empty, `.X1-lock` removed |
 | Alpine CLI install + uninstall | installed in 5m11s, `user` + sudo ritual present; uninstall removed the rootfs, pidfile, log and runtime dir (#49) |
+| Documentation gate (Z) | guide present, both index links resolve, every relative doc link resolves |
 | Every install-menu application (v1.7.1) | Python 3.12.3, Git 2.43.0, Node 26.13.0/npm 11.20.0, curl 8.5.0, wget 1.21.4, neofetch 7.1.0, htop 3.3.0, VS Code 1.144.0, Firefox, Chromium, LibreOffice 24.2, VLC, GIMP, Antigravity — all launch |
 
 Screenshot (2026-10-31, real device):
