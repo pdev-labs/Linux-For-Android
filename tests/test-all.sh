@@ -898,7 +898,7 @@ if python3 - "$REPO" <<'PY'
 import os, re, sys
 repo = sys.argv[1]
 docs = os.path.join(repo, "docs")
-files = ["README.md"] + [
+files = [f for f in sorted(os.listdir(repo)) if f.endswith(".md")] + [
     os.path.join("docs", f) for f in sorted(os.listdir(docs)) if f.endswith(".md")
 ]
 bad = []
