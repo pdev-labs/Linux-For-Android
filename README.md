@@ -22,10 +22,12 @@
 ## 📖 Table of Contents
 - [Quick start](#-quick-start)
 - [Screenshots](#-screenshots)
+- [About the project](#-about-the-project)
 - [Verified on real hardware](#-verified-on-real-hardware)
 - [Hard problems solved](#-hard-problems-solved)
 - [GNOME (experimental)](#-gnome-experimental)
 - [Key features](#-key-features)
+- [Installation](#-installation)
 - [First-run setup](#-first-run-setup)
 - [Older devices (Android 5/6)](#-older-devices-android-56-eg-oppo-a37fw--verified-guide)
 - [Usage guide](#-usage-guide)
