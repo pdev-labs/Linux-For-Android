@@ -6,7 +6,7 @@ Status values:
 
 | Status | Meaning |
 |---|---|
-| `done` | code changed, suite green (`PASS=352 FAIL=0`), lint clean |
+| `done` | code changed, suite green (`PASS=356 FAIL=0`), lint clean |
 | `partial` | the main risk is addressed; a documented remainder is listed |
 | `deferred` | deliberately not fixed in this pass, reason recorded |
 | `device` | additionally exercised on the Vivo V2437 |
@@ -126,11 +126,11 @@ Lint: `shellcheck -S warning` clean · `bash -n` clean · CI workflow added.
 
 | When | What | Result |
 |---|---|---|
-| 2026-10-31 | Host suite, every change | `PASS=352 FAIL=0` |
+| 2026-10-31 | Host suite, every change | `PASS=356 FAIL=0` |
 | 2026-10-31 | `shellcheck -S warning` (install + lib + tests) | clean |
 | 2026-10-31 | `bash -n` / `sh -n` on every script | clean |
 | 2026-10-31 | CLI surface on host | `--version`, `--help`, `--bogus` → exit 2 |
-| 2026-10-31 | **Device suite** (Vivo V2437, Android 16) | `PASS=352 FAIL=0` |
+| 2026-10-31 | **Device suite** (Vivo V2437, Android 16) | `PASS=356 FAIL=0` |
 | 2026-10-31 | Device CLI | `--version`, `--help`, `--list`, `--diagnostics` OK |
 | 2026-10-31 | Device diagnostics bundle | `report.txt`, launchers, redacted conf; mode 0600 |
 | 2026-10-31 | Menu 12 on the existing Ubuntu install | statoverride sanitised, snapd pinned, launchers regenerated |
@@ -141,6 +141,9 @@ Lint: `shellcheck -S warning` clean · `bash -n` clean · CI workflow added.
 | 2026-10-31 | GitHub repo metadata | description, homepage, 20 topics, Discussions enabled |
 | 2026-11-01 | **All install-menu software on the Vivo** | Python 3.12.3, Git 2.43.0, Node 26.13.0/npm 11.20.0, curl 8.5.0, wget 1.21.4, neofetch 7.1.0, htop 3.3.0, VS Code 1.144.0, Firefox, Chromium, LibreOffice 24.2, VLC, GIMP, Antigravity — every one launches |
 | 2026-11-01 | VS Code via the desktop entry | window opens after the `--no-sandbox` wrapper (#55) |
+| 2026-11-01 | Detailed troubleshooting guide | `docs/TROUBLESHOOTING.md`: 13 areas, 47 internal links, error-string index, recovery ladder |
+| 2026-11-01 | Documentation link gate | suite now checks the guide, both index links and every relative doc link (`PASS=356 FAIL=0`) |
+| 2026-11-01 | Screenshot privacy pass | notification-bar app icons and the "3 devices" chip removed from all nine phone screenshots |
 
 ### Findings that only appeared on hardware
 

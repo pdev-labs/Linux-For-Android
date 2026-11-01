@@ -36,6 +36,11 @@ dates, not tag names, define the order — see the table at the bottom.
   optional selector skipped, per-distro package names, the extra steps for
   VS Code / Firefox / Chromium / Antigravity, why an app "does not open", and
   screenshots of every application running on the phone.
+- New **docs/TROUBLESHOOTING.md**: evidence collection, installation/apt
+  repair, X11 and VNC, sandboxed apps, audio, storage, SSH, Android process
+  limits, recovery ladder and an error-string index.
+- Device screenshots no longer show notification-bar app icons or the status
+  chip; the session itself is unchanged.
 
 ### Verified
 

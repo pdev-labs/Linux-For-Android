@@ -5,6 +5,7 @@ Start here if you want to understand the project rather than install it.
 | Document | What it answers |
 |---|---|
 | [README](../README.md) | What it does, screenshots, install, troubleshooting |
+| [TROUBLESHOOTING.md](TROUBLESHOOTING.md) | Detailed diagnosis: evidence, root causes, verification, recovery |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | How the installer, launchers and display back ends fit together |
 | [DECISIONS.md](DECISIONS.md) | Why proot, why no Wayland, why the sudo shim is a ritual |
 | [TEST-REPORT.md](TEST-REPORT.md) | What was verified, on which device, with which version |
@@ -20,5 +21,6 @@ Start here if you want to understand the project rather than install it.
 1. `README.md` quick start — you should be able to run the suite.
 2. `ARCHITECTURE.md` — the mental model in ten minutes.
 3. `DECISIONS.md` — so you do not re-propose Wayland or systemd.
-4. `issues.md` — pick something marked *partial* or *deferred*.
-5. `CONTRIBUTING.md` — the lint and device-test gate before a pull request.
+4. `TROUBLESHOOTING.md` — the failure modes users actually hit.
+5. `issues.md` — pick something marked *partial* or *deferred*.
+6. `CONTRIBUTING.md` — the lint and device-test gate before a pull request.

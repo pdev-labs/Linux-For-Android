@@ -890,6 +890,39 @@ LFA_ROOT="$CLIROOT" LFA_USER=cliuser LFA_DISTRO=ubuntu LFA_DE=none LFA_MODE=dark
 [ ! -e "$CLIROOT/usr/share/backgrounds/lfa-default.jpg" ] && [ ! -e "$CLIROOT/home/cliuser" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: X CLI-only wallpaper not skipped"; }
 
 echo ""
+echo "===== Z: documentation links ====="
+[ -s "$REPO/docs/TROUBLESHOOTING.md" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Z troubleshooting guide missing"; }
+grep -qF 'docs/TROUBLESHOOTING.md' "$REPO/README.md" && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Z README does not link the troubleshooting guide"; }
+grep -qF 'TROUBLESHOOTING.md' "$REPO/docs/README.md" && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Z docs index does not link the troubleshooting guide"; }
+if python3 - "$REPO" <<'PY'
+import os, re, sys
+repo = sys.argv[1]
+docs = os.path.join(repo, "docs")
+files = ["README.md"] + [
+    os.path.join("docs", f) for f in sorted(os.listdir(docs)) if f.endswith(".md")
+]
+bad = []
+for rel in files:
+    path = os.path.join(repo, rel)
+    with open(path, encoding="utf-8") as fh:
+        text = fh.read()
+    base = os.path.dirname(rel)
+    for target in re.findall(r"\]\(([^)]+)\)", text):
+        if target.startswith(("http://", "https://", "#", "mailto:")):
+            continue
+        target = target.split("#", 1)[0]
+        if not target:
+            continue
+        full = os.path.normpath(os.path.join(repo, base, target))
+        if not os.path.exists(full):
+            bad.append(f"{rel}: {target}")
+if bad:
+    print("broken relative links: " + ", ".join(bad))
+    sys.exit(1)
+PY
+then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: Z broken relative documentation link"; fi
+
+echo ""
 # #29: the README must state the real numbers, or the docs rot silently.
 if [ "$fail" -eq 0 ]; then
     if ! grep -qF "PASS=$pass FAIL=0" "$REPO/README.md" 2>/dev/null; then

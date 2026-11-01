@@ -32,7 +32,7 @@
 - [Older devices (Android 5/6)](#-older-devices-android-56-eg-oppo-a37fw--verified-guide)
 - [Usage guide](#-usage-guide)
 - [Software and app fixes](#-software-and-app-fixes)
-- [Troubleshooting index](#️-troubleshooting-index)
+- [Troubleshooting index](#️-troubleshooting-index) · [detailed guide](docs/TROUBLESHOOTING.md)
 - [Architecture](docs/ARCHITECTURE.md) · [Design decisions](docs/DECISIONS.md) · [Changelog](CHANGELOG.md)
 - [Known issues](issues.md) · [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md)
 - [License](#-license)
@@ -56,7 +56,8 @@ or newer. The installer checks free space before it starts.
 
 ## 🖼 Screenshots
 
-All captured on real devices, not mockups.
+All captured on real devices, not mockups. Notification-bar icons are removed;
+everything below the status bar is the live session.
 
 | Ubuntu 24.04 · XFCE | Ubuntu · dark mode |
 |---|---|
@@ -122,7 +123,7 @@ hardware, not just simulated. Full details, root causes and evidence:
 | Alpine 3.18 (Android 5) | ✅ | ✅ | legacy VNC desktop, panel works | v1.7.0 |
 | Ubuntu GNOME 46 (experimental) | ✅ | ✅ | shell and apps run; session services missing | v1.7.0 |
 
-> Test suite: `352` checks, `0` failures — the same suite is what runs on the
+> Test suite: `356` checks, `0` failures — the same suite is what runs on the
 > devices (`tests/device-matrix.sh`). The table above is **as of v1.7.1**
 > (Ubuntu re-verified on v1.7.1; the other rows were last verified on v1.7.0).
 > A row is only marked verified after a real install on the device named above.
@@ -724,6 +725,11 @@ Node 26.13.0, npm 11.20.0, curl 8.5.0, wget 1.21.4, neofetch 7.1.0, htop 3.3.0.
 
 ## 🛠️ Troubleshooting index
 
+> **Detailed guide:** **[docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md)**
+> covers evidence collection, the root cause of each failure, verification
+> steps, the recovery ladder and an error-string index. The entries below are
+> the short version.
+
 Jump to a symptom:
 
 | Symptom | Entry |
@@ -934,7 +940,7 @@ installs; needs only `bash`, `coreutils`, `timeout`, and `python3` (plus
 `script` from util-linux for the pty test, skipped if absent):
 ```bash
 chmod +x tests/test-all.sh
-./tests/test-all.sh   # expect: PASS=352 FAIL=0
+./tests/test-all.sh   # expect: PASS=356 FAIL=0
 ```
 
 The suite is deliberately stubbed — it cannot prove a desktop actually
