@@ -561,10 +561,13 @@ LFA_ROOT="$GN2" LFA_USER=guser LFA_DE=xfce4 sh "$REPO/lib/real-feel.sh" >/dev/nu
 
 echo "===== M4: stale display :1 is released but a live server is respected ====="
 SP="$T/staleprefix"
-mkdir -p "$SP/tmp/.X11-unix"
+# Hide any real desktop session on the test machine: the scanner reads
+# /proc by default, so a running termux-x11 would (correctly) keep the
+# socket and make these assertions environment-dependent.
+mkdir -p "$SP/tmp/.X11-unix" "$T/emptyproc"
 : > "$SP/tmp/.X11-unix/X1"
 printf '999999\n' > "$SP/tmp/.X1-lock"
-( PREFIX="$SP"; . "$T/prefix/bin/lfa-lib.sh"; lfa_clear_stale_x1 )
+( PREFIX="$SP"; export LFA_X1_PROC_ROOT="$T/emptyproc"; . "$T/prefix/bin/lfa-lib.sh"; lfa_clear_stale_x1 )
 [ ! -e "$SP/tmp/.X11-unix/X1" ] && [ ! -e "$SP/tmp/.X1-lock" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: M4 stale X1 socket/lock not removed"; }
 : > "$SP/tmp/.X11-unix/X1"
 # exec -a on a multicall binary (Termux's sleep is coreutils) fails there,
@@ -596,7 +599,7 @@ if [ -e "$SP/tmp/.X11-unix/X1" ]; then pass=$((pass+1)); else
 fi
 kill "$FAKE_P" 2>/dev/null
 wait "$FAKE_P" 2>/dev/null
-( PREFIX="$SP"; . "$T/prefix/bin/lfa-lib.sh"; lfa_clear_stale_x1 )
+( PREFIX="$SP"; export LFA_X1_PROC_ROOT="$T/emptyproc"; . "$T/prefix/bin/lfa-lib.sh"; lfa_clear_stale_x1 )
 [ ! -e "$SP/tmp/.X11-unix/X1" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: M4 socket not released after server exit"; }
 
 echo "===== M5: CLI surface (--version/--help/--list) exits cleanly ====="

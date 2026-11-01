@@ -2112,9 +2112,11 @@ lfa_x1_server_pid() {
     # No usable lock (or it points at something else): scan /proc directly.
     # pgrep -f is avoided on purpose - its pattern language differs between
     # procps and busybox builds, and the match must be on argv[0].
-    for c in /proc/[0-9]*/cmdline; do
+    # LFA_X1_PROC_ROOT exists so the test suite can hide a real desktop
+    # session while it exercises this function; production always uses /proc.
+    for c in "${LFA_X1_PROC_ROOT:-/proc}"/[0-9]*/cmdline; do
         [ -r "$c" ] || continue
-        pid="${c#/proc/}"; pid="${pid%/cmdline}"
+        pid="${c%/*}"; pid="${pid##*/}"
         [ "$pid" = "$$" ] && continue
         local _cmd
         _cmd=$(tr '\0' ' ' < "$c" 2>/dev/null) || continue
