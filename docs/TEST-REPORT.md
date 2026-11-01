@@ -9,7 +9,7 @@ This release is a hardening pass driven by the audit in `issues.md`
 
 | Check | Result |
 |---|---|
-| Host suite (`./tests/test-all.sh`) | `PASS=344 FAIL=0` |
+| Host suite (`./tests/test-all.sh`) | `PASS=352 FAIL=0` |
 | `shellcheck -S warning install_linux.sh lib/*.sh tests/*.sh` | clean |
 | `bash -n` / `sh -n` on every script | clean |
 | CLI surface (`--version`, `--help`, unknown option) | exit 0 / 0 / 2 |
@@ -27,7 +27,7 @@ below ran on the phone itself, over SSH, with `LFA_VERSION="1.7.0"`.
 
 | Check | Result |
 |---|---|
-| `./tests/test-all.sh` on the phone | `PASS=344 FAIL=0` |
+| `./tests/test-all.sh` on the phone | `PASS=352 FAIL=0` |
 | `./install_linux.sh --version` | `Linux for Android Manager 1.7.0` |
 | `./install_linux.sh --help` | lists all flags, exit 0 |
 | `./install_linux.sh --list` | `ubuntu` |
@@ -36,6 +36,7 @@ below ran on the phone itself, over SSH, with `LFA_VERSION="1.7.0"`.
 | `start-linux` (Ubuntu 24.04 · XFCE4 · Termux:X11) | desktop live; `xfce4-session`, `xfwm4`, `xfce4-panel`, `xfdesktop` running |
 | `stop-linux` | `termux-x11` gone, `.X11-unix` empty, `.X1-lock` removed |
 | Alpine CLI install + uninstall | installed in 5m11s, `user` + sudo ritual present; uninstall removed the rootfs, pidfile, log and runtime dir (#49) |
+| Every install-menu application (v1.7.1) | Python 3.12.3, Git 2.43.0, Node 26.13.0/npm 11.20.0, curl 8.5.0, wget 1.21.4, neofetch 7.1.0, htop 3.3.0, VS Code 1.144.0, Firefox, Chromium, LibreOffice 24.2, VLC, GIMP, Antigravity — all launch |
 
 Screenshot (2026-10-31, real device):
 
