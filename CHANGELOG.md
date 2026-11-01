@@ -30,6 +30,13 @@ dates, not tag names, define the order — see the table at the bottom.
 - Antigravity's launcher is recreated during migration if `/opt` survived
   but `/usr/local/bin/antigravity` did not.
 
+### Documentation
+
+- New README section **Software and app fixes**: installing anything the
+  optional selector skipped, per-distro package names, the extra steps for
+  VS Code / Firefox / Chromium / Antigravity, why an app "does not open", and
+  screenshots of every application running on the phone.
+
 ### Verified
 
 - Every application in the install menu on the Vivo V2437: Python 3.12.3,

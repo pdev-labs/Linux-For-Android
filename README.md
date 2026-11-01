@@ -29,6 +29,7 @@
 - [First-run setup](#-first-run-setup)
 - [Older devices (Android 5/6)](#-older-devices-android-56-eg-oppo-a37fw--verified-guide)
 - [Usage guide](#-usage-guide)
+- [Software and app fixes](#-software-and-app-fixes)
 - [Troubleshooting index](#-troubleshooting-index)
 - [Architecture](docs/ARCHITECTURE.md) · [Design decisions](docs/DECISIONS.md) · [Changelog](CHANGELOG.md)
 - [Known issues](issues.md) · [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md)
@@ -71,6 +72,10 @@ All captured on real devices, not mockups.
 
 ![](docs/screenshots/oppo-android5-alpine-vnc.png)
 
+Application screenshots — VS Code, Firefox, Chromium, LibreOffice, GIMP, VLC,
+Antigravity and the CLI tools — are in
+**[Software and app fixes](#-software-and-app-fixes)**.
+
 ## 🌟 About the Project
 
 Turning your Android device into a full-fledged Linux workstation has never been easier. **Linux for Android Manager** is a fully automated, interactive bash script that wraps around `proot-distro` to install, manage, backup, share, update, and configure highly customized graphical Linux environments directly on your smartphone or tablet.
@@ -105,7 +110,7 @@ hardware, not just simulated. Full details, root causes and evidence:
 
 | Distro | Install | Live desktop | Notes | Verified on |
 |---|---|---|---|---|
-| Ubuntu 24.04 | ✅ | ✅ | light and dark, clean first login | v1.7.0 |
+| Ubuntu 24.04 | ✅ | ✅ | light and dark, clean first login | v1.7.1 |
 | Kali Rolling | ✅ | ✅ | | v1.7.0 |
 | Fedora 44 | ✅ | ✅ | | v1.7.0 |
 | openSUSE Tumbleweed | ✅ | ✅ | first login shows a PulseAudio panel warning | v1.7.0 |
@@ -116,8 +121,9 @@ hardware, not just simulated. Full details, root causes and evidence:
 | Ubuntu GNOME 46 (experimental) | ✅ | ✅ | shell and apps run; session services missing | v1.7.0 |
 
 > Test suite: `352` checks, `0` failures — the same suite is what runs on the
-> devices (`tests/device-matrix.sh`). The table above is **as of v1.7.0**; a
-> row is only marked verified after a real install on the device named above.
+> devices (`tests/device-matrix.sh`). The table above is **as of v1.7.1**
+> (Ubuntu re-verified on v1.7.1; the other rows were last verified on v1.7.0).
+> A row is only marked verified after a real install on the device named above.
 
 Fresh v1.7.0 capture — Ubuntu 24.04 · XFCE4 · Termux:X11 on the Vivo V2437
 (Android 16), 2026-10-31, with the suite and `--diagnostics` verified in the
@@ -358,11 +364,15 @@ Colours turn off automatically with `NO_COLOR=1` or when output is not a termina
 - **Guided setup** — walks through distro (with a recommendation for your
   device), desktop (XFCE4 / LXDE / MATE / CLI, plus experimental GNOME on
   supported distros), **light/dark wallpaper mode**, display server, hardware
-  acceleration, resolution, software, instance name, username, user + root
+  acceleration, resolution, software (optional — see
+  [Software and app fixes](#-software-and-app-fixes)), instance name, username, user + root
   passwords (typed blind), timezone, hostname, prompt style, autostart,
   storage, SSH, and widget — then shows a summary (passwords masked) and
   installs without asking twice.
-- **Manager menu** — Install, update, repair (Doctor), backup, restore, export/import, SSH, browser acceleration, migration and uninstall, all in the same arrow-key UI.
+- **Manager menu** — Install, update, repair (Doctor), backup, restore,
+  export/import, SSH, browser acceleration, migration and uninstall, all in
+  the same arrow-key UI. **Menu 12** also rewrites the proot-safe launchers
+  for VS Code, Chromium and Antigravity on an existing distro.
 
 Answers are saved to `~/.config/linux-for-android/setup.conf` (`0600`,
 passwords base64-encoded, never plaintext). If the file exists you get a
@@ -486,6 +496,230 @@ To safely kill the desktop, display servers, and audio systems, type:
 stop-linux
 ```
 
+## 📦 Software and app fixes
+
+The **Software Selector** in the installer is optional. Skipping it costs
+nothing — the desktop still installs, and every entry is either a normal
+package or a vendor download you can add later. You never need to reinstall
+the distro just to add one.
+
+### Add software after installation
+
+Open the **root terminal** (option 2 in `start-linux`); it needs no password:
+
+```bash
+start-linux     # 1) full desktop   2) root terminal   3) user terminal
+```
+
+From a user terminal you can also use `sudo`, which asks for the password you
+chose during setup. Then install with your distro's package manager:
+
+| Distro family | Package manager |
+|---|---|
+| Ubuntu / Debian / Kali | `apt install -y <packages>` |
+| Fedora | `dnf install -y <packages>` |
+| openSUSE | `zypper install -y <packages>` |
+| Arch Linux | `pacman -S --noconfirm <packages>` |
+| Void Linux | `xbps-install -y <packages>` |
+| Alpine Linux | `apk add <packages>` |
+
+Everything the selector offers, in one copy-paste block:
+
+```bash
+# Ubuntu / Debian / Kali  (root terminal, no sudo needed)
+apt update
+apt install -y python3 python3-pip git nodejs npm curl wget htop \
+               neofetch vlc gimp libreoffice
+
+# Fedora
+dnf install -y python3 python3-pip git nodejs npm curl wget htop \
+               neofetch vlc gimp libreoffice
+
+# openSUSE
+zypper install -y python3 python3-pip git nodejs npm curl wget htop \
+                 neofetch vlc gimp libreoffice MozillaFirefox
+
+# Arch Linux
+pacman -S --noconfirm python python-pip git nodejs npm curl wget htop \
+                       neofetch vlc gimp libreoffice-fresh
+
+# Void Linux
+xbps-install -y python3 python3-pip git nodejs npm curl wget htop \
+                neofetch vlc gimp libreoffice
+
+# Alpine Linux (no neofetch; fastfetch is the replacement)
+apk add python3 py3-pip git nodejs npm curl wget htop \
+        fastfetch vlc gimp libreoffice
+```
+
+> The `nodejs` in the distro repositories can be old. For a current Node, use
+> [NodeSource](https://github.com/nodesource/distributions) or `nvm`; the
+> installer does not pin a Node version.
+>
+> **Fedora:** `vlc` is not in the default repositories. Enable
+> [RPM Fusion](https://rpmfusion.org/Configuration) first if `dnf install vlc`
+> says the package cannot be found. The same applies to some codecs.
+
+### Apps that need extra steps
+
+**VS Code** — Ubuntu/Debian/Kali have no Microsoft package configured by
+default. From the root terminal:
+
+```bash
+apt install -y wget gpg
+install -d -m 0755 /etc/apt/keyrings
+rm -f /etc/apt/keyrings/packages.microsoft.gpg
+wget -qO- https://packages.microsoft.com/keys/microsoft.asc \
+  | gpg --dearmor > /etc/apt/keyrings/packages.microsoft.gpg
+chmod 644 /etc/apt/keyrings/packages.microsoft.gpg
+echo "deb [arch=arm64 signed-by=/etc/apt/keyrings/packages.microsoft.gpg] \
+https://packages.microsoft.com/repos/code stable main" \
+  > /etc/apt/sources.list.d/vscode.list
+apt update && apt install -y code
+```
+
+The installer checks the Microsoft signing key fingerprint
+(`BC528686B50D79E339D3721CEB3E94ADBE1229CF`) before trusting this repository;
+when you add it by hand, you are trusting the key you just downloaded.
+
+Then add the proot launcher (**required** — without it VS Code exits silently):
+
+```bash
+cat > /usr/local/bin/code <<'EOF'
+#!/bin/sh
+# proot has no setuid sandbox; Electron aborts without this flag.
+exec /usr/share/code/code --no-sandbox --disable-gpu "$@"
+EOF
+chmod 755 /usr/local/bin/code
+```
+
+Other distros use different packages for the editor:
+
+| Distro | How to get VS Code |
+|---|---|
+| Fedora / openSUSE | Add the Microsoft repo above, then `dnf install code` / `zypper install code` |
+| Arch Linux | `pacman -S code` (or `yay -S visual-studio-code-bin` for the Microsoft build) |
+| Void Linux | `xbps-install -y vscode` (Code OSS build) |
+| Alpine | No ARM64 build — use `code-oss` from the community repo if you only need the editor |
+
+Running **menu 12 (Apply Latest Fixes)** does the wrapper step for you — even
+for a VS Code installed by hand — and repoints the desktop entry so the
+application menu uses the wrapper.
+
+**Firefox on Ubuntu** — the store package is a snap and snaps cannot run in
+proot. Use Mozilla's own ARM64 build:
+
+```bash
+apt install -y curl ca-certificates xz-utils
+curl -fL 'https://download.mozilla.org/?product=firefox-latest-ssl&os=linux64-aarch64&lang=en-US' \
+  -o /tmp/firefox.tar.xz
+mkdir -p /opt && tar -xJf /tmp/firefox.tar.xz -C /opt
+ln -sf /opt/firefox/firefox /usr/local/bin/firefox
+```
+
+**Chromium on Ubuntu** — also snap-only upstream. The installer uses the
+Debian arm64 build instead:
+
+```bash
+apt install -y curl ca-certificates gnupg debian-archive-keyring
+echo 'deb [signed-by=/usr/share/keyrings/debian-archive-keyring.gpg] \
+http://deb.debian.org/debian bookworm main' \
+  > /etc/apt/sources.list.d/debian-chromium.list
+printf 'Package: *\nPin: release n=bookworm\nPin-Priority: 100\n' \
+  > /etc/apt/preferences.d/99-lfa-debian
+apt update && apt install -y chromium chromium-common
+```
+
+Chromium also needs `--no-sandbox`; menu 12 writes that wrapper
+(`--no-sandbox --disable-dev-shm-usage`), or:
+
+```bash
+cat > /usr/local/bin/chromium <<'EOF'
+#!/bin/sh
+exec /usr/bin/chromium --no-sandbox --disable-dev-shm-usage "$@"
+EOF
+chmod 755 /usr/local/bin/chromium
+```
+
+**Antigravity IDE** — download the *linux-arm* archive from
+<https://antigravity.google/download>, then:
+
+```bash
+mkdir -p /opt/antigravity-ide
+tar -xzf Antigravity-IDE.tar.gz -C /opt/antigravity-ide --strip-components=1
+cat > /usr/local/bin/antigravity <<'EOF'
+#!/bin/sh
+exec /opt/antigravity-ide/antigravity-ide --no-sandbox --disable-gpu --use-gl=swiftshader "$@"
+EOF
+chmod 755 /usr/local/bin/antigravity
+```
+
+### Check that it worked
+
+```bash
+command -v code chromium firefox libreoffice gimp vlc   # prints a path per app
+code --version
+```
+
+GUI apps then appear in the XFCE menu under **Applications**, or in a
+terminal inside the desktop session:
+
+```bash
+code ~/project        # editor
+chromium &            # browser
+libreoffice --writer  # word processor
+```
+
+If a newly installed app is missing from the menu, refresh the cache:
+
+```bash
+update-desktop-database /usr/share/applications 2>/dev/null || true
+```
+
+### Verified: CLI tools
+
+![](docs/screenshots/cli-tools-x11.png)
+
+### Why an app "does not open"
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| VS Code, Chromium or Antigravity do nothing at all | proot cannot provide a setuid sandbox; Electron aborts, the CLI still exits 0 | v1.7.1 writes `--no-sandbox` wrappers automatically; on an older install run **menu 12** |
+| Firefox shows *"The security sandbox is disabled"* | same limitation, Mozilla only warns | harmless; the browser works |
+| Chromium shows *"unsupported command-line flag: --no-sandbox"* | Chromium warns about the flag we must pass | harmless; dismiss the bar |
+| The window opens mostly off-screen, only a strip visible | a saved window position from a different screen size | delete that app's state, e.g. `rm -rf ~/.config/Code`, then reopen |
+| The app vanishes when the terminal closes | GUI apps live inside the `start-linux` session | start them from the desktop menu, not from a one-off shell |
+| `apt` says *"requested operation requires superuser privilege"* | you are in the user terminal | use the root terminal, or prefix with `sudo` |
+
+If something still fails, collect the state and attach it to an issue:
+
+```bash
+./install_linux.sh --diagnostics     # ~/lfa-diagnostics-<date>.tar.gz, secrets removed
+```
+
+### These all run on the phone
+
+Captured on a Vivo V2437 (Android 16) with Ubuntu 24.04, XFCE4 and Termux:X11:
+
+| VS Code 1.144 | Firefox |
+|---|---|
+| ![](docs/screenshots/vscode-x11.png) | ![](docs/screenshots/firefox-x11.png) |
+
+| Chromium | LibreOffice Writer 24.2 |
+|---|---|
+| ![](docs/screenshots/chromium-x11.png) | ![](docs/screenshots/libreoffice-writer-x11.png) |
+
+| GIMP | VLC |
+|---|---|
+| ![](docs/screenshots/gimp-x11.png) | ![](docs/screenshots/vlc-x11.png) |
+
+**Antigravity IDE:**
+
+![](docs/screenshots/antigravity-x11.png)
+
+CLI tools verified in the same session: Python 3.12.3, Git 2.43.0,
+Node 26.13.0, npm 11.20.0, curl 8.5.0, wget 1.21.4, neofetch 7.1.0, htop 3.3.0.
+
 ## 🛠️ Troubleshooting index
 
 Jump to a symptom:
@@ -499,7 +733,7 @@ Jump to a symptom:
 | `unknown system group 'messagebus' in statoverride` | [#5](#5-dpkg-unrecoverable-fatal-error--unknown-system-group-messagebus-in-statoverride-file) |
 | "Cannot establish any listening sockets" | [#6](#6-cannot-establish-any-listening-sockets---make-sure-an-x-server-isnt-already-running) |
 | Termux:X11 stays open after `stop-linux` | [#7](#7-termuxx11-app-stays-open-after-running-stop-linux) |
-| VS Code / Chromium do not open | [Sandboxed apps](#sandboxed-apps-open-and-close-immediately) |
+| VS Code / Chromium do not open | [Sandboxed apps](#17-sandboxed-apps-open-and-close-immediately) |
 | `groups: cannot find name for group ID ...` | [#8](#8-groups-cannot-find-name-for-group-id-99909997-in-a-user-terminal) |
 | Uninstall leaves a ghost distro | [#9](#9-uninstall-says-the-distro-is-gone-but-it-still-appears--incomplete) |
 | Install seems frozen | [#10](#10-installation-seems-frozen-at-setting-up-elementary-xfce-icon-theme) |
@@ -510,8 +744,6 @@ Jump to a symptom:
 
 Everything else — known bugs, limitations and the deferred list — is in
 **[issues.md](issues.md)**.
-
-### 1. The "Phantom Process Killer" (Termux randomly crashes)
 
 ### 1. The "Phantom Process Killer" (Termux randomly crashes)
 Starting in Android 12, Android limits background child processes. Since a Linux desktop requires many processes, Android may suddenly kill Termux (`[Process completed (signal 9)]`).
