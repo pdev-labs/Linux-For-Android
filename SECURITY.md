@@ -47,7 +47,7 @@ In scope:
   instance name, hostname, username, timezone)
 - secret leakage: install passwords, the VNC password, or the sudo shim secret
   ending up readable outside the intended mode-`0600` file
-- trusting a downloaded artifact from a host we should not trust
+- trusting a downloaded artifact from a host that should not be trusted
 - anything that runs code as the *Termux* user without the user asking
 
 Out of scope:

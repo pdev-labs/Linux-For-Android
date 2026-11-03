@@ -54,7 +54,7 @@ proot cannot provide.
 **Cost:** a user can install something that will misbehave; the warning is the
 mitigation (issue #20).
 
-## D7 — no package signing for our own releases
+## D7 — no package signing for this project's own releases
 
 **Decision:** ship releases with notes only, no signed binaries, no assets.
 **Why:** there was nothing to sign — the "product" is the script in the repo.

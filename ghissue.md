@@ -16,7 +16,7 @@ Status column is maintained by hand; see `tracker.md` for code work.
 | G2 | **Description is out of date** — it lists Ubuntu/Debian/Arch/Fedora/openSUSE/Void but omits **Kali, Alpine, Android 5/6 and GNOME**. | ★★★★ | 5 min | done — description names all 8 distros, Android 5.1→16, no root |
 | G3 | **Missing topics:** `gnome`, `vnc`, `x11`, `android-5`, `termux-desktop`, `linux-desktop-android`, `alpine-linux`. | ★★★ | 5 min | done — 20 topics, including vnc/gnome/alpine-linux/android-5 |
 | G4 | **Homepage URL empty** — point it at the latest release or `docs/`. | ★★★ | 2 min | done — points at the latest release |
-| G5 | **40 of 94 commits are authored by `pdev@local`**, so half the contribution graph is invisible. Re-attribute them. | ★★★★ | 30 min | open — history rewrite |
+| G5 | **40 of 94 commits are authored by `pdev@local`**, so half the contribution graph does not show pdev-labs. Re-attribute them to pdev-labs. | ★★★★ | 30 min | open — history rewrite |
 
 ## P1 — Proof it works (highest visual impact)
 

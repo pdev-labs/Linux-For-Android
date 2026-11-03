@@ -13,6 +13,13 @@ dates, not tag names, define the order — see the table at the bottom.
 
 ## [Unreleased]
 
+### Documentation
+
+- Credited **pdev-labs** as the solo author and maintainer throughout the
+  README, contributing guide, code of conduct, and new `AUTHORS.md`.
+- Removed first-person plural wording from project documentation and code
+  comments.
+
 ## [1.7.1] - 2026-11-01
 
 ### Fixed

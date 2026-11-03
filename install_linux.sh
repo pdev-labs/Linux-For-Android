@@ -42,7 +42,7 @@ trap lfa_cleanup EXIT INT TERM
 # ============================================================
 # Interactive UI (npm-style)
 # Arrow keys / Enter / space work on a real terminal. When
-# stdin is piped (CI, `curl | bash`, tests) we fall back to
+# stdin is piped (CI, `curl | bash`, tests) the installer falls back to
 # plain numbered prompts so automation keeps working.
 # ============================================================
 UI_TTY=0
@@ -399,7 +399,7 @@ print_device_info() {
 PD_LEGACY_TAG="v4.2.0"
 install_proot_distro_from_source() {
     echo "[*] Installing proot-distro $PD_LEGACY_TAG from source (legacy fallback)..."
-    # set +e: every step here is best-effort, we check manually
+    # set +e: every step here is best-effort, checked manually
     set +e
     pkg install -y proot wget tar 2>/dev/null || true
     if ! command -v proot >/dev/null 2>&1; then
@@ -2088,7 +2088,8 @@ lfa_conf() {
 # `pgrep -f` match is not proof that anything is running.
 lfa_x1_server_pid() {
     local pid lock="$PREFIX/tmp/.X1-lock" c a0
-    # Is this argv[0] one of the X servers we care about? Compare the basename:
+    # Is this argv[0] one of the X servers this script cares about?
+    # Compare the basename:
     # inside proot the binary is exec'd with an absolute path, and the launcher
     # itself is a bash line that merely *mentions* Xvnc, so neither a bare
     # `pgrep -f Xvnc` nor an anchored `^Xvnc` is correct.
@@ -2402,8 +2403,8 @@ fi
 
 if [ "$SERVER" == "x11" ]; then
     echo "Stopping Termux:X11..."
-    # Match the display we own, not every Termux:X11 the user may have
-    # started (this script manages display :1 only).
+    # Match the display owned by this session, not every Termux:X11 the
+    # user may have started (this script manages display :1 only).
     for _p in $(pgrep -f '^termux-x11 .* :1( |$)' 2>/dev/null); do
         kill "$_p" 2>/dev/null || true
     done
@@ -2416,7 +2417,7 @@ elif [ "$SERVER" == "vnc" ]; then
             if lfa_pid_matches "$VNC_PID" "proot-distro" "proot" "Xvnc"; then
                 kill "$VNC_PID" 2>/dev/null || true
             else
-                echo "  (stale pidfile: PID $VNC_PID is not our VNC session, ignored)"
+                echo "  (stale pidfile: PID $VNC_PID is not the managed VNC session, ignored)"
             fi
         fi
         rm -f "$VNC_PIDFILE"
@@ -3081,7 +3082,7 @@ EOF
     #    statoverride file"), bricking apt.
     # Install a shim that rewrites the file in place and refuses to record
     # unknown users/groups, and sanitise any rows a previous bad state left
-    # behind (e.g. our old unconditional dbus pre-seed).
+    # behind (e.g. the old unconditional dbus pre-seed).
     if [ "$DISTRO" == "ubuntu" ] || [ "$DISTRO" == "debian" ] || [ "$DISTRO" == "kali" ]; then
         SHIM_SRC="$LFA_DIR/lib/dpkg-statoverride.sh"
         if [ -f "$SHIM_SRC" ]; then
@@ -3453,7 +3454,7 @@ $INSTALL_CMD $AG_DEPS || true
 AG_PAGE="\$(curl -fsSL --compressed https://antigravity.google/download/ 2>/dev/null || true)"
 AG_URL="\$(printf '%s' "\$AG_PAGE" | grep -oE 'https://[^"]*/linux-arm/Antigravity%20IDE\.tar\.gz' | head -n1)"
 # Only follow links from the vendor's own hosts: the page is scraped, so it
-# must not be able to point us at an arbitrary server.
+# must not be able to point the installer at an arbitrary server.
 case "\$AG_URL" in
     https://antigravity.google/*|https://*.google.com/*|https://*.googleapis.com/*|https://*.gvt1.com/*) ;;
     *) AG_URL="" ;;

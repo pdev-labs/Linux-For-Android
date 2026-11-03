@@ -1,7 +1,9 @@
 # Contributing
 
-Thanks for helping. This project installs real things on real phones, so the
-bar is "does it work on a device", not "does it look right".
+Linux-For-Android is created and maintained by **pdev-labs**, a solo
+developer. Contributions are welcome. This project installs real things on
+real phones, so the bar is "does it work on a device", not "does it look
+right".
 
 ## Quick rules
 

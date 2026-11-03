@@ -1,6 +1,7 @@
 <div align="center">
   <h1>🐧 Linux for Android Manager</h1>
   <p><b>Run a real Linux desktop — Ubuntu, Debian, Kali, Arch, Fedora, openSUSE, Void or Alpine — on an Android phone.<br>One script, no root, verified on a 2016 phone and a 2026 phone.</b></p>
+  <p><b>Created, designed, and maintained by <a href="https://github.com/pdev-labs">pdev-labs</a> — a solo developer.</b></p>
   <p>
     <a href="https://github.com/pdev-labs/Linux-For-Android/actions/workflows/ci.yml"><img src="https://github.com/pdev-labs/Linux-For-Android/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
     <img src="https://img.shields.io/github/v/release/pdev-labs/Linux-For-Android" alt="Latest release">
@@ -35,6 +36,7 @@
 - [Troubleshooting index](#️-troubleshooting-index) · [detailed guide](docs/TROUBLESHOOTING.md)
 - [Architecture](docs/ARCHITECTURE.md) · [Design decisions](docs/DECISIONS.md) · [Changelog](CHANGELOG.md)
 - [Known issues](issues.md) · [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md)
+- [Credits](#-credits)
 - [License](#-license)
 
 ## ⚡ Quick start
@@ -689,7 +691,7 @@ update-desktop-database /usr/share/applications 2>/dev/null || true
 |---|---|---|
 | VS Code, Chromium or Antigravity do nothing at all | proot cannot provide a setuid sandbox; Electron aborts, the CLI still exits 0 | v1.7.1 writes `--no-sandbox` wrappers automatically; on an older install run **menu 12** |
 | Firefox shows *"The security sandbox is disabled"* | same limitation, Mozilla only warns | harmless; the browser works |
-| Chromium shows *"unsupported command-line flag: --no-sandbox"* | Chromium warns about the flag we must pass | harmless; dismiss the bar |
+| Chromium shows *"unsupported command-line flag: --no-sandbox"* | Chromium warns about the flag the launcher must pass | harmless; dismiss the bar |
 | The window opens mostly off-screen, only a strip visible | a saved window position from a different screen size | delete that app's state, e.g. `rm -rf ~/.config/Code`, then reopen |
 | The app vanishes when the terminal closes | GUI apps live inside the `start-linux` session | start them from the desktop menu, not from a one-off shell |
 | `apt` says *"requested operation requires superuser privilege"* | you are in the user terminal | use the root terminal, or prefix with `sudo` |
@@ -918,7 +920,7 @@ update-desktop-database /usr/share/applications 2>/dev/null || true
 ```
 
 Chromium needs `--no-sandbox --disable-dev-shm-usage`; the menu 12 wrapper adds
-both. This is a proot limitation, not a bug we can fix in the apps.
+both. This is a proot limitation, not a bug that can be fixed in the apps.
 
 ## 🤝 Contributing
 
@@ -946,6 +948,28 @@ chmod +x tests/test-all.sh
 The suite is deliberately stubbed — it cannot prove a desktop actually
 appears. The results of doing exactly that on two physical devices are in
 **[docs/TEST-REPORT.md](docs/TEST-REPORT.md)**.
+
+## 👤 Credits
+
+**Linux-For-Android is created, designed, and maintained by
+[pdev-labs](https://github.com/pdev-labs), a solo developer.**
+
+All original code, documentation, tests, screenshots, and release work in this
+repository are by pdev-labs. The project is not a team effort, and it does not
+claim credit for upstream work. See [AUTHORS.md](AUTHORS.md).
+
+It builds on these upstream projects:
+
+- [Termux](https://termux.dev/) — the Android terminal and package environment
+- [proot-distro](https://github.com/termux/proot-distro) — the container manager
+- [Termux:X11](https://github.com/termux/termux-x11) — the X11 display server
+- [TigerVNC](https://tigervnc.org/) — the VNC server
+- [VirGL](https://virglrenderer.github.io/) — 3D acceleration
+- The eight supported distributions and their package maintainers
+
+Those projects are dependencies and are credited as such. The Linux-For-Android
+installer, documentation, tests, and release engineering are the work of
+pdev-labs.
 
 ## 📝 License
 

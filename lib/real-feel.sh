@@ -181,7 +181,7 @@ mkdir -p "$R/var/lib/dbus" 2>/dev/null || true
 # gnome-session cannot run under proot (no systemd user session, no logind),
 # so GNOME is started by launching gnome-shell on X11 directly. This wrapper
 # also applies the wallpaper, because XDG autostart entries are only processed
-# by gnome-session, which we deliberately do not run.
+# by gnome-session, which this session deliberately does not run.
 if [ "${LFA_DE:-}" = "gnome" ] || [ -x "$R/usr/bin/gnome-shell" ] || \
    [ -x "$R/usr/local/bin/gnome-shell" ]; then
     cat > "$R/usr/local/bin/start-gnome-session" <<'LFA_GNOME'
@@ -191,7 +191,7 @@ export XDG_CURRENT_DESKTOP=GNOME
 export XDG_SESSION_DESKTOP=gnome
 export XDG_SESSION_TYPE=x11
 export GDK_BACKEND=x11
-# proot starts us with an empty LANG, which glib reports as
+# proot starts the guest with an empty LANG, which glib reports as
 # ANSI_X3.4-1968. GTK/GNOME apps then refuse to start with
 # "Non UTF-8 locale (ANSI_X3.4-1968) is not supported!" (gnome-terminal
 # exits with status 8). C.UTF-8 ships with glibc, so it always exists.

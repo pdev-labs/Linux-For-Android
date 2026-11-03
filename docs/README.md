@@ -5,6 +5,7 @@ Start here if you want to understand the project rather than install it.
 | Document | What it answers |
 |---|---|
 | [README](../README.md) | What it does, screenshots, install, troubleshooting |
+| [AUTHORS.md](../AUTHORS.md) | Project authorship and credits |
 | [TROUBLESHOOTING.md](TROUBLESHOOTING.md) | Detailed diagnosis: evidence, root causes, verification, recovery |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | How the installer, launchers and display back ends fit together |
 | [DECISIONS.md](DECISIONS.md) | Why proot, why no Wayland, why the sudo shim is a ritual |

@@ -1,22 +1,22 @@
 # Contributor Covenant Code of Conduct
 
-## Our pledge
+## Pledge
 
-We as members, contributors, and leaders pledge to make participation in our
+Members, contributors, and leaders pledge to make participation in this
 community a harassment-free experience for everyone, regardless of age, body
 size, visible or invisible disability, ethnicity, sex characteristics, gender
 identity and expression, level of experience, education, socio-economic
 status, nationality, personal appearance, race, religion, or sexual identity
 and orientation.
 
-## Our standards
+## Standards
 
 Examples of behaviour that contributes to a positive environment:
 
 - Demonstrating empathy and kindness toward other people
 - Being respectful of differing opinions, viewpoints, and experiences
 - Giving and gracefully accepting constructive feedback
-- Accepting responsibility and apologising to those affected by our mistakes
+- Accepting responsibility and apologising to those affected by their mistakes
 - Focusing on what is best for the community
 
 Examples of unacceptable behaviour:
@@ -30,9 +30,9 @@ Examples of unacceptable behaviour:
 
 ## Enforcement responsibilities
 
-Project maintainers are responsible for clarifying and enforcing these
+The maintainer, pdev-labs, is responsible for clarifying and enforcing these
 standards and will take appropriate and fair corrective action in response to
-any behaviour they deem inappropriate, threatening, offensive, or harmful.
+any behaviour deemed inappropriate, threatening, offensive, or harmful.
 
 ## Scope
 
@@ -43,7 +43,7 @@ officially representing the community in public spaces.
 ## Enforcement
 
 Instances of abusive, harassing, or otherwise unacceptable behaviour may be
-reported to the maintainers through the contact route in
+reported to the maintainer through the contact route in
 [SECURITY.md](SECURITY.md). All complaints will be reviewed and investigated
 promptly and fairly, and the privacy and security of the reporter will be
 respected.
