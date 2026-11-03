@@ -16,6 +16,6 @@ Device / distro / backend used:
 
 ## Checklist
 
-- [ ] No secrets, passwords or personal paths in the diff or logs
+- [ ] No secrets, passwords, or personal paths in the diff or logs
 - [ ] Docs updated if behaviour or the test count changed
 - [ ] `README.md` numbers still match the suite (the suite enforces this)

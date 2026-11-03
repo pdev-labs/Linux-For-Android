@@ -1,8 +1,7 @@
 # Architecture
 
-This document explains how the installer is put together and why. It exists so
-that a change can be made without re-deriving the design from 3,000 lines of
-bash.
+This document explains how the installer is built and why. It should let you
+change the design without reading the whole 3,000-line script first.
 
 ## The shape of the thing
 
@@ -55,10 +54,10 @@ saved config ─┘        │
                        └─ 7. verify core components, then "Installation complete"
 ```
 
-Step 3 is the controversial one: instead of a long chain of `proot-distro login
+Step 3 is the unusual one. Instead of a long chain of `proot-distro login
 ... -- cmd` calls (each paying proot startup and losing environment), the
-installer writes one guest bash script and runs it once. It is fast and
-survives interruption per step, but it means four levels of quoting
+installer writes one guest bash script and runs it once. It is fast and can
+resume after an interrupted step, but it needs four levels of quoting
 (issue #26). Two rules keep it safe:
 
 - the file is created `0600` before the first byte is written,
@@ -66,12 +65,12 @@ survives interruption per step, but it means four levels of quoting
 
 ## Display model
 
-Both back ends use display `:1` and port `5901`. This is a decision, not an
-accident: one device rarely runs two desktops, and a fixed display keeps the
-launchers simple. The cost is that a dead server can poison the next start, so
-`lfa_clear_stale_x1` releases the socket and lock **only** when no process
-whose argv[0] is a real X server holds `:1`. `pgrep -f` alone is not enough:
-the launcher's own command line contains the string `Xvnc`.
+Both back ends use display `:1` and port `5901`. One device rarely runs two
+desktops, and a fixed display keeps the launchers simple. The cost is that a
+dead server can poison the next start, so `lfa_clear_stale_x1` releases the
+socket and lock only when no process whose argv[0] is a real X server holds
+`:1`. `pgrep -f` alone is not enough: the launcher's own command line contains
+the string `Xvnc`.
 
 ```
 X11:  termux-x11 :1 ──socket──> proot-distro login --user <u> -- dbus-run-session -- <session>
@@ -100,7 +99,7 @@ the launcher sets the locale.
 | user/root password | guest `/etc/shadow` | hashed by the guest |
 | install passwords (transient) | `$PREFIX/tmp/gui_setup_<pid>.sh` | mode 0600, deleted after use and on interrupt |
 | sudo ritual password | salted SHA-256 in `/usr/local/bin/sudo` | mode 0700, one-way hash |
-| VNC password | `~/.vnc/passwd` in the guest | TigerVNC's own encryption, **8 characters only** |
+| VNC password | `~/.vnc/passwd` in the guest | TigerVNC's own encryption, 8 characters only |
 | saved answers | `~/.config/linux-for-android/setup.conf` | mode 0600, base64 (obfuscation only) |
 
 The sudo shim is not a security boundary: inside proot every process is the
@@ -115,5 +114,5 @@ real container. That is deliberate: it must run in CI in seconds.
 
 Everything that needs a real kernel, a real package manager or a real display
 is verified on devices and recorded in `docs/TEST-REPORT.md` and the README
-matrix. The suite enforces that the documented `PASS=` count matches reality,
-so the docs cannot drift silently.
+matrix. The suite checks that the documented `PASS=` count matches the real
+count, so the docs cannot drift silently.

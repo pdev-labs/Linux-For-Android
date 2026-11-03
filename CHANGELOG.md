@@ -1,118 +1,121 @@
 # Changelog
 
 All notable changes to this project are documented here. The format follows
-[Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## A note on version numbering
 
-Tags `v2.0.0` … `v4.6.0` (July 2026) predate a renumbering of the project; the
-current line restarted at `v1.5.0` in October 2026 and continues upward from
-there. `v1.6.1` is newer than `v4.6.0` despite the smaller number. Git tag
-dates, not tag names, define the order — see the table at the bottom.
+Tags `v2.0.0` to `v4.6.0` from July 2026 predate a renumbering of the project.
+The current line restarted at `v1.5.0` in October 2026 and continues upward.
+`v1.6.1` is newer than `v4.6.0` despite the smaller number. Git tag dates, not
+tag names, define the order. See the table at the bottom.
 
 ## [Unreleased]
 
 ### Documentation
 
-- Credited **pdev-labs** as the solo author and maintainer throughout the
-  README, contributing guide, code of conduct, and new `AUTHORS.md`.
+- Credited pdev-labs as the solo author and maintainer in the README,
+  contributing guide, code of conduct, and new `AUTHORS.md`.
 - Removed first-person plural wording from project documentation and code
   comments.
+- Rewrote the Markdown documentation to remove AI-style prose patterns and
+  decorative formatting.
 
 ## [1.7.1] - 2026-11-01
 
 ### Fixed
 
-- **VS Code did not open.** Electron's setuid sandbox cannot work under
-  proot, so `/usr/share/code/code` aborted in the zygote and the `code` CLI
-  still returned 0: from the user's side nothing happened, from the shell
-  nothing was printed. `/usr/local/bin/code` is now a wrapper that passes
+- VS Code did not open. Electron's setuid sandbox cannot work under proot, so
+  `/usr/share/code/code` aborted in the zygote while the `code` CLI still
+  returned 0. From the user's side nothing happened; from the shell nothing
+  was printed. `/usr/local/bin/code` is now a wrapper that passes
   `--no-sandbox --disable-gpu`, and the desktop entries in
   `/usr/local/share/applications` point at it, so the menu works too.
-  Applying `menu 12` (or reinstalling) fixes an existing distro.
-- Chromium's proot-safe launcher is now written by the shared guest polish
-  (`lib/real-feel.sh`) instead of only by menu 11, so a fresh Chromium
-  install gets `--no-sandbox --disable-dev-shm-usage` immediately.
-- Antigravity's launcher is recreated during migration if `/opt` survived
-  but `/usr/local/bin/antigravity` did not.
+  Applying `menu 12` or reinstalling fixes an existing distro.
+- Chromium's proot-safe launcher is now written by the shared guest polish in
+  `lib/real-feel.sh`, not only by menu 11. A fresh Chromium install gets
+  `--no-sandbox --disable-dev-shm-usage` immediately.
+- Antigravity's launcher is recreated during migration if `/opt` survived but
+  `/usr/local/bin/antigravity` did not.
 
 ### Documentation
 
-- New README section **Software and app fixes**: installing anything the
-  optional selector skipped, per-distro package names, the extra steps for
-  VS Code / Firefox / Chromium / Antigravity, why an app "does not open", and
+- New README section, "Software and app fixes": installing anything the
+  optional selector skipped, per-distro package names, the extra steps for VS
+  Code, Firefox, Chromium, and Antigravity, why an app "does not open", and
   screenshots of every application running on the phone.
-- New **docs/TROUBLESHOOTING.md**: evidence collection, installation/apt
+- New `docs/TROUBLESHOOTING.md`: evidence collection, installation and apt
   repair, X11 and VNC, sandboxed apps, audio, storage, SSH, Android process
-  limits, recovery ladder and an error-string index.
+  limits, a recovery ladder, and an error-string index.
 - Device screenshots no longer show notification-bar app icons or the status
-  chip; the session itself is unchanged.
+  chip. The session itself is unchanged.
 
 ### Verified
 
-- Every application in the install menu on the Vivo V2437: Python 3.12.3,
-  Git 2.43.0, Node 26.13.0/npm 11.20.0, curl 8.5.0, wget 1.21.4,
-  neofetch 7.1.0, htop 3.3.0, VS Code 1.144.0, Firefox, Chromium,
-  LibreOffice Writer 24.2, VLC, GIMP and Antigravity IDE — all launch.
+- Every application in the install menu on the Vivo V2437: Python 3.12.3, Git
+  2.43.0, Node 26.13.0/npm 11.20.0, curl 8.5.0, wget 1.21.4, neofetch 7.1.0,
+  htop 3.3.0, VS Code 1.144.0, Firefox, Chromium, LibreOffice Writer 24.2,
+  VLC, GIMP, and Antigravity IDE. All launch.
 
 ## [1.7.0] - 2026-10-31
 
-Security and correctness pass over the whole installer, from the audit in
-[issues.md](issues.md). 54 review findings: 38 fixed, 11 partial and 5
-deliberately deferred (see `tracker.md`).
+Security and correctness pass over the whole installer, based on the audit in
+[issues.md](issues.md). There were 54 review findings: 38 fixed, 11 partial,
+and 5 deliberately deferred. See `tracker.md`.
 
 ### Security
 
-- Install secrets are written to a mode-`0600` file that is **deleted after
-  use and on interrupt**; they used to survive forever in shared `/tmp`.
-- The `sudo` shim stores a **salted SHA-256 hash** instead of a base64 copy of
-  the password, and is mode `0700`.
+- Install secrets are written to a mode-`0600` file that is deleted after use
+  and on interrupt. They used to survive forever in shared `/tmp`.
+- The `sudo` shim stores a salted SHA-256 hash instead of a base64 copy of the
+  password, and is mode `0700`.
 - VS Code's repository is only added after the Microsoft signing key's
   fingerprint (`BC528686B50D79E339D3721CEB3E94ADBE1229CF`) is verified.
 - Antigravity download URLs from the scraped page are restricted to vendor
   hosts before anything is downloaded.
 - The legacy `proot-distro` source tree is validated after download.
 - `set -o pipefail` is enabled, so a failure inside a pipeline is no longer
-  swallowed (this already caught two real bugs in the dashboard). It also
-  exposed the `proot-distro ... --help | grep -q` idiom: `grep -q` exits at
-  the first match, the producer dies with SIGPIPE, and the pipeline reports
-  failure — which made every fresh install on proot-distro v5 abort with
-  "knows no 'alpine' distribution". All capability probes now use a
-  pipeline-free `lfa_match` helper, with a regression test that feeds 64 KiB+
-  of help text through the probe.
+  swallowed. This caught two real bugs in the dashboard. It also exposed the
+  `proot-distro ... --help | grep -q` idiom: `grep -q` exits at the first
+  match, the producer dies with SIGPIPE, and the pipeline reports failure.
+  That made every fresh install on proot-distro v5 abort with "knows no
+  'alpine' distribution". All capability probes now use a pipeline-free
+  `lfa_match` helper, with a regression test that feeds 64 KiB or more of help
+  text through the probe.
 
 ### Added
 
-- `--help`, `--version`, `--list`, `--doctor`, `--yes`, `--debug` command-line
-  flags; `--help`/`--version` work outside Termux.
+- `--help`, `--version`, `--list`, `--doctor`, `--yes`, and `--debug`
+  command-line flags. `--help` and `--version` work outside Termux.
 - A cached, non-blocking "newer release available" notice.
-- Free-space preflight before an install (900 MB CLI / 2.5 GB desktop /
-  3.5 GB GNOME), with a clear refusal instead of a half-installed rootfs.
-- Guideline: `LFA_IMAGE_<DISTRO>` environment variables pin rolling container
-  images; the image reference used is recorded in the manager config.
+- Free-space preflight before an install: 900 MB for CLI, 2.5 GB for desktop,
+  3.5 GB for GNOME. The installer refuses clearly instead of leaving a
+  half-installed rootfs.
+- `LFA_IMAGE_<DISTRO>` environment variables to pin rolling container images.
+  The image reference used is recorded in the manager config.
 - `CHANGELOG.md`, `SECURITY.md`, `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`,
-  issue and pull-request templates, `.editorconfig`, `.gitattributes`.
-- GitHub Actions CI: `shellcheck -S warning`, `bash -n`, full test suite and the
-  CLI surface.
+  issue and pull-request templates, `.editorconfig`, and `.gitattributes`.
+- GitHub Actions CI: `shellcheck -S warning`, `bash -n`, the full test suite,
+  and the CLI surface.
 
 ### Fixed
 
-- VNC refused to start after an X11 session ("display :1 is taken") — display
-  `:1` is now released on stop and only when no real X server holds it.
+- VNC refused to start after an X11 session with "display :1 is taken". Display
+  `:1` is now released on stop, and only when no real X server holds it.
 - PID files are verified against the process command line before signalling,
   so a recycled PID can no longer kill an unrelated process.
-- `stop-linux` only stops the Termux:X11 instance for display `:1` instead of
-  every instance on the device.
-- UTF-8 locale is set for XFCE/LXDE/MATE too (GTK apps used to fail with
-  "Non UTF-8 locale").
+- `stop-linux` only stops the Termux:X11 instance for display `:1`, not every
+  instance on the device.
+- UTF-8 locale is set for XFCE, LXDE, and MATE too. GTK apps used to fail with
+  "Non UTF-8 locale".
 - `XDG_RUNTIME_DIR` is per distro, so two distros no longer share bus sockets.
 - Menu 12 reports components a newer release needs, with the exact install
   command, instead of silently leaving a half-migrated distro.
-- Uninstall removes the Termux-side leftovers (pidfiles, logs, runtime dirs,
-  shortcut and boot script when the last distro is gone).
-- Password prompts ask twice on a terminal; the default `root` password and
-  the 8-character VNC password limit are now called out at the point of choice.
+- Uninstall removes the Termux-side leftovers: pidfiles, logs, runtime dirs,
+  and the shortcut and boot script when the last distro is gone.
+- Password prompts ask twice on a terminal. The default `root` password and
+  the 8-character VNC password limit are called out at the point of choice.
 - Unquoted `$PREFIX` in generated-launcher `sed` calls.
 - The X11 backend installs `termux-x11` on demand and logs the attempt.
 
@@ -129,11 +132,11 @@ deliberately deferred (see `tracker.md`).
 
 ### Fixed
 
-- GNOME (experimental) actually starts: a private system D-Bus is created so
+- GNOME (experimental) starts. A private system D-Bus is created so
   `gnome-shell` stops dying on `Gio.DBus.system`, and the session publishes a
   UTF-8 locale so GTK apps stop exiting with status 8.
 - Stale `/tmp/.X11-unix/X1` and `.X1-lock` are released when no real X server
-  holds display `:1` (fixes VNC after X11, for every desktop).
+  holds display `:1`. This fixes VNC after X11 for every desktop.
 - Switching an existing distro to Termux:X11 installs the X11 packages on
   demand instead of dead-ending.
 
@@ -141,16 +144,17 @@ deliberately deferred (see `tracker.md`).
 
 ### Added
 
-- GNOME Shell as an explicitly **experimental / beta** desktop, hidden on
-  Android 5/6, Alpine and Void, gated by a full warning and a confirmation.
+- GNOME Shell as an explicitly experimental and beta desktop. It is hidden on
+  Android 5/6, Alpine, and Void, and gated by a full warning and a
+  confirmation.
 
 ## [1.5.8] - 2026-10-29
 
 ### Fixed
 
 - Doctor purges a broken `snapd` and pins it, so `apt` stops failing.
-- `reboot`/`poweroff`/`halt`/`shutdown` inside the guest give guidance instead
-  of failing silently.
+- `reboot`, `poweroff`, `halt`, and `shutdown` inside the guest give guidance
+  instead of failing silently.
 
 ## [1.5.7] - 2026-10-28
 
@@ -163,17 +167,17 @@ deliberately deferred (see `tracker.md`).
 ### Fixed
 
 - Desktop launch reliability: `dbus-run-session` launchers, machine-id
-  generation, stale session cleanup.
-- openSUSE `dbus-1-daemon`, Void fonts, TigerVNC ≥ 1.15 geometry, `Xvnc`
-  fallback, legacy Alpine pinned to 3.18 with a minimal XFCE set.
+  generation, and stale session cleanup.
+- openSUSE `dbus-1-daemon`, Void fonts, TigerVNC 1.15 and later geometry,
+  `Xvnc` fallback, and legacy Alpine pinned to 3.18 with a minimal XFCE set.
 - First-login wallpaper race.
 
 ## Version order
 
-Newest first. `v4.x` is *older* than `v1.5.x`; see the note at the top.
+Newest first. `v4.x` is older than `v1.5.x`; see the note at the top.
 
 | Tag | Date |
-|---|---|---|
+|---|---|
 | v1.7.1 | 2026-11-01 |
 | v1.7.0 | 2026-10-31 |
 | v1.6.1 | 2026-10-29 |

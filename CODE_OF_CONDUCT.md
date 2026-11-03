@@ -50,10 +50,10 @@ respected.
 
 ## Enforcement guidelines
 
-1. **Correction** — a private warning explaining the violation.
-2. **Warning** — a warning with consequences for continued behaviour.
-3. **Temporary ban** — a temporary ban from any interaction with the project.
-4. **Permanent ban** — a permanent ban from any public interaction.
+1. Correction: a private warning explaining the violation.
+2. Warning: a warning with consequences for continued behaviour.
+3. Temporary ban: a temporary ban from any interaction with the project.
+4. Permanent ban: a permanent ban from any public interaction.
 
 ## Attribution
 

@@ -3,14 +3,14 @@
 This is the long-form troubleshooting guide. The [README](../README.md) has the
 short answers and the [known issues](../issues.md) list has every defect and
 limitation; this page explains how to diagnose a failure, what the error
-actually means inside proot, and how to verify the fix.
+means inside proot, and how to verify the fix.
 
-Everything here is for the manager (**v1.7.x**) running in Termux on Android.
+Everything here is for the manager (v1.7.x) running in Termux on Android.
 Commands that say *inside the distro* are run in a guest shell opened with
-`start-linux` → **2) Root terminal** (or `terminal-linux`). Commands that say
+`start-linux` → 2) Root terminal (or `terminal-linux`). Commands that say
 *in Termux* are run before you enter the distro.
 
-> **Before you change anything:** run `./install_linux.sh --diagnostics`.
+> Before you change anything: run `./install_linux.sh --diagnostics`.
 > It writes `~/lfa-diagnostics-<date>.tar.gz` with the version, device, free
 > space, installed instances, display processes, logs and redacted configs.
 > Passwords and tokens are removed. If a fix makes things worse, you still
@@ -67,8 +67,6 @@ Commands that say *inside the distro* are run in a guest shell opened with
 | Everything is broken, how do I recover? | [§12](#12-recovery-ladder) |
 | I need to report this | [§13](#13-reporting-a-bug) |
 
----
-
 ## 1. Collect evidence first
 
 Most failures have one line in a log that identifies them. Collect these
@@ -91,9 +89,9 @@ the name from this output in every later command.
 | Log | Path | Written when |
 |---|---|---|
 | Manager debug log | `~/.config/linux-for-android/debug.log` | only with `--debug` |
-| Desktop session | `~/start-linux-session.log` **inside the distro** | every `start-linux` |
+| Desktop session | `~/start-linux-session.log` inside the distro | every `start-linux` |
 | VNC server | `$PREFIX/tmp/lfa-vnc-<instance>.log` | VNC installs |
-| VNC session | `~/.vnc/*.log` **inside the distro** | VNC installs |
+| VNC session | `~/.vnc/*.log` inside the distro | VNC installs |
 | Guest setup script | printed by `--debug`; kept for inspection | `--debug` |
 | Diagnostics bundle | `~/lfa-diagnostics-<date>.tar.gz` | on request |
 
@@ -104,7 +102,7 @@ find "$PREFIX/var/lib/proot-distro" -name start-linux-session.log 2>/dev/null
 find "$PREFIX/var/lib/proot-distro" -path '*/.vnc/*.log' 2>/dev/null
 ```
 
-Inside the distro, read the **last** lines first — the first error is often
+Inside the distro, read the last lines first. The first error is often
 buried above a cascade of warnings:
 
 ```bash
@@ -142,19 +140,17 @@ cause of the "listening sockets" error in §3.1.
 `~/.config/linux-for-android/debug.log`. Use it only while reproducing a
 problem; normal installs stay quiet.
 
----
-
 ## 2. Installation problems
 
 ### 2.1 Installer exits immediately or will not start
 
-**Symptom:** `./install_linux.sh` prints `Permission denied`, `No such file or
+Symptom: `./install_linux.sh` prints `Permission denied`, `No such file or
 directory`, or `Unknown option`.
 
-**Why:** the file was downloaded without the executable bit, the clone is
+Why: the file was downloaded without the executable bit, the clone is
 incomplete, or the command was run in the wrong directory.
 
-**Fix:**
+Fix:
 
 ```bash
 cd ~/Linux-For-Android
@@ -171,17 +167,17 @@ git clone --depth 1 https://github.com/pdev-labs/Linux-For-Android.git
 cd Linux-For-Android && chmod +x install_linux.sh && ./install_linux.sh
 ```
 
-**Verify:** `Linux for Android Manager 1.7.1` (or newer) is printed.
+Verify: `Linux for Android Manager 1.7.1` (or newer) is printed.
 
 ### 2.2 Download or checksum failure
 
-**Symptom:** `wget`/`curl` errors, `proot-distro install` cannot fetch the
+Symptom: `wget`/`curl` errors, `proot-distro install` cannot fetch the
 rootfs, or `sha256sum -c SHA256SUMS` fails.
 
-**Why:** a mirror is unreachable, the connection dropped, or the asset was
+Why: a mirror is unreachable, the connection dropped, or the asset was
 truncated.
 
-**Fix:**
+Fix:
 
 1. Test the network in Termux: `curl -I https://github.com`.
 2. Re-download the release asset and verify it:
@@ -196,18 +192,18 @@ truncated.
 4. Retry `proot-distro install <distro>`; a half-written rootfs is detected and
    the installer asks you to remove it.
 
-**Verify:** the checksum prints `install_linux.sh: OK`.
+Verify: the checksum prints `install_linux.sh: OK`.
 
 ### 2.3 Not enough free space
 
-**Symptom:** the installer refuses to start and prints `Not enough free space:
+Symptom: the installer refuses to start and prints `Not enough free space:
 this install needs about N MB`.
 
-**Why:** proot copies the rootfs and then unpacks packages; a desktop needs
+Why: proot copies the rootfs and then unpacks packages; a desktop needs
 more than the downloaded image. Requirements: ~1 GB CLI, ~2.5 GB desktop,
 ~3.5 GB GNOME.
 
-**Fix:**
+Fix:
 
 ```bash
 df -h "$PREFIX"
@@ -223,34 +219,34 @@ pkg clean
 ```
 
 Inside an existing distro: `apt clean` (Debian family) or `apk cache clean`
-(Alpine). Do not delete `$PREFIX/var/lib/proot-distro` by hand — that can leave
+(Alpine). Do not delete `$PREFIX/var/lib/proot-distro` by hand. That can leave
 `proot-distro list` showing a ghost instance (§8.4).
 
 ### 2.4 Red `apt` and `dpkg` output during install
 
-**Symptom:** messages such as:
+Symptom: messages such as:
 
 - `Failed to scan devices: Permission denied`
 - `Failed to write database /usr/lib/udev/hwdb.bin`
 - `Failed to send reload request`
 - `Creating group 'kvm' with GID 993`
 
-**Why:** package post-install scripts talk to physical hardware, udev and
+Why: package post-install scripts talk to physical hardware, udev and
 systemd. None of those exist inside proot. The hooks fail safely.
 
-**Fix:** none. These lines are expected and do not mean the install failed.
+Fix: none. These lines are expected and do not mean the install failed.
 Scroll to the final `Installation complete` message. Only act if `dpkg` exits
 non-zero or leaves packages half-configured (§2.5, §2.6).
 
 ### 2.5 `dpkg: requested operation requires superuser privilege`
 
-**Symptom:** `apt update` works, but `apt install` fails in a **user** shell
+Symptom: `apt update` works, but `apt install` fails in a user shell
 with this exact message.
 
-**Why:** `dpkg` refuses to run unless uid is 0. The user shell runs as your
+Why: `dpkg` refuses to run unless uid is 0. The user shell runs as your
 normal uid; proot cannot elevate it.
 
-**Fix:** use the root terminal (option **2** in `start-linux`), or prefix with
+Fix: use the root terminal (option 2 in `start-linux`), or prefix with
 the sudo shim:
 
 ```bash
@@ -261,20 +257,20 @@ The shim accepts the user password set during installation and emulates uid 0
 for `dpkg`. It is not real privilege elevation; it cannot give you access to
 anything you do not already own.
 
-**Verify:** `dpkg -l <package>` shows `ii` (installed, configured).
+Verify: `dpkg -l <package>` shows `ii` (installed, configured).
 
 ### 2.6 `unknown system group 'messagebus' in statoverride`
 
-**Symptom:** every `apt install` aborts with a `dpkg` fatal error naming a
+Symptom: every `apt install` aborts with a `dpkg` fatal error naming a
 group that does not exist, even as root. `apt update` still works.
 
-**Why:** `/var/lib/dpkg/statoverride` contains a row for a user/group that is
+Why: `/var/lib/dpkg/statoverride` contains a row for a user/group that is
 missing in this guest. `dpkg` validates the file on every run and treats a
 missing group as fatal. Old installers seeded dbus's `messagebus` row on
 CLI-only installs where dbus was never installed.
 
-**Fix:** update the manager (`git pull`), then run **3) Manager → 0) Repair a
-Distro** or **12) Apply Latest Fixes**. The Doctor prunes bad rows, installs
+Fix: update the manager (`git pull`), then run 3) Manager → 0) Repair a
+Distro or 12) Apply Latest Fixes. The Doctor prunes bad rows, installs
 the proot-safe `dpkg-statoverride` shim and finishes half-configured packages.
 
 Manual one-liner inside the guest as root:
@@ -284,18 +280,18 @@ sed -i '/dbus-daemon-launch-helper/d' /var/lib/dpkg/statoverride
 apt-get -f install
 ```
 
-**Verify:** `apt install -y htop` completes without the statoverride error.
+Verify: `apt install -y htop` completes without the statoverride error.
 
 ### 2.7 `snapd` will not configure
 
-**Symptom:** `dpkg: error processing package snapd (--configure) ...
+Symptom: `dpkg: error processing package snapd (--configure) ...
 unable to set CAP_SETFCAP effective capability`, and every later `apt` command
 stops on the same package.
 
-**Why:** snapd needs setuid helpers, mount namespaces and a running systemd.
+Why: snapd needs setuid helpers, mount namespaces and a running systemd.
 proot provides none of them. Snap packages cannot work here.
 
-**Fix:** update the manager and run **0) Repair a Distro**; it purges snapd and
+Fix: update the manager and run 0) Repair a Distro; it purges snapd and
 pins it off. Manually:
 
 ```bash
@@ -303,58 +299,58 @@ sudo dpkg --purge --force-all snapd
 sudo apt-get -f install
 ```
 
-**Verify:** `apt install -y <something>` no longer warns about snapd.
+Verify: `apt install -y <something>` no longer warns about snapd.
 Removing snapd does not remove an already-installed desktop; `ubuntu-desktop`
 is only a metapackage.
 
 ### 2.8 Install looks frozen
 
-**Symptom:** the log has not moved for several minutes, most often at
+Symptom: the log has not moved for several minutes, most often at
 `Setting up elementary-xfce-icon-theme`.
 
-**Why:** that package contains tens of thousands of tiny icon files, and proot
-translates every file operation through the phone CPU. 10–20 minutes is
+Why: that package contains tens of thousands of tiny icon files, and proot
+translates every file operation through the phone CPU. 10 to 20 minutes is
 normal on mid-range hardware, and longer on Android 5/6.
 
-**Fix:** leave Termux in the foreground, keep the phone charging and do not
+Fix: leave Termux in the foreground, keep the phone charging and do not
 kill the process. Check that it is alive and doing work:
 
 ```bash
 ps -o pid,etime,pcpu,comm -C dpkg -C apt -C proot 2>/dev/null | tail -n 5
 ```
 
-If there is **no** CPU use and no log growth for 20+ minutes, the install is
-genuinely stuck — see §2.9. Do not interrupt an install that is still
+If there is no CPU use and no log growth for 20+ minutes, the install is
+genuinely stuck. See §2.9. Do not interrupt an install that is still
 unpacking.
 
 ### 2.9 Install was interrupted
 
-**Symptom:** the phone rebooted, Termux was killed, or you pressed Ctrl+C
+Symptom: the phone rebooted, Termux was killed, or you pressed Ctrl+C
 during package setup. `proot-distro list` shows the instance but
 `start-linux` fails.
 
-**Why:** the rootfs exists but package configuration did not finish.
+Why: the rootfs exists but package configuration did not finish.
 
-**Fix, in this order:**
+Fix, in this order:
 
-1. Update the manager and run **0) Repair a Distro**. It runs
+1. Update the manager and run 0) Repair a Distro. It runs
    `dpkg --configure -a`, `apt-get -f install` and the statoverride repair.
 2. If the instance does not boot at all, back up what you can, then
-   **10) Uninstall**, **1) Install** and **7) Restore**.
+   10) Uninstall, 1) Install and 7) Restore.
 3. A backup made before the failure is the safest path; see §8.3.
 
-**Verify:** `start-linux` reaches the desktop and the session log has no
+Verify: `start-linux` reaches the desktop and the session log has no
 `dpkg` or `apt` error.
 
 ### 2.10 Package not found after installation
 
-**Symptom:** `apt install <app>` says `Unable to locate package`, or the ISO
+Symptom: `apt install <app>` says `Unable to locate package`, or the ISO
 of a distro release is EOL and its repositories return 404.
 
-**Why:** the image is old, the package name differs by distro, or the clock is
+Why: the image is old, the package name differs by distro, or the clock is
 wrong (§9.2).
 
-**Fix:**
+Fix:
 
 ```bash
 sudo apt update
@@ -362,25 +358,23 @@ sudo apt install -y <package>
 ```
 
 Check the name for your distro (the README's [software
-section](../README.md#-software-and-app-fixes) has the table), then refresh the
-manager with **12) Apply Latest Fixes** if the image predates the current
+section](../README.md#software-and-app-fixes) has the table), then refresh the
+manager with 12) Apply Latest Fixes if the image predates the current
 package list. For Termux itself, `termux-change-repo` switches to a working
 mirror.
-
----
 
 ## 3. Starting and stopping the desktop
 
 ### 3.1 `Cannot establish any listening sockets`
 
-**Symptom:** `start-linux` immediately prints *"Cannot establish any listening
+Symptom: `start-linux` immediately prints *"Cannot establish any listening
 sockets - Make sure an X server isn't already running"*.
 
-**Why:** a display server from an earlier session is still alive, or it died
+Why: a display server from an earlier session is still alive, or it died
 and left `X1`/`.X1-lock` behind. Android can kill the server without letting it
 clean up.
 
-**Fix:**
+Fix:
 
 ```bash
 stop-linux
@@ -397,20 +391,20 @@ ls -l "$PREFIX/tmp/.X11-unix" "$PREFIX/tmp/.X1-lock"
 
 If no matching process is alive, remove `$PREFIX/tmp/.X11-unix/X1` and
 `$PREFIX/tmp/.X1-lock`, then run `start-linux`. Do not remove them while a
-server is running — two servers on `:1` cannot coexist.
+server is running. Two servers on `:1` cannot coexist.
 
-**Verify:** `xdpyinfo` inside the distro prints dimensions.
+Verify: `xdpyinfo` inside the distro prints dimensions.
 
 ### 3.2 `No distributions installed`
 
-**Symptom:** `start-linux` prints that no distributions are installed, but the
+Symptom: `start-linux` prints that no distributions are installed, but the
 installer said it finished.
 
-**Why:** the instance name in the launcher does not match the folder
+Why: the instance name in the launcher does not match the folder
 `proot-distro` created, or the install was into a custom name that was later
 removed.
 
-**Fix:**
+Fix:
 
 ```bash
 ./install_linux.sh --list
@@ -418,19 +412,19 @@ ls "$PREFIX/var/lib/proot-distro/containers" 2>/dev/null
 ls "$PREFIX/var/lib/proot-distro/installed-rootfs" 2>/dev/null
 ```
 
-Install again if the list is empty. If the name is present, run **12) Apply
-Latest Fixes** — it regenerates `start-linux` from the actual instance list.
+Install again if the list is empty. If the name is present, run 12) Apply
+Latest Fixes. It regenerates `start-linux` from the actual instance list.
 
 ### 3.3 Black screen or "Unable to contact settings server"
 
-**Symptom:** Termux:X11 opens, `start-linux` says the desktop started, but you
+Symptom: Termux:X11 opens, `start-linux` says the desktop started, but you
 see only black or an XFCE error. The log contains
 `dbus-update-activation-environment: unable to connect to D-Bus`.
 
-**Why:** `dbus-launch` forks a daemon that dies under proot, and some images
+Why: `dbus-launch` forks a daemon that dies under proot, and some images
 ship an empty `/etc/machine-id`, which prevents D-Bus from starting.
 
-**Fix:** update to v1.5.6+ and run **12) Apply Latest Fixes**. The launcher
+Fix: update to v1.5.6+ and run 12) Apply Latest Fixes. The launcher
 prefers `dbus-run-session` and the installer generates `machine-id`. Then:
 
 ```bash
@@ -438,12 +432,12 @@ stop-linux
 start-linux
 ```
 
-**Verify:** `pgrep -af dbus-daemon` inside the distro shows a session bus, and
+Verify: `pgrep -af dbus-daemon` inside the distro shows a session bus, and
 the desktop is visible.
 
 ### 3.4 Desktop dies with a GTK bail out
 
-**Symptom:** the session starts and immediately disappears.
+Symptom: the session starts and immediately disappears.
 `~/start-linux-session.log` contains:
 
 ```
@@ -453,26 +447,26 @@ Bail out!
 
 or a `bwrap` command line.
 
-**Why:** modern GTK (Kali 2026, Arch, Fedora 44, Void) decodes images through
-**glycin**, which uses bubblewrap to sandbox its loader. proot cannot create
+Why: modern GTK (Kali 2026, Arch, Fedora 44, Void) decodes images through
+glycin, which uses bubblewrap to sandbox its loader. proot cannot create
 the namespaces, so the loader aborts GTK.
 
-**Fix:** update the manager and run **12) Apply Latest Fixes**. It installs a
+Fix: update the manager and run 12) Apply Latest Fixes. It installs a
 `/usr/local/bin/bwrap` shim so glycin falls back to in-process decoding, and
 installs `glycin-loaders` where the distro splits it out. Restart the desktop.
 
-**Verify:** the log contains `WARNING: Glycin running without sandbox.` and
+Verify: the log contains `WARNING: Glycin running without sandbox.` and
 the desktop stays up. The warning is expected.
 
 ### 3.5 Non UTF-8 locale
 
-**Symptom:** `Non UTF-8 locale (ANSI_X3.4-1968) is not supported!`, or GUI
+Symptom: `Non UTF-8 locale (ANSI_X3.4-1968) is not supported!`, or GUI
 apps exit with status 8 right after launch.
 
-**Why:** the session was started without a UTF-8 locale. Some minimal images
+Why: the session was started without a UTF-8 locale. Some minimal images
 do not set `LANG`.
 
-**Fix:** run **12) Apply Latest Fixes** (current launchers export
+Fix: run 12) Apply Latest Fixes (current launchers export
 `LANG=C.UTF-8`), then `stop-linux` and `start-linux`. To verify inside the
 distro:
 
@@ -485,13 +479,13 @@ If the image lacks the locale, install it (Debian/Ubuntu:
 
 ### 3.6 Panel, wallpaper or window borders are missing
 
-**Symptom:** the desktop background renders but there is no panel, no
+Symptom: the desktop background renders but there is no panel, no
 wallpaper, or windows have no title bar and cannot be moved.
 
-**Why:** one session component crashed (often the panel) or the window manager
+Why: one session component crashed (often the panel) or the window manager
 never started. proot makes some panel plugins fail on first run.
 
-**Fix:**
+Fix:
 
 ```bash
 # inside the distro, root or user shell
@@ -499,7 +493,7 @@ pgrep -af xfwm4 || xfwm4 --replace &
 pgrep -af xfce4-panel || xfce4-panel --restart &
 ```
 
-Then run **12) Apply Latest Fixes** to restore the wallpaper and autostart
+Then run 12) Apply Latest Fixes to restore the wallpaper and autostart
 entries. If the panel keeps crashing, read its output:
 
 ```bash
@@ -513,60 +507,58 @@ packages through the manager.
 
 ### 3.7 `stop-linux` leaves Termux:X11 open
 
-**Symptom:** `stop-linux` finished, but the Termux:X11 app window is still on
+Symptom: `stop-linux` finished, but the Termux:X11 app window is still on
 screen.
 
-**Why:** Android does not allow one app to close another app's window.
+Why: Android does not allow one app to close another app's window.
 `stop-linux` stops the Linux servers, not the Android activity.
 
-**Fix:** swipe Termux:X11 away from **Recents**. The next `start-linux` reuses
+Fix: swipe Termux:X11 away from Recents. The next `start-linux` reuses
 the app. This is normal and not a leak.
 
 ### 3.8 `start-linux` starts a second desktop
 
-**Symptom:** windows from two sessions appear, or the second start fails with a
+Symptom: windows from two sessions appear, or the second start fails with a
 socket error after the first one is ignored.
 
-**Why:** `start-linux` does not kill a healthy running session; a second X
+Why: `start-linux` does not kill a healthy running session; a second X
 server cannot own `:1`.
 
-**Fix:** always run `stop-linux` before changing resolution, desktop or display
+Fix: always run `stop-linux` before changing resolution, desktop or display
 server. If a session is wedged, `stop-linux` is still the supported path; it
 verifies PIDs before killing, so it will not kill an unrelated process that
 happens to share a name.
-
----
 
 ## 4. Display and input
 
 ### 4.1 Termux:X11 says display :1 not found
 
-**Symptom:** `xdpyinfo` fails with `unable to open display ":1"`, or
+Symptom: `xdpyinfo` fails with `unable to open display ":1"`, or
 `start-linux` reports that `termux-x11` is missing.
 
-**Why:** the Termux:X11 **app** and the `termux-x11` **host package** are two
+Why: the Termux:X11 app and the `termux-x11` host package are two
 different things. The app provides the Android display; the package provides
 the server binary. The app must also be installed from the same source as
 Termux (F-Droid builds match; mixed signatures cannot share files).
 
-**Fix:**
+Fix:
 
-1. Install **Termux:X11** from F-Droid (or the project's releases) on the
+1. Install Termux:X11 from F-Droid (or the project's releases) on the
    phone.
 2. In Termux: `pkg install x11-repo && pkg install termux-x11-nightly`.
 3. Open the Termux:X11 app once, then run `start-linux`.
 
-**Verify:** `pgrep -af termux-x11` shows the server, and `xdpyinfo` prints
+Verify: `pgrep -af termux-x11` shows the server, and `xdpyinfo` prints
 `dimensions`.
 
 ### 4.2 Wrong resolution or rotation
 
-**Symptom:** the desktop is tiny, stretched, or rotated 90°.
+Symptom: the desktop is tiny, stretched, or rotated 90°.
 
-**Why:** Termux:X11 uses the Android surface size, and the session was saved
+Why: Termux:X11 uses the Android surface size, and the session was saved
 with a geometry from a different orientation or a previous device.
 
-**Fix:** rotate the phone to the orientation you want, then restart:
+Fix: rotate the phone to the orientation you want, then restart:
 
 ```bash
 stop-linux
@@ -580,28 +572,28 @@ avoids black bars.
 
 ### 4.3 Touch pointer, keyboard and clipboard
 
-**Touch pointer offset:** usually a Termux:X11 preference — use "pointer" or
+Touch pointer offset: usually a Termux:X11 preference. Use "pointer" or
 "touchpad" mode rather than direct touch, and restart the app after changing
 it. A rotated session can also offset the pointer until both the app and the
 desktop agree on the orientation.
 
-**Missing keys (`|`, `~`, arrows):** use the extra-keys row above the keyboard.
+Missing keys (`|`, `~`, arrows): use the extra-keys row above the keyboard.
 For a physical keyboard, `setxkbmap us` inside the distro fixes a wrong layout.
 For non-US layouts, `setxkbmap -layout <code>`.
 
-**Clipboard:** bridging is provided by the Termux:X11 app, not by the distro.
+Clipboard: bridging is provided by the Termux:X11 app, not by the distro.
 Update the app if copy/paste between Android and Linux does nothing. Inside the
 guest, `xclip`/`xsel` can move text between X11 applications.
 
 ### 4.4 VNC does not connect or shows black
 
-**Symptom:** the VNC viewer says connection refused, or connects to a black
+Symptom: the VNC viewer says connection refused, or connects to a black
 screen.
 
-**Why:** the server is on port **5901** (`:1`), the password file is missing or
+Why: the server is on port 5901 (`:1`), the password file is missing or
 in the old location, or `xstartup` exited before starting the desktop.
 
-**Fix:**
+Fix:
 
 1. In Termux, check the server and the port:
 
@@ -621,12 +613,12 @@ in the old location, or `xstartup` exited before starting the desktop.
    chmod 600 ~/.vnc/passwd ~/.config/tigervnc/passwd
    ```
 
-4. Run **12) Apply Latest Fixes** to regenerate the `xstartup` in both the
+4. Run 12) Apply Latest Fixes to regenerate the `xstartup` in both the
    legacy and modern TigerVNC locations.
 
-**Connect from the phone:** VNC viewer → `127.0.0.1:5901`.
+Connect from the phone: VNC viewer → `127.0.0.1:5901`.
 
-**Connect from a PC:** keep the server bound to the phone and tunnel it:
+Connect from a PC: keep the server bound to the phone and tunnel it:
 
 ```bash
 ssh -N -L 5901:127.0.0.1:5901 -p 8022 u0_aNNN@PHONE_IP
@@ -635,22 +627,20 @@ ssh -N -L 5901:127.0.0.1:5901 -p 8022 u0_aNNN@PHONE_IP
 Then point the viewer at `localhost:5901`. Do not expose 5901 to the network;
 VNC's password is not a substitute for SSH.
 
----
-
 ## 5. Applications
 
 ### 5.1 Electron apps do nothing at all
 
-**Symptom:** `code`, `chromium` or `antigravity` returns immediately, prints
+Symptom: `code`, `chromium` or `antigravity` returns immediately, prints
 nothing, and no window appears. `code` may exit with status 0.
 
-**Why:** Electron and Chromium need a setuid sandbox helper. proot cannot
+Why: Electron and Chromium need a setuid sandbox helper. proot cannot
 create setuid binaries, so the zygote aborts. VS Code is the confusing case:
 the CLI still returns 0, so it looks like the app is missing.
 
-**Fix:** v1.7.1 writes `/usr/local/bin` wrappers with `--no-sandbox` and points
-the desktop entries at them. On an older install run **12) Apply Latest
-Fixes**. To test the real cause without changing anything:
+Fix: v1.7.1 writes `/usr/local/bin` wrappers with `--no-sandbox` and points
+the desktop entries at them. On an older install run 12) Apply Latest
+Fixes. To test the real cause without changing anything:
 
 ```bash
 /usr/share/code/code --no-sandbox --disable-gpu --user-data-dir=/tmp/code-test
@@ -676,7 +666,7 @@ sudo chmod 755 /usr/local/bin/code
 Chromium also needs `--disable-dev-shm-usage` because `/dev/shm` is small in
 proot. The same rule applies to Antigravity.
 
-**Verify:** the window is listed:
+Verify: the window is listed:
 
 ```bash
 xwininfo -root -tree | grep -i 'visual studio\|chromium\|antigravity'
@@ -684,27 +674,27 @@ xwininfo -root -tree | grep -i 'visual studio\|chromium\|antigravity'
 
 ### 5.2 Firefox or Chromium shows a sandbox warning
 
-**Symptom:** Firefox displays *"The security sandbox is disabled. Your
+Symptom: Firefox displays *"The security sandbox is disabled. Your
 configuration is unsupported and less secure."* Chromium displays *"You are
 using an unsupported command-line flag: --no-sandbox."*
 
-**Why:** both warnings are the truthful consequence of running without a
+Why: both warnings are the truthful consequence of running without a
 setuid sandbox under proot.
 
-**Fix:** none; the browsers work. Do not remove `--no-sandbox` to silence the
-warning — without it the browser aborts. On Ubuntu, use the installer's
+Fix: none; the browsers work. Do not remove `--no-sandbox` to silence the
+warning. Without it the browser aborts. On Ubuntu, use the installer's
 Firefox build: the archive's `firefox` package is a snap transitional package
 and snaps cannot run in proot.
 
 ### 5.3 App is missing from the menu
 
-**Symptom:** `command -v <app>` prints a path, but the XFCE application menu
+Symptom: `command -v <app>` prints a path, but the XFCE application menu
 does not list it.
 
-**Why:** the package did not install a desktop entry, the entry is in a
+Why: the package did not install a desktop entry, the entry is in a
 directory XFCE does not scan, or the menu cache is stale.
 
-**Fix:**
+Fix:
 
 ```bash
 update-desktop-database /usr/share/applications 2>/dev/null || true
@@ -724,13 +714,13 @@ name from a guest terminal.
 
 ### 5.4 App window opens off-screen
 
-**Symptom:** the window is mostly outside the visible area; only a strip or the
+Symptom: the window is mostly outside the visible area; only a strip or the
 title bar is visible, often after changing resolution or orientation.
 
-**Why:** the app saved window bounds from a larger virtual screen (for example
+Why: the app saved window bounds from a larger virtual screen (for example
 a 2312×726 session restored as `y=627`).
 
-**Fix:** delete that app's window state, not its settings:
+Fix: delete that app's window state, not its settings:
 
 ```bash
 rm -rf ~/.config/Code           # VS Code window/profile state
@@ -747,15 +737,15 @@ xdotool search --name "Visual Studio Code" windowmove 0 0
 
 ### 5.5 App closes with the terminal
 
-**Symptom:** a GUI app started from a one-off `terminal-linux` shell vanishes
+Symptom: a GUI app started from a one-off `terminal-linux` shell vanishes
 when that shell exits.
 
-**Why:** the app is a child of that shell's session. `start-linux` owns the
+Why: the app is a child of that shell's session. `start-linux` owns the
 desktop session; a separate login is a different session and may be killed
 when it exits.
 
-**Fix:** start GUI apps from the desktop menu (or from a terminal opened
-**inside** the running desktop), not from a throwaway shell. If you must use a
+Fix: start GUI apps from the desktop menu (or from a terminal opened
+inside the running desktop), not from a throwaway shell. If you must use a
 shell, `setsid` detaches the app:
 
 ```bash
@@ -767,16 +757,16 @@ supported arrangement.
 
 ### 5.6 No sound
 
-**Symptom:** the desktop is silent; VLC or Firefox shows a playing stream but
+Symptom: the desktop is silent; VLC or Firefox shows a playing stream but
 no audio.
 
-**Why:** PulseAudio runs in Termux, and the guest reaches it over
+Why: PulseAudio runs in Termux, and the guest reaches it over
 `PULSE_SERVER=127.0.0.1`. If the host daemon died (Android killed it, or a
 previous `stop-linux` left a stale socket), the guest has no server.
 
-**Fix:**
+Fix:
 
-1. In Termux, run **3) Manager → 5) Audio Fixer**. It restarts PulseAudio with
+1. In Termux, run 3) Manager → 5) Audio Fixer. It restarts PulseAudio with
    TCP access limited to `127.0.0.1`.
 2. Or manually:
 
@@ -795,31 +785,29 @@ that is a documented limitation, not a broken session.
 
 ### 5.7 Chromium video is black or crashes
 
-**Symptom:** Chromium opens but video is black, or the tab crashes when
+Symptom: Chromium opens but video is black, or the tab crashes when
 hardware acceleration is enabled.
 
-**Why:** VirGL is helpful on some GPUs and harmful on others. The manager's
-**11) Browser acceleration** menu writes `/etc/lfa-chromium-flags`; it does not
+Why: VirGL is helpful on some GPUs and harmful on others. The manager's
+11) Browser acceleration menu writes `/etc/lfa-chromium-flags`; it does not
 change the app itself.
 
-**Fix:** run **3) Manager → 11) Browser acceleration → 2) Disable**, then
+Fix: run 3) Manager → 11) Browser acceleration → 2) Disable, then
 restart Chromium. This removes the flags file and returns to the default
 software renderer. Re-enable it only if video was working before. Other apps
 are unaffected because the flags are read only by the Chromium wrapper.
 
 ### 5.8 First start of LibreOffice or GIMP is slow
 
-**Symptom:** LibreOffice or GIMP takes 30–60 seconds to show its window the
+Symptom: LibreOffice or GIMP takes 30 to 60 seconds to show its window the
 first time.
 
-**Why:** both build font caches and scan plugins on first run; proot makes
+Why: both build font caches and scan plugins on first run; proot makes
 that I/O much slower. Subsequent starts are faster.
 
-**Fix:** wait for the first start. Do not kill it during profile creation. If
+Fix: wait for the first start. Do not kill it during profile creation. If
 it never appears, check `xwininfo -root -tree` and the terminal output; a
 missing library is a package problem, not a speed problem.
-
----
 
 ## 6. Desktop environments
 
@@ -832,10 +820,10 @@ GNOME is documented as experimental. The full decision record is in
 Quick order of operations:
 
 1. `tail -n 80 ~/start-linux-session.log` inside the distro.
-2. Run **12) Apply Latest Fixes** (regenerates the session bus and locale).
+2. Run 12) Apply Latest Fixes (regenerates the session bus and locale).
 3. Switch to VNC if X11 keeps crashing.
-4. Run **0) Doctor**, then start again.
-5. If it still fails, reinstall with **MATE** (option 3) — same GTK heritage,
+4. Run 0) Doctor, then start again.
+5. If it still fails, reinstall with MATE  (option 3). It has the same GTK heritage,
    no systemd requirement.
 
 Do not expect GNOME 49+ to work: it needs a session manager this container
@@ -843,31 +831,29 @@ does not provide.
 
 ### 6.2 XFCE starts but Settings or Thunar crashes
 
-**Symptom:** the desktop is up, but opening Settings, Thunar or a portal-using
+Symptom: the desktop is up, but opening Settings, Thunar or a portal-using
 app exits immediately.
 
-**Why:** proot lacks the system D-Bus, logind and portals that those apps
+Why: proot lacks the system D-Bus, logind and portals that those apps
 expect. Some crashes are cosmetic, some are permanent limitations.
 
-**Fix:** check the app's stderr for `Failed to connect to bus` (expected, not
-fatal). Run **0) Doctor** after package upgrades. For a specific app, reinstall
+Fix: check the app's stderr for `Failed to connect to bus` (expected, not
+fatal). Run 0) Doctor after package upgrades. For a specific app, reinstall
 it inside the distro; a half-configured package is more common than a proot
 incompatibility.
-
----
 
 ## 7. Accounts, sudo and passwords
 
 ### 7.1 `sudo` rejects the password
 
-**Symptom:** `sudo` prints `Sorry, try again` three times, although the
+Symptom: `sudo` prints `Sorry, try again` three times, although the
 password worked at install time.
 
-**Why:** the sudo shim stores a salted SHA-256 hash captured at install time.
-Changing the Linux account password with `passwd` does **not** update the shim,
+Why: the sudo shim stores a salted SHA-256 hash captured at install time.
+Changing the Linux account password with `passwd` does not update the shim,
 and a reinstall with a different password replaces it.
 
-**Fix:** the root terminal (`start-linux` → **2**) never asks for a password.
+Fix: the root terminal (`start-linux` → 2) never asks for a password.
 For the shim, reset its hash from the root terminal. This prompts without
 echoing and does not put the password in your shell history:
 
@@ -879,7 +865,7 @@ sed -i "s|^SUDO_SALT=.*|SUDO_SALT=\"$S\"|; s|^SUDO_HASH=.*|SUDO_HASH=\"$H\"|" /u
 unset P S H
 ```
 
-**Verify:** `sudo true` accepts the new password (it prints nothing and exits
+Verify: `sudo true` accepts the new password (it prints nothing and exits
 0).
 
 To change the actual account password (used by login managers and `su`):
@@ -892,13 +878,13 @@ This is separate from the shim hash; do both if you want them to match.
 
 ### 7.2 `groups: cannot find name for group ID`
 
-**Symptom:** every user shell prints `groups: cannot find name for group ID
+Symptom: every user shell prints `groups: cannot find name for group ID
 99909997` before the prompt.
 
-**Why:** Android passes its supplementary GIDs into proot. Some have no name in
+Why: Android passes its supplementary GIDs into proot. Some have no name in
 the distro's `/etc/group`. Cosmetic.
 
-**Fix:** v1.6+ names the mapped GIDs during install/migration. If you still see
+Fix: v1.6+ names the mapped GIDs during install/migration. If you still see
 it, add them from the root terminal:
 
 ```bash
@@ -909,13 +895,13 @@ done
 
 ### 7.3 Permission denied writing files
 
-**Symptom:** an app or `sudo` command cannot write a file, although you own the
+Symptom: an app or `sudo` command cannot write a file, although you own the
 distro.
 
-**Why:** the file is owned by a numeric UID that does not match the account, or
+Why: the file is owned by a numeric UID that does not match the account, or
 it was created by root in a root shell and is not writable by the user.
 
-**Fix:** check the owner and fix it from the root terminal:
+Fix: check the owner and fix it from the root terminal:
 
 ```bash
 ls -ln <file>
@@ -923,23 +909,21 @@ chown -R "$(id -un):$(id -gn)" ~
 ```
 
 Do not `chmod 777` the whole home directory; that hides the cause and breaks
-SSH key permissions. Android's own storage permissions are separate — see
+SSH key permissions. Android's own storage permissions are separate. See
 §8.1.
-
----
 
 ## 8. Storage, backup, restore and uninstall
 
 ### 8.1 Android files are not visible in the distro
 
-**Symptom:** `/sdcard`, `~/storage/shared` or the phone's Downloads folder is
+Symptom: `/sdcard`, `~/storage/shared` or the phone's Downloads folder is
 missing inside Linux.
 
-**Why:** the guest is a rootfs under Termux's private data. It does **not**
+Why: the guest is a rootfs under Termux's private data. It does not
 automatically mount Android storage, by design: that keeps the distro portable
 and avoids Android's scoped-storage permissions leaking into every app.
 
-**Fix:** use Termux as the bridge.
+Fix: use Termux as the bridge.
 
 1. In Termux (not in the distro), grant storage access once:
 
@@ -960,15 +944,15 @@ and avoids Android's scoped-storage permissions leaking into every app.
    avoids the phone's storage permission entirely.
 
 Do not expect `adb push` paths or `/sdcard` inside the guest. The manager's
-**8) Export** and **9) Import** menus already move backups through
+8) Export and 9) Import menus already move backups through
 `~/storage/downloads`.
 
 ### 8.2 Disk full
 
-**Symptom:** `No space left on device`, `dpkg` fails to unpack, or the desktop
+Symptom: `No space left on device`, `dpkg` fails to unpack, or the desktop
 cannot create temporary files.
 
-**Fix:**
+Fix:
 
 ```bash
 df -h "$PREFIX"
@@ -978,7 +962,7 @@ du -sh ~/* 2>/dev/null | sort -h | tail -n 10
 
 Reclaim space inside the distro with `sudo apt clean` (Debian family) or
 `sudo apk cache clean` (Alpine). In Termux, `pkg clean` removes package
-archives. Delete unused backups and instances with menu **10**. Do not delete
+archives. Delete unused backups and instances with menu 10. Do not delete
 files inside a live rootfs to make room; stop the desktop first.
 
 ### 8.3 Backup, restore, export and import
@@ -986,16 +970,16 @@ files inside a live rootfs to make room; stop the desktop first.
 | Action | Menu | Where the file goes |
 |---|---|---|
 | Backup | 3) Manager → 6) Backup | `~/<instance>-backup.tar.gz` in Termux |
-| Restore | 3) Manager → 7) Restore | reads the same path; **overwrites** the instance |
+| Restore | 3) Manager → 7) Restore | reads the same path; overwrites the instance |
 | Export | 3) Manager → 8) Export | `~/storage/downloads/<instance>-shared.tar.gz` |
 | Import | 3) Manager → 9) Import | reads `~/storage/downloads/<file>` |
 
-**Restore fails or the instance disappears:** check that the backup was made
+Restore fails or the instance disappears: check that the backup was made
 by the same manager generation and that the file is not truncated
 (`tar -tzf <file> >/dev/null`). Restore stops the instance first; a running
 desktop will make it fail.
 
-**Import fails:** the name must match exactly, including `.tar.gz`, and the file
+Import fails: the name must match exactly, including `.tar.gz`, and the file
 must be in `~/storage/downloads`. Run `termux-setup-storage` first. Import
 overwrites an existing instance with the same name; rename the file or uninstall
 the old instance first.
@@ -1005,13 +989,13 @@ release.
 
 ### 8.4 Uninstalled distro still appears
 
-**Symptom:** menu **10) Uninstall** says the instance was removed, but
+Symptom: menu 10) Uninstall says the instance was removed, but
 `proot-distro list` (or `start-linux`) still shows it.
 
-**Why:** an older uninstall could stop half-way when a session was still
+Why: an older uninstall could stop half-way when a session was still
 running or the rootfs was already damaged, leaving a ghost container.
 
-**Fix:** update the manager and run **10) Uninstall** again. It kills sessions,
+Fix: update the manager and run 10) Uninstall again. It kills sessions,
 finishes the deletion and removes legacy `installed-rootfs` stubs. If the
 directory still exists:
 
@@ -1022,19 +1006,17 @@ ls -la "$PREFIX/var/lib/proot-distro/containers/<instance>"
 Stop all sessions, then remove that directory only after confirming the name.
 Never remove the whole `proot-distro` tree; other instances live there.
 
----
-
 ## 9. Network and SSH
 
 ### 9.1 Guest has no internet
 
-**Symptom:** `apt update` cannot resolve hosts, `curl` hangs, but the phone's
+Symptom: `apt update` cannot resolve hosts, `curl` hangs, but the phone's
 browser works.
 
-**Why:** DNS inside the guest is inherited from Android/proot-distro. A VPN,
+Why: DNS inside the guest is inherited from Android/proot-distro. A VPN,
 private DNS setting or a broken `/etc/resolv.conf` can break only the guest.
 
-**Fix:** test in layers.
+Fix: test in layers.
 
 ```bash
 # Termux
@@ -1057,13 +1039,13 @@ fails, the problem is the phone's connection, not the distro.
 
 ### 9.2 `apt` TLS or clock errors
 
-**Symptom:** `Release file ... is not valid yet`, certificate errors, or
+Symptom: `Release file ... is not valid yet`, certificate errors, or
 `The following signatures were invalid`.
 
-**Why:** the phone clock is wrong (common after a battery drain or a long
+Why: the phone clock is wrong (common after a battery drain or a long
 sleep), or the image predates the current CA bundle.
 
-**Fix:** enable **Automatic date and time** in Android, then inside the distro:
+Fix: enable Automatic date and time in Android, then inside the distro:
 
 ```bash
 date
@@ -1076,16 +1058,16 @@ disabling TLS verification. `termux-change-repo` fixes the Termux side.
 
 ### 9.3 SSH from the PC fails
 
-**Symptom:** `ssh: connect to host ... port 8022: Connection refused` or the
+Symptom: `ssh: connect to host ... port 8022: Connection refused` or the
 password is rejected.
 
-**Why:** `sshd` is not running (it does not start at boot unless you added the
+Why: `sshd` is not running (it does not start at boot unless you added the
 boot script), the PC is on a different network, or the Termux account has no
 password.
 
-**Fix:**
+Fix:
 
-1. In Termux, run **3) Manager → 3) Start SSH Server**.
+1. In Termux, run 3) Manager → 3) Start SSH Server.
 2. If you have never set a Termux password: `passwd`.
 3. Find the phone's IP: `ifconfig` (look for `inet` on `wlan0`), or the
    manager prints it.
@@ -1095,25 +1077,25 @@ password.
    ssh -p 8022 u0_aNNN@PHONE_IP
    ```
 
-   The username is Termux's `whoami` (usually `u0_aNNN`), **not** the Linux
+   The username is Termux's `whoami` (usually `u0_aNNN`), not the Linux
    account name.
 
-**Still refused:** check that both devices are on the same Wi-Fi, that the
+Still refused: check that both devices are on the same Wi-Fi, that the
 router does not isolate clients, and that `sshd` is alive:
 `pgrep -af sshd`. Starting `sshd` without `-E` can block on the terminal on
 some Termux builds; the manager starts it safely.
 
 ### 9.4 SSH dies randomly
 
-**Symptom:** SSH works, then drops after a few minutes, often while the
+Symptom: SSH works, then drops after a few minutes, often while the
 desktop or the test suite is running. Termux may show
 `[Process completed (signal 9)]`.
 
-**Why:** Android's phantom-process killer. An XFCE session plus a build easily
-exceeds the default child-process limit, and Android kills the surplus —
+Why: Android's phantom-process killer. An XFCE session plus a build easily
+exceeds the default child-process limit, and Android kills the surplus,
 including `sshd`.
 
-**Fix:** §10.2. Also keep Termux in the foreground while using SSH, disable
+Fix: §10.2. Also keep Termux in the foreground while using SSH, disable
 battery optimisation for Termux, and run `termux-wake-lock` before long
 sessions.
 
@@ -1124,42 +1106,40 @@ the default localhost binding and keeps VNC traffic inside SSH. If you need VNC
 without SSH, understand that the VNC password is the only protection and the
 connection is unencrypted.
 
----
-
 ## 10. Performance and Android limits
 
 ### 10.1 Everything is slow
 
-**Why:** proot translates every syscall in user space, and phone storage is
+Why: proot translates every syscall in user space, and phone storage is
 slower than a PC SSD. Installing a desktop and unpacking icons are the worst
 cases; normal app use is much lighter.
 
-**What actually helps:**
+What helps:
 
 - Keep the phone charging and Termux in the foreground during installs.
-- Use a lighter desktop (LXDE, or CLI) on 2–3 GB devices.
+- Use a lighter desktop (LXDE, or CLI) on 2 to 3 GB devices.
 - Avoid concurrent `apt`/`npm`/browser installs.
 - Do not run the test suite while the desktop is up; it is CPU-heavy.
 
-**What does not help:** killing and restarting the install. That loses unpacked
+What does not help: killing and restarting the install. That loses unpacked
 work and can leave `dpkg` half-configured.
 
 ### 10.2 Android kills Termux (signal 9)
 
-**Symptom:** Termux closes with `[Process completed (signal 9)]`, or `sshd` and
+Symptom: Termux closes with `[Process completed (signal 9)]`, or `sshd` and
 the desktop disappear together.
 
-**Why:** Android 12+ limits background child processes. A Linux desktop looks
+Why: Android 12+ limits background child processes. A Linux desktop looks
 like a process storm to Android.
 
-**Fix (Android 14 and newer):**
+Fix (Android 14 and newer):
 
-1. Settings → About phone → tap **Build number** seven times.
-2. Settings → System → Developer options → enable **Disable child process
-   restrictions**.
+1. Settings → About phone → tap Build number seven times.
+2. Settings → System → Developer options → enable Disable child process
+   restrictions.
 3. Restart Termux.
 
-**Fix with ADB (any supported Android):**
+Fix with ADB (any supported Android):
 
 ```bash
 adb shell settings put global settings_enable_monitor_phantom_procs false
@@ -1175,24 +1155,22 @@ adb shell settings get global settings_enable_monitor_phantom_procs
 # false
 ```
 
-Also set Termux to **Unrestricted** battery usage (Settings → Apps → Termux →
+Also set Termux to Unrestricted battery usage (Settings → Apps → Termux →
 Battery). None of this requires root.
 
 ### 10.3 Phone sleep and battery optimisation
 
-**Symptom:** the desktop freezes when the screen turns off, or the session
+Symptom: the desktop freezes when the screen turns off, or the session
 dies overnight.
 
-**Fix:** run `termux-wake-lock` before long sessions (or let the manager's boot
+Fix: run `termux-wake-lock` before long sessions (or let the manager's boot
 script do it), set the screen timeout long enough for installs, and exclude
 Termux from battery optimisation. `termux-wake-unlock` releases the lock. A
 charging phone is the most reliable setup for a long install.
 
-**Low memory:** `free -m` shows the guest's view; Android may still kill
-background apps. Close other apps, use a lighter desktop, and avoid swap tools
-— they cannot create a real swap file inside proot.
-
----
+Low memory: `free -m` shows the guest's view; Android may still kill
+background apps. Close other apps, use a lighter desktop, and avoid swap tools.
+They cannot create a real swap file inside proot.
 
 ## 11. Updates and migration
 
@@ -1201,18 +1179,18 @@ background apps. Close other apps, use a lighter desktop, and avoid swap tools
 | Goal | Command |
 |---|---|
 | Get a newer manager | `cd ~/Linux-For-Android && git pull` |
-| Update packages **inside** the distro | `./install_linux.sh` → **3) Manager → 2) Update a Distro** |
-| Reapply launchers/fixes to an existing install | `./install_linux.sh` → **3) Manager → 12) Apply Latest Fixes** |
-| Repair apt/dpkg/users | `./install_linux.sh --doctor` or menu **0** |
+| Update packages inside the distro | `./install_linux.sh` → 3) Manager → 2) Update a Distro |
+| Reapply launchers/fixes to an existing install | `./install_linux.sh` → 3) Manager → 12) Apply Latest Fixes |
+| Repair apt/dpkg/users | `./install_linux.sh --doctor` or menu 0 |
 | Upgrade the distro release (e.g. 24.04 → 24.10) | Inside the distro: `sudo do-release-upgrade` (Ubuntu) or the distro's own tool |
 
-`git pull` does not change an installed distro. **Menu 12** is the bridge: it
+`git pull` does not change an installed distro. Menu 12 is the bridge: it
 regenerates `start-linux`, the VNC `xstartup`, the sudo shim support files, the
 wallpaper and the proot-safe wrappers without reinstalling the rootfs.
 
 ### 11.2 An update broke the desktop
 
-Run **0) Doctor**, then **12) Apply Latest Fixes**, then `stop-linux` and
+Run 0) Doctor, then 12) Apply Latest Fixes, then `stop-linux` and
 `start-linux`. Package upgrades can replace a launcher or remove
 `glycin-loaders`; menu 12 restores what this project adds. If the desktop is
 still broken, restore the backup you made before the upgrade (§8.3).
@@ -1225,29 +1203,25 @@ hand, the launcher and the conf no longer agree; reinstall or run menu 12 to
 regenerate the launchers from the actual name. Do not edit the conf while the
 desktop is running.
 
----
-
 ## 12. Recovery ladder
 
 Work down this list; stop as soon as the problem is fixed.
 
-1. **Stop everything:** `stop-linux`.
-2. **Read the last 60 lines** of `~/start-linux-session.log` (inside the
+1. Stop everything: `stop-linux`.
+2. Read the last 60 lines of `~/start-linux-session.log` (inside the
    distro) and the VNC log if applicable.
-3. **Repair:** `./install_linux.sh --doctor` (or menu **0**).
-4. **Reapply fixes:** menu **12**.
-5. **Collect evidence:** `./install_linux.sh --diagnostics`.
-6. **Back up:** menu **6** before anything destructive.
-7. **Reinstall the instance:** menu **10** (Uninstall) → **1** (Install) →
-   **7** (Restore). Your files inside the rootfs are lost unless you backed
+3. Repair: `./install_linux.sh --doctor` (or menu 0).
+4. Reapply fixes: menu 12.
+5. Collect evidence: `./install_linux.sh --diagnostics`.
+6. Back up: menu 6 before anything destructive.
+7. Reinstall the instance: menu 10 (Uninstall) → 1 (Install) →
+   7 (Restore). Your files inside the rootfs are lost unless you backed
    them up; Android storage is not inside the rootfs.
-8. **Report** with the diagnostics bundle and the exact steps (§13).
+8. Report with the diagnostics bundle and the exact steps (§13).
 
 Never delete `$PREFIX/var/lib/proot-distro` wholesale, and never run `rm -rf`
 on a path you have not confirmed with `ls`. Most "unfixable" installs are
 recoverable with Doctor plus a reinstall.
-
----
 
 ## 13. Reporting a bug
 
@@ -1272,11 +1246,9 @@ Security problems go through [SECURITY.md](../SECURITY.md), never a public
 issue. Known limitations and their status are in [issues.md](../issues.md);
 please check there before filing a duplicate.
 
----
-
 ## Appendix A: command cheat sheet
 
-**In Termux (host):**
+In Termux (host):
 
 ```bash
 ./install_linux.sh --version        # manager version
@@ -1289,7 +1261,7 @@ stop-linux                          # stop session, display and audio
 pgrep -af 'termux-x11|Xvnc|sshd'   # what is running
 ```
 
-**Inside the distro:**
+Inside the distro:
 
 ```bash
 tail -n 60 ~/start-linux-session.log
@@ -1302,7 +1274,7 @@ sudo apt-get -f install
 sudo apt clean
 ```
 
-**Android (ADB, optional):**
+Android (ADB, optional):
 
 ```bash
 adb shell settings get global settings_enable_monitor_phantom_procs
