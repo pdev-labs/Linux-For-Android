@@ -31,6 +31,10 @@ Commands that say *inside the distro* are run in a guest shell opened with
 | Install was interrupted or the phone rebooted | [§2.9](#29-install-was-interrupted) |
 | `Cannot establish any listening sockets` | [§3.1](#31-cannot-establish-any-listening-sockets) |
 | `No distributions installed` | [§3.2](#32-no-distributions-installed) |
+| `Multiple distributions found` / `Choose one with -i NAME` | [§3.10](#310-lfa-needs-an-instance-name) |
+| `start-linux now opens the advanced menu` | [§3.11](#311-the-start-linux-change-notice) |
+| `Another installed distro still uses Termux:X11` | [§3.9](#39-how-do-i-switch-between-termuxx11-and-vnc) |
+| `Termux:X11 requires Android 8 or newer` | [§3.9](#39-how-do-i-switch-between-termuxx11-and-vnc) |
 | Black screen, `Unable to contact settings server` | [§3.3](#33-black-screen-or-unable-to-contact-settings-server) |
 | Desktop dies with `Gtk:ERROR ... Bail out!` | [§3.4](#34-desktop-dies-with-a-gtk-bail-out) |
 | `Non UTF-8 locale` or apps exit with status 8 | [§3.5](#35-non-utf-8-locale) |
@@ -38,6 +42,8 @@ Commands that say *inside the distro* are run in a guest shell opened with
 | `stop-linux` leaves Termux:X11 open | [§3.7](#37-stop-linux-leaves-termuxx11-open) |
 | `start-linux` starts a second desktop | [§3.8](#38-start-linux-starts-a-second-desktop) |
 | Need to switch between Termux:X11 and VNC | [§3.9](#39-how-do-i-switch-between-termuxx11-and-vnc) |
+| `lfa` says no instance, or a command does nothing | [§3.10](#310-lfa-needs-an-instance-name) |
+| `start-linux` shows a notice about `linux` and `lfa` | [§3.11](#311-the-start-linux-change-notice) |
 | Termux:X11 shows "display :1 not found" | [§4.1](#41-termuxx11-says-display-1-not-found) |
 | Screen is the wrong size or rotated | [§4.2](#42-wrong-resolution-or-rotation) |
 | Touch pointer is offset, keys are missing | [§4.3](#43-touch-pointer-keyboard-and-clipboard) |
@@ -532,16 +538,64 @@ happens to share a name.
 
 ### 3.9 How do I switch between Termux:X11 and VNC?
 
-If both backends are installed, `start-linux` shows a desktop entry for each
-one. Pick the backend you want. After a desktop start, it remembers the choice
-and preselects it next time. Terminal-only sessions do not change it.
+If both backends are installed, `linux` and `start-linux` show a desktop entry
+for each one. Pick the backend you want. After a desktop start, the manager
+remembers the choice and preselects it next time. Terminal-only sessions do not
+change it.
 
-If the install has only one backend, run `./install_linux.sh`, choose 3)
-Manager, then 12) Apply Latest Fixes. It offers to add the missing backend
-after confirmation.
+To change the installed backend itself:
 
-Run `stop-linux` before switching. The two backends share display `:1` and
-port `5901`, so they cannot run at the same time.
+```bash
+lfa switch both -i <instance>          # install both, keep everything
+lfa switch x11  -i <instance>          # use X11, keep VNC packages
+lfa switch vnc  -i <instance> --remove-old
+```
+
+`--remove-old` removes the packages of the backend you are leaving. The new
+backend is installed first. If another distro still uses Termux:X11, removal
+is refused unless you add `--force`. The same operation is menu 14, **Change
+Display Backend**. Run `lfa stop -i <instance>` first if a desktop is running;
+the two backends share display `:1` and port `5901` and cannot run together.
+
+If only one backend was installed by an old version, menu 12 can add the other
+one without touching packages. On Android 5/6, X11 and Both are refused with
+an explanation; stay on VNC.
+
+### 3.10 `lfa` needs an instance name
+
+Symptom: `lfa switch vnc` prints `Multiple distributions found. Choose one
+with -i NAME`, or a command reports that a name is not installed.
+
+Why: `lfa` never guesses when a command changes one distribution. `lfa start`,
+`lfa shell`, and `lfa stop` may reuse the last started instance, but install,
+switch, autostart, update, doctor, backup, restore, and remove need an explicit
+target when several exist.
+
+Fix: add `-i` (short for `--instance`):
+
+```bash
+lfa switch vnc -i ubuntu
+lfa status -i ubuntu --json
+lfa list
+```
+
+`lfa list` shows the exact names. Names are also the directory names under
+`$PREFIX/var/lib/proot-distro/`.
+
+### 3.11 The `start-linux` change notice
+
+Symptom: every interactive `start-linux` run prints a short notice about
+`linux`, `lfa`, and the advanced menu.
+
+Why: `start-linux` kept its old behaviour, but the new daily commands are
+`linux` (desktop) and `lfa` (everything else). The notice is shown once per
+interactive classic run so existing users can find them.
+
+Fix: hide it permanently with `lfa notice off`. `lfa notice on` brings it back,
+and `lfa notice status` reports the current value. For one run use
+`start-linux --no-notice`; for scripts and widgets use `LFA_NO_NOTICE=1`.
+`linux`, Termux:Boot, and non-interactive runs never print it. The preference
+is stored in `~/.config/linux-for-android/preferences.conf`.
 
 ## 4. Display and input
 

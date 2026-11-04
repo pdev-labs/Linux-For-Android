@@ -1,6 +1,6 @@
 # Test report for v1.7.1
 
-> Current development suite: `PASS=404 FAIL=0`.
+> Current development suite: `PASS=491 FAIL=0`.
 
 ## Both backends, 2026-11-04
 
@@ -11,8 +11,8 @@ aarch64, Termux 0.118.3, proot-distro 5.10.3.
 
 | Check | Result |
 |---|---|
-| Host suite (`./tests/test-all.sh`) | `PASS=404 FAIL=0` |
-| Device suite (`./tests/device-matrix.sh`) | `PASS=404 FAIL=0` |
+| Host suite (`./tests/test-all.sh`) | `PASS=491 FAIL=0` |
+| Device suite (`./tests/device-matrix.sh`) | `PASS=404 FAIL=0` (last device run before the CLI feature) |
 | `bash -n` on the installer, libraries, and tests | clean |
 
 ### Device scenarios
@@ -51,6 +51,32 @@ Not exercised on hardware in this pass: Android 5/6 display-server hiding,
 GNOME with Both, and the actual Termux:Boot reboot path. Those remain covered
 by the stubbed host suite only.
 
+## CLI, switching, and removal, 2026-11-04
+
+Host verification only in this pass. The new commands are exercised with the
+stubbed Termux environment; the next device pass should repeat the switch
+matrix on the Vivo and the refusal path on the Oppo. The Oppo was not
+reachable over SSH during this pass, so its Android 5 path is covered by the
+stub suite only.
+
+| Check | Result |
+|---|---|
+| Host suite (`./tests/test-all.sh`) | `PASS=491 FAIL=0` |
+| `lfa` runtime copy and wrappers | `lfa`, `linux`, `switch-linux`, `autostart-linux`, `lfa-lib.sh` generated |
+| `lfa install --backend both -i <name>` | `SERVER="both"`, desktop config, JSON status |
+| `lfa switch x11 --remove-old` | guest TigerVNC package removal, VNC config deleted, config `SERVER="x11"` |
+| `lfa switch vnc --remove-old --force` | host `termux-x11-nightly` removed, config `SERVER="vnc"` |
+| Shared Termux:X11 | refused without `--force`; config left on `both` |
+| Boot script ownership | switching another instance does not rewrite a boot script that targets a different one |
+| `lfa autostart vnc|none` | boot script and `DO_AUTOSTART` updated |
+| `lfa notice off|on|status` | preference file and reported state round-trip |
+| Explicit `-i` | invalid name exits 1 in `start-linux`, `terminal-linux`, and `stop-linux` |
+| Non-interactive Both start | exits 1 with "no default is remembered" instead of guessing |
+| Android 5/6 switch/install to X11 or Both | refused with explanation, `--remove-old` warning, and VNC restore command |
+
+The test suite now also runs a `lfa shell -i <name> --root` case to prove that
+option order does not drop the instance.
+
 ## Android 5 legacy verification, 2026-11-04
 
 Device: Oppo A37fw, Android 5.1.1 (SDK 22), aarch64, 2 GB RAM, 3.6 GB free.
@@ -59,7 +85,7 @@ installed from source by the installer.
 
 | Check | Result |
 |---|---|
-| Device suite (`./tests/device-matrix.sh`) | `PASS=404 FAIL=0` |
+| Device suite (`./tests/device-matrix.sh`) | `PASS=404 FAIL=0` (last device run before the CLI feature) |
 | Guided setup menu | `LEGACY MODE: Android 5/6 detected`; X11 and Both absent; VNC selected automatically |
 | Fresh install, Alpine 3.18 + XFCE4 + VNC (`legacyvnc`) | completed in 9m38s; 3686 MB free reported, 2500 MB needed |
 | Guest packages | `vncserver`, `Xvnc`, `xfce4-session`, VNC password, Xstartup |

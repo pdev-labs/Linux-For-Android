@@ -15,6 +15,28 @@ tag names, define the order. See the table at the bottom.
 
 ### Added
 
+- New `lfa` command line: `install`, `list`, `status`, `start`, `shell`,
+  `stop`, `switch`, `autostart`, `update`, `doctor`, `backup`, `restore`,
+  `remove`, `diagnostics`, `notice`, `version`, and `help`. `-i` is shorthand
+  for `--instance` everywhere the long form is accepted.
+- New `linux` shortcut starts the desktop directly without the classic
+  terminal/desktop menu. It is a script, not an alias, so it works from
+  widgets, SSH, and boot scripts. `start-linux` keeps the full advanced menu.
+- `lfa switch x11|vnc|both` changes the backend in place. `--remove-old`
+  removes the packages of the backend being left, and `--keep-packages` is
+  the default. The new backend is installed before anything is removed.
+- `lfa switch` refuses to remove Termux:X11 while another installed distro
+  still uses it, unless `--force` is given. VNC removal also deletes the
+  per-user `.vnc` and `.config/tigervnc` directories.
+- Menu 14, Change Display Backend, wraps the same switch and removal logic.
+- A short change notice is printed by interactive `start-linux` runs. Hide it
+  with `lfa notice off`, `start-linux --no-notice`, or `LFA_NO_NOTICE=1`;
+  restore it with `lfa notice on`. The preference is stored per user, not per
+  distro.
+- Android 5/6 refuses X11 and Both switches and installer requests with an
+  explanation. If `--remove-old` was requested, the manager warns that
+  deleting VNC would leave no desktop and prints the command that reinstalls
+  VNC.
 - Guided setup can install Termux:X11, VNC, or both. With both, `start-linux`
   asks which backend to use, remembers the last desktop choice, and
   `stop-linux` stops either or both.
@@ -23,6 +45,21 @@ tag names, define the order. See the table at the bottom.
 - Termux:Boot can start either backend when both are installed. X11 autostart
   starts the server and desktop in the background; open the Termux:X11 app
   when you want to see it.
+
+### Changed
+
+- `lfa` and its aliases run from a private copy under
+  `$PREFIX/lib/linux-for-android`, so the command line keeps working after
+  the cloned repository is moved or deleted. The copy is refreshed on install
+  and on menu 12.
+- The generated launchers now reject unknown options instead of silently
+  starting a desktop. Explicit `-i` names are validated even when only one
+  distro is installed, and non-interactive Both starts fail rather than
+  guessing a backend.
+- A backend switch no longer rewrites a Termux:Boot script that belongs to a
+  different instance.
+- Diagnostics bundles now include the `lfa`, `linux`, `switch-linux`, and
+  `autostart-linux` wrappers.
 
 ### Fixed
 

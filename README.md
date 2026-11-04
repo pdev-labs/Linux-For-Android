@@ -50,7 +50,8 @@ cd Linux-For-Android && ./install_linux.sh
 ```
 
 Choose Guided setup, pick a distro and desktop, answer a few questions, and you
-get `start-linux` and `stop-linux` commands plus a home-screen shortcut. Pin a
+get the `linux` desktop shortcut, the `lfa` command line, and the classic
+`start-linux` / `stop-linux` commands plus a home-screen shortcut. Pin a
 different version by changing `--branch`. `main` is development.
 
 Requirements: about 1 GB free for a CLI install, 2.5 GB for a desktop, and
@@ -130,7 +131,7 @@ hardware, not simulated. Full details, root causes, and evidence are in
 | Alpine 3.18 (Android 5) | Yes | Yes | legacy VNC desktop, panel works; X11 and Both hidden | v1.7.1 |
 | Ubuntu GNOME 46 (experimental) | Yes | Yes | shell and apps run; session services missing | v1.7.0 |
 
-> The test suite runs `404` checks with 0 failures. The same suite runs on the
+> The test suite runs `491` checks with 0 failures. The same suite runs on the
 > devices (`tests/device-matrix.sh`). The table is as of v1.7.1. Ubuntu was
 > re-verified on v1.7.1, and Alpine 3.18 was re-verified on Android 5 on
 > 2026-11-04; the other rows were last verified on v1.7.0. A row is
@@ -309,9 +310,15 @@ as experimental only.
 - VirGL configures `virglrenderer-android` and passes 3D OpenGL rendering to
   the phone's GPU.
 - Choose VNC for software rendering or Termux:X11 for a hardware-accelerated
-  desktop. Guided setup can also install both. With both, `start-linux` asks
-  which backend to use and remembers the last desktop choice. Terminal-only
-  sessions do not change that choice.
+  desktop. Guided setup can also install both. With both, `linux` and
+  `start-linux` ask which backend to use and remember the last desktop choice.
+  `lfa switch x11|vnc|both` changes the backend later. Terminal-only sessions
+  do not change that choice.
+- `lfa switch <backend> --remove-old` removes the packages of the backend
+  you are leaving. Termux:X11 is shared between distros, so the manager refuses to
+  remove it while another installed distro still uses it unless `--force` is
+  given. Android 5/6 refuses X11 and Both switches and explains how to restore
+  VNC if its packages are ever removed by hand.
 - VNC uses a modern TigerVNC config, an `exec`-style desktop session, and a
   persistent proot keepalive so `--kill-on-exit` cannot kill the server. The
   keepalive is a single `exec sleep`, so `stop-linux` can terminate it.
@@ -352,9 +359,11 @@ as experimental only.
   `COLOR_MODE`, `TIMEZONE`, `HOSTNAME`, `NEED_VIRGL`), bakes the hostname into
   the shell prompt, refreshes the VNC `xstartup`, re-applies the saved light or
   dark wallpaper for GUI instances, regenerates `start-linux`,
-  `terminal-linux`, and `stop-linux` from the current templates, updates the
-  legacy bullseye plugin, rebuilds `libuid0` if missing, and repairs EOL apt
-  sources.
+  `terminal-linux`, `stop-linux`, `linux`, and `lfa` from the current
+  templates, updates the legacy bullseye plugin, rebuilds `libuid0` if missing,
+  and repairs EOL apt sources.
+- Change Display Backend (menu 14) switches X11, VNC, or Both in place and can
+  remove the packages of the backend being left.
 - The system dashboard shows Android RAM availability, Termux storage use, and
   CPU architecture.
 - The audio fixer restarts PulseAudio and binds it to TCP protocols to resolve
@@ -396,6 +405,8 @@ chmod +x install_linux.sh
 
 ### Command line
 
+The installer itself keeps its original flags:
+
 ```text
 -h, --help       show usage and exit
 -V, --version    print the version
@@ -407,6 +418,45 @@ chmod +x install_linux.sh
 
 `--help` and `--version` work outside Termux too. Everything else still has
 its interactive path in the menu.
+
+After an install, `lfa` is the command line for day-to-day work. It is a
+private copy of the manager, so it keeps working if the cloned repository is
+moved or deleted. `-i` is shorthand for `--instance` everywhere the long form
+is accepted.
+
+| Command | What it does |
+| --- | --- |
+| `lfa install` | install without menus; accepts `--distro`, `--desktop`, `--backend`, `--autostart`, `--user`, `--hostname`, `--timezone`, and `-i` |
+| `lfa list` | list installed distributions (`--json` for scripts) |
+| `lfa status` | show desktop, backend, autostart, and running state (`--json`) |
+| `lfa start` | start the desktop; `--x11` or `--vnc` forces a backend |
+| `lfa shell` | open a terminal; `--root` or `--user` picks the account |
+| `lfa stop` | stop a desktop; `--all` stops every instance |
+| `lfa switch` | switch `x11`, `vnc`, or `both`; see below |
+| `lfa autostart` | set boot desktop to `x11`, `vnc`, or `none` |
+| `lfa update` | update one distribution |
+| `lfa doctor` | repair apt/dpkg and the manager files |
+| `lfa backup` | write `~/<instance>-backup.tar.gz` |
+| `lfa restore` | restore a backup file |
+| `lfa remove` | delete a distribution (`-y` skips the question) |
+| `lfa diagnostics` | write a redacted support bundle |
+| `lfa notice` | `on`, `off`, or `status` for the `start-linux` change notice |
+| `lfa version` / `lfa help` | version and command list |
+
+Examples:
+
+```bash
+lfa install --distro ubuntu --desktop xfce4 --backend both -i ubuntu
+lfa start -i ubuntu --vnc
+lfa shell -i ubuntu --user
+lfa switch x11 -i ubuntu --remove-old
+lfa autostart vnc -i ubuntu
+lfa notice off
+```
+
+When more than one distribution is installed, commands that operate on one
+instance require `-i` instead of guessing. `lfa start`, `lfa shell`, and
+`lfa stop` otherwise reuse the last instance you started.
 
 ## Older and custom distro versions
 
@@ -606,18 +656,36 @@ Two maintenance options keep old installs healthy without reinstalling:
 
 ### Starting your Linux desktop
 
-Once installed, you never need to run the setup script again. Type this
-anywhere in Termux:
+Once installed, you never need to run the setup script again. For daily use,
+the `linux` shortcut starts the desktop directly without the classic
+terminal/desktop menu:
+
+```bash
+linux
+```
+
+`linux` accepts the same backend and instance flags, for example
+`linux --vnc` or `linux -i ubuntu`. It is a real script in `$PREFIX/bin`, so it
+also works from widgets, SSH sessions, and boot scripts.
+
+The classic launcher is still available and now opens the advanced menu:
 
 ```bash
 start-linux
 ```
 
 If you installed multiple distributions, it shows a menu asking which one to
-boot. If the install has a GUI, `start-linux` asks what you want: full desktop,
-root terminal only, or user terminal only. Terminal modes do not start display
-or audio servers. CLI-only installs ask root or user terminal. Terminal choices
-default to root when you press Enter.
+boot (or uses the last one). If the install has a GUI, `start-linux` asks what
+you want: full desktop, root terminal only, or user terminal only. Terminal
+modes do not start display or audio servers. CLI-only installs ask root or
+user terminal. Terminal choices default to root when you press Enter. Use
+`start-linux --desktop` when you want the direct desktop behaviour without the
+menu.
+
+The first interactive `start-linux` run after upgrading shows a short notice
+about `linux` and `lfa`. Hide it permanently with `lfa notice off`, hide it for
+one run with `start-linux --no-notice`, or set `LFA_NO_NOTICE=1`. The notice is
+never printed by `linux`, non-interactive runs, or Termux:Boot.
 
 When both Termux:X11 and VNC are installed, the menu has a desktop entry for
 each backend. The first start has no default, so you must pick one. After a
@@ -626,16 +694,50 @@ time. Only one backend runs at a time because both use display `:1` and port
 `5901`. `stop-linux` stops whichever backend is running, and stops both if both
 were started.
 
+### Changing the display backend
+
+Use `lfa switch` to install a different backend and update the per-instance
+config. The default keeps the old packages so you can switch back instantly:
+
+```bash
+lfa switch both -i ubuntu            # install the other backend, keep both
+lfa switch x11  -i ubuntu            # use X11; VNC packages stay installed
+lfa switch vnc  -i ubuntu --remove-old   # use VNC and remove the X11 packages
+```
+
+`--remove-old` removes the packages of the backend being left: host
+`termux-x11-nightly` for X11, and the distro's TigerVNC package plus the
+user's `~/.vnc` and `~/.config/tigervnc` for VNC. The new backend is installed
+before the old one is removed, so a failed download does not leave you without
+a desktop.
+
+Termux:X11 is shared by every distro on the phone. If another installed distro
+still has `SERVER="x11"` or `SERVER="both"`, the manager refuses to remove it
+and tells you which distro is using it. Use `--force` only when you mean to
+remove X11 for all of them.
+
+On Android 5/6, `lfa switch x11`, `lfa switch both`, and the equivalent
+installer options are refused with an explanation because Termux:X11 needs
+Android 8 or newer. `--remove-old` is ignored on those devices: removing VNC
+would leave the phone with no desktop. The message shows the exact command to
+restore VNC (`lfa switch vnc -i <instance>`), which reinstalls the server,
+password, and xstartup.
+
+The same operation is available as menu 14, **Change Display Backend**.
+
 ### Quick terminal without servers
 
 ```bash
+lfa shell
+# or the classic shortcut
 terminal-linux
 ```
 
 This opens a shell in a distro without touching PulseAudio, VirGL, or the
-display server, then lets you pick the root or user terminal. It is useful for
-quick admin work and as a Termux:Widget shortcut, which is created
-automatically.
+display server. `lfa shell` defaults to the user account; `lfa shell --root`
+uses the admin account. `terminal-linux` asks which one. Both accept
+`-i <instance>`. It is useful for quick admin work and as a Termux:Widget
+shortcut, which is created automatically.
 
 ### Default credentials and privileges
 
@@ -664,7 +766,12 @@ To stop the desktop, display servers, and audio systems, run:
 
 ```bash
 stop-linux
+# or
+lfa stop -i <instance>
 ```
+
+`stop-linux --all` stops every installed instance. The launchers also accept
+`-i <instance>`, which is required when more than one is installed.
 
 ## Software and app fixes
 
@@ -1218,7 +1325,7 @@ plus `script` from util-linux for the pty test, which is skipped if absent:
 
 ```bash
 chmod +x tests/test-all.sh
-./tests/test-all.sh   # expect: PASS=404 FAIL=0
+./tests/test-all.sh   # expect: PASS=491 FAIL=0
 ```
 
 The suite is deliberately stubbed. It cannot prove a desktop actually appears.

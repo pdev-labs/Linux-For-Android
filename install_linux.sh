@@ -20,6 +20,11 @@ fi
 # Directory containing this script (lib/ lives next to it).
 LFA_DIR="$(cd "$(dirname "$0")" && pwd)"
 LFA_VERSION="1.7.1"
+LFA_RUNTIME="$PREFIX/lib/linux-for-android"
+LFA_PREFS="$HOME/.config/linux-for-android/preferences.conf"
+LFA_CLI_MODE="${LFA_CLI_MODE:-0}"
+LFA_ASSUME_YES="${LFA_ASSUME_YES:-0}"
+CLI_INSTANCE="${CLI_INSTANCE:-}"
 
 # ------------------------------------------------------------
 # Interrupt safety and temporary artifacts.
@@ -178,6 +183,10 @@ ui_confirm() {
     local _q="$1" _def="$2" _ans _sel _i _key
     local _keep="${UI_NO_CLEAR:-0}"
     UI_NO_CLEAR=0
+    if [ "$LFA_ASSUME_YES" = "1" ]; then
+        printf '%s [yes]\n' "$_q"
+        return 0
+    fi
     if [ "$UI_TTY" != "1" ]; then
         local _hint='y/N'
         [ "$_def" = "y" ] && _hint='Y/n'
@@ -1297,7 +1306,7 @@ lfa_diagnostics() {
         fi
     done < <(pd_instances 2>/dev/null)
 
-    for f in start-linux stop-linux terminal-linux lfa-lib.sh; do
+    for f in start-linux stop-linux terminal-linux lfa-lib.sh lfa linux switch-linux autostart-linux; do
         [ -f "$PREFIX/bin/$f" ] && cp "$PREFIX/bin/$f" "$stage/launchers/" 2>/dev/null || true
     done
 
@@ -1315,6 +1324,337 @@ lfa_diagnostics() {
     rm -rf "$stage" 2>/dev/null || true
     echo "Could not create $out" >&2
     return 1
+}
+
+lfa_cli_usage() {
+    cat <<'HELP'
+Linux for Android - command line
+
+Usage: lfa <command> [options]
+
+  install       install a distro without menus
+  list          list installed distributions
+  status        show backend and autostart state
+  start         start the desktop
+  shell         open a terminal
+  stop          stop the desktop
+  switch        change backend and optionally remove old packages
+  autostart     set the boot backend
+  update        update a distro
+  doctor        repair a distro
+  backup        create a backup
+  restore       restore a backup
+  remove        delete a distro
+  diagnostics   write a support bundle
+  notice        show, hide, or query the start-linux notice
+  version       print the version
+  help          show this help
+
+Global short option:
+  -i, --instance NAME
+
+Install options:
+  -d, --distro NAME       ubuntu, debian, kali, fedora, opensuse,
+                          void, archlinux, alpine
+      --desktop NAME      xfce4, lxde, mate, gnome, none
+  -b, --backend NAME      x11, vnc, both, none
+      --autostart NAME    x11, vnc, none
+      --user NAME         desktop username
+      --hostname NAME     guest hostname
+      --timezone AREA/CITY
+
+Switch options:
+      --remove-old        remove the packages of the backend being left
+      --keep-packages     keep them (default)
+      --force             remove shared Termux:X11 despite another distro
+
+Examples:
+  lfa install --distro ubuntu --desktop xfce4 --backend both -i ubuntu
+  lfa start -i ubuntu --vnc
+  lfa shell -i ubuntu --user
+  lfa switch x11 -i ubuntu --remove-old
+  lfa autostart vnc -i ubuntu
+  lfa notice off
+HELP
+}
+
+lfa_cli_notice_write() {  # $1 = on|off
+    local _val="${1:-on}"
+    case "$_val" in on) _val=1 ;; off) _val=0 ;; *) echo "Usage: lfa notice on|off|status" >&2; return 2 ;; esac
+    mkdir -p "$(dirname "$LFA_PREFS")" 2>/dev/null || true
+    if grep -q '^START_NOTICE=' "$LFA_PREFS" 2>/dev/null; then
+        sed -i "s|^START_NOTICE=.*|START_NOTICE=\"$_val\"|" "$LFA_PREFS"
+    else
+        printf 'START_NOTICE="%s"\n' "$_val" >> "$LFA_PREFS"
+    fi
+}
+
+lfa_cli_status_one() {  # $1 = instance, $2 = json
+    local _inst="$1" _json="${2:-0}" _conf _d _de _srv _auto _pid _run="none"
+    _conf="$(pd_conf "$_inst" 2>/dev/null)"
+    _d=""; _de=""; _srv="none"; _auto="none"
+    if [ -f "$_conf" ]; then
+        # shellcheck disable=SC1090
+        { IFS= read -r _d; IFS= read -r _de; IFS= read -r _srv; IFS= read -r _auto; } < <(
+            . "$_conf" 2>/dev/null
+            printf '%s\n%s\n%s\n%s\n' "${DISTRO:-}" "${DE:-none}" "${SERVER:-none}" "${AUTOSTART_SERVER:-none}"
+        )
+    fi
+    if [ -f "$PREFIX/tmp/lfa-vnc-$_inst.pid" ]; then
+        _pid="$(cat "$PREFIX/tmp/lfa-vnc-$_inst.pid" 2>/dev/null || true)"
+        if lfa_pid_matches "$_pid" "proot" "Xvnc"; then _run="vnc"; fi
+    fi
+    if pgrep -f '^termux-x11 .* :1( |$)' >/dev/null 2>&1; then _run="x11"; fi
+    if [ "$_json" = "1" ]; then
+        printf '{"instance":"%s","distro":"%s","desktop":"%s","backend":"%s","autostart":"%s","running":"%s"}\n' \
+            "$_inst" "$_d" "$_de" "$_srv" "$_auto" "$_run"
+    else
+        echo "instance:  $_inst"
+        echo "distro:    ${_d:-unknown}"
+        echo "desktop:   ${_de:-none}"
+        echo "backend:   ${_srv:-none}"
+        echo "autostart: ${_auto:-none}"
+        echo "running:   $_run"
+    fi
+}
+
+lfa_cli_install() {
+    local _distro="" _de="" _backend="" _inst="" _auto="" _user="user" _tz="" _host="localhost"
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --distro|-d) _distro="${2:-}"; shift 2 ;;
+            --desktop) _de="${2:-}"; shift 2 ;;
+            --backend|-b) _backend="${2:-}"; shift 2 ;;
+            -i|--instance) _inst="${2:-}"; shift 2 ;;
+            --autostart) _auto="${2:-}"; shift 2 ;;
+            --user) _user="${2:-}"; shift 2 ;;
+            --timezone) _tz="${2:-}"; shift 2 ;;
+            --hostname) _host="${2:-}"; shift 2 ;;
+            -h|--help) lfa_cli_usage; return 0 ;;
+            *) echo "Unknown option: $1" >&2; return 2 ;;
+        esac
+    done
+    if [ -n "$_inst" ] && ! printf '%s' "$_inst" | grep -Eq '^[A-Za-z0-9_.-]+$'; then
+        echo "Invalid instance name '$_inst': use letters, digits, dot, underscore or dash." >&2
+        return 2
+    fi
+    if ! printf '%s' "$_user" | grep -Eq '^[a-z_][a-z0-9_-]*$' || [ "${#_user}" -gt 32 ]; then
+        echo "Invalid username '$_user': lowercase letters, digits, _ or -, starting with a letter or _." >&2
+        return 2
+    fi
+    if [ -n "$_host" ] && ! printf '%s' "$_host" | grep -Eq '^[A-Za-z0-9.-]+$'; then
+        echo "Invalid hostname '$_host'." >&2
+        return 2
+    fi
+    if [ -n "$_tz" ] && ! printf '%s' "$_tz" | grep -Eq '^[A-Za-z0-9_+/-]+$'; then
+        echo "Invalid timezone '$_tz'. Use a name such as Europe/London." >&2
+        return 2
+    fi
+    if [ -z "$_distro" ]; then
+        [ "$IS_LEGACY" = "1" ] && _distro="alpine" || _distro="debian"
+    fi
+    case "$_distro" in ubuntu|debian|kali|fedora|opensuse|void|archlinux|alpine) ;; *) echo "Unknown distro: $_distro" >&2; return 2 ;; esac
+    if [ -z "$_de" ]; then
+        if [ "$IS_LEGACY" = "1" ] || [ "$(setup_ram_mb)" -le 2048 ]; then _de="none"; else _de="xfce4"; fi
+    fi
+    case "$_de" in xfce|xfce4) _de="xfce4" ;; lxde|mate|gnome|none) ;; *) echo "Unknown desktop: $_de" >&2; return 2 ;; esac
+    if [ "$_de" = "none" ] && [ -n "$_backend" ] && [ "$_backend" != "none" ]; then
+        echo "[!] --desktop none cannot be combined with --backend $_backend." >&2
+        return 1
+    fi
+    if [ "$_de" = "none" ]; then _backend="none"; fi
+    if [ -z "$_backend" ]; then
+        if [ "$_de" = "none" ]; then _backend="none"
+        elif [ "$IS_LEGACY" = "1" ]; then _backend="vnc"
+        else _backend="x11"; fi
+    fi
+    case "$_backend" in x11|vnc|both|none) ;; *) echo "Unknown backend: $_backend" >&2; return 2 ;; esac
+    if [ "$IS_LEGACY" = "1" ] && { [ "$_backend" = "x11" ] || [ "$_backend" = "both" ]; }; then
+        echo "[!] Termux:X11 requires Android 8 or newer; use --backend vnc." >&2
+        return 1
+    fi
+    if [ "$_backend" = "none" ] && [ "$_de" != "none" ]; then
+        echo "[!] A GUI desktop needs --backend x11, vnc, or both." >&2
+        return 1
+    fi
+    if [ -n "$_auto" ] && [ "$_de" = "none" ]; then
+        echo "[!] Autostart needs a desktop." >&2
+        return 1
+    fi
+    _tz="${_tz:-$(setup_guess_timezone)}"
+    DISTRO="$_distro"; DE="$_de"; SERVER="$_backend"
+    INSTANCE_NAME="$_inst"
+    SETUP_USER="$_user"
+    SETUP_USER_B64="$(b64enc "${LFA_USER_PASSWORD:-root}")"
+    SETUP_ROOT_B64="$(b64enc "${LFA_ROOT_PASSWORD:-root}")"
+    TIMEZONE="$_tz"; HOSTNAME="$_host"; PSTYLE="minimal"; COLOR_MODE="light"
+    RESOLUTION="${LFA_RESOLUTION:-1280x720}"
+    APP_CHOICES=""
+    NEED_VIRGL=1; [ "$IS_LEGACY" = "1" ] && NEED_VIRGL=0
+    DO_AUTOSTART=0; AUTOSTART_SERVER="none"
+    if [ -n "$_auto" ] && [ "$_auto" != "none" ]; then
+        case "$_auto" in x11|vnc) ;; *) echo "Unknown autostart backend: $_auto" >&2; return 2 ;; esac
+        if [ "$_auto" = "x11" ] && [ "$_backend" != "x11" ] && [ "$_backend" != "both" ]; then
+            echo "[!] X11 autostart needs --backend x11 or both." >&2; return 1
+        fi
+        if [ "$_auto" = "vnc" ] && [ "$_backend" != "vnc" ] && [ "$_backend" != "both" ]; then
+            echo "[!] VNC autostart needs --backend vnc or both." >&2; return 1
+        fi
+        DO_AUTOSTART=1; AUTOSTART_SERVER="$_auto"
+    fi
+    DO_STORAGE=0; DO_SSH=0; DO_WIDGET=0; SETUP_ANSWERED=1
+    setup_save
+    LFA_NONINTERACTIVE=1 LFA_ASSUME_YES=1 install_linux
+}
+
+lfa_cli() {
+    local _cmd="${1:-help}"
+    [ $# -gt 0 ] && shift || true
+    if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
+        lfa_cli_usage
+        return 0
+    fi
+    case "$_cmd" in
+        help|-h|--help) lfa_cli_usage ;;
+        version|-V|--version) echo "Linux for Android Manager $LFA_VERSION" ;;
+        list)
+            local _json=0 _n _first _i
+            [ "${1:-}" = "--json" ] && _json=1
+            _n="$(pd_instances)"
+            if [ "$_json" = "1" ]; then
+                printf '['
+                _first=1
+                while IFS= read -r _i; do [ -n "$_i" ] || continue; [ "$_first" = "1" ] || printf ','; printf '"%s"' "$_i"; _first=0; done <<< "$_n"
+                printf ']\n'
+            elif [ -z "$_n" ]; then
+                echo "No distributions installed."
+            else
+                echo "Installed distributions:"
+                echo "$_n" | sed 's/^/  - /'
+            fi
+            ;;
+        status)
+            local _json=0 _inst=""
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --json) _json=1; shift ;;
+                    -i|--instance) _inst="${2:-}"; shift 2 ;;
+                    *) echo "Unknown option: $1" >&2; return 2 ;;
+                esac
+            done
+            if [ -n "$_inst" ]; then
+                if ! pd_instances 2>/dev/null | grep -Fxq -- "$_inst"; then
+                    echo "No installed distribution named '$_inst'." >&2
+                    return 1
+                fi
+                lfa_cli_status_one "$_inst" "$_json"
+            else
+                local _any=0
+                while IFS= read -r _i; do
+                    [ -z "$_i" ] && continue
+                    [ "$_any" = "1" ] && [ "$_json" != "1" ] && echo ""
+                    lfa_cli_status_one "$_i" "$_json"
+                    _any=1
+                done < <(pd_instances)
+                if [ "$_any" != "1" ]; then
+                    [ "$_json" = "1" ] && echo "[]" || echo "No distributions installed."
+                fi
+            fi
+            ;;
+        start)
+            local -a _a=(--desktop)
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    -i|--instance) _a+=(--instance "${2:-}"); shift 2 ;;
+                    -b|--backend|--server) _a+=(--server "${2:-}"); shift 2 ;;
+                    --x11) _a+=(--server x11); shift ;;
+                    --vnc) _a+=(--server vnc); shift ;;
+                    --desktop) shift ;;
+                    --no-notice) shift ;;
+                    *) echo "Unknown option: $1" >&2; return 2 ;;
+                esac
+            done
+            exec "$PREFIX/bin/start-linux" "${_a[@]}" ;;
+        shell)
+            local _mode="user" _inst=""
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    -i|--instance) _inst="${2:-}"; shift 2 ;;
+                    --root) _mode="root"; shift ;;
+                    --user) _mode="user"; shift ;;
+                    *) echo "Unknown option: $1" >&2; return 2 ;;
+                esac
+            done
+            local -a _a=("--$_mode")
+            [ -n "$_inst" ] && _a+=(--instance "$_inst")
+            exec "$PREFIX/bin/terminal-linux" "${_a[@]}" ;;
+        stop)
+            local -a _a=()
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    -i|--instance) _a+=(--instance "${2:-}"); shift 2 ;;
+                    --all) _a+=(--all); shift ;;
+                    *) echo "Unknown option: $1" >&2; return 2 ;;
+                esac
+            done
+            exec "$PREFIX/bin/stop-linux" "${_a[@]}" ;;
+        switch)
+            local _target="${1:-}"; [ $# -gt 0 ] && shift || true
+            change_backend "$_target" "$@" ;;
+        autostart)
+            local _srv="${1:-}"; [ $# -gt 0 ] && shift || true
+            set_autostart "$_srv" "$@" ;;
+        notice)
+            case "${1:-status}" in
+                off) lfa_cli_notice_write off; echo "start-linux notice disabled. Re-enable with: lfa notice on" ;;
+                on) lfa_cli_notice_write on; echo "start-linux notice enabled." ;;
+                status)
+                    _v=1
+                    [ -r "$LFA_PREFS" ] && . "$LFA_PREFS" 2>/dev/null || true
+                    [ "${START_NOTICE:-1}" = "0" ] && _v=0
+                    [ "$_v" = "1" ] && echo "start-linux notice: on" || echo "start-linux notice: off" ;;
+                *) echo "Usage: lfa notice on|off|status" >&2; return 2 ;;
+            esac ;;
+        install) lfa_cli_install "$@" ;;
+        update)
+            while [ $# -gt 0 ]; do case "$1" in -i|--instance) CLI_INSTANCE="${2:-}"; shift 2 ;; *) echo "Unknown option: $1" >&2; return 2 ;; esac; done
+            LFA_NONINTERACTIVE=1 LFA_CLI_MODE=1 update_linux ;;
+        doctor)
+            while [ $# -gt 0 ]; do case "$1" in -i|--instance) CLI_INSTANCE="${2:-}"; shift 2 ;; *) echo "Unknown option: $1" >&2; return 2 ;; esac; done
+            LFA_NONINTERACTIVE=1 LFA_CLI_MODE=1 repair_linux ;;
+        backup)
+            local _out=""
+            while [ $# -gt 0 ]; do
+                case "$1" in -i|--instance) CLI_INSTANCE="${2:-}"; shift 2 ;; -o|--output) _out="${2:-}"; shift 2 ;; *) echo "Unknown option: $1" >&2; return 2 ;; esac
+            done
+            require_proot_distro || return 1
+            select_installed_instance || return 1
+            [ -n "$INSTANCE_NAME" ] || return 1
+            _out="${_out:-$HOME/${INSTANCE_NAME}-backup.tar.gz}"
+            proot-distro backup "$INSTANCE_NAME" --output "$_out" ;;
+        restore)
+            local _file="" _inst=""
+            while [ $# -gt 0 ]; do
+                case "$1" in -i|--instance) _inst="${2:-}"; shift 2 ;; -*) echo "Unknown option: $1" >&2; return 2 ;; *) _file="$1"; shift ;; esac
+            done
+            [ -n "$_file" ] || { echo "Usage: lfa restore FILE [-i NAME]" >&2; return 2; }
+            require_proot_distro || return 1
+            if pd_is_v4; then
+                proot-distro restore "$_file"
+            else
+                [ -n "$_inst" ] || { echo "[!] This proot-distro needs -i NAME to restore." >&2; return 1; }
+                proot-distro restore "$_inst" --input "$_file"
+            fi ;;
+        remove)
+            local _yes=0
+            while [ $# -gt 0 ]; do
+                case "$1" in -i|--instance) CLI_INSTANCE="${2:-}"; shift 2 ;; -y|--yes) _yes=1; shift ;; *) echo "Unknown option: $1" >&2; return 2 ;; esac
+            done
+            [ "$_yes" = "1" ] && LFA_ASSUME_YES=1
+            LFA_NONINTERACTIVE=1 LFA_CLI_MODE=1 uninstall_linux ;;
+        diagnostics) lfa_diagnostics ;;
+        *) echo "Unknown command: $_cmd" >&2; lfa_cli_usage >&2; return 2 ;;
+    esac
 }
 
 lfa_run_cli() {
@@ -1402,6 +1742,9 @@ require_proot_distro() {
 }
 
 show_menu() {
+    if [ "$LFA_CLI_MODE" = "1" ]; then
+        exit "${1:-1}"
+    fi
     local -a _menu=(
         "1|Install / Re-install Linux Distro|pick a distro, desktop and apps"
         "2|Update a Distro|1-click updater, heals apt/dpkg first"
@@ -1415,6 +1758,7 @@ show_menu() {
         "10|Uninstall a Distro|delete a rootfs permanently"
         "11|Toggle Browser Hardware Acceleration|GPU on/off for Chromium"
         "12|Apply Latest Fixes|migrate an older install in place"
+        "14|Change Display Backend|switch X11/VNC/Both and remove packages"
         "0|Repair a Distro (Doctor)|fix broken apt/dpkg, missing users"
         "13|Exit|close the manager"
     )
@@ -1437,6 +1781,7 @@ show_menu() {
         10) uninstall_linux ;;
         11) optimize_browser ;;
         12) upgrade_existing ;;
+        14) menu_change_backend ;;
         13) exit 0 ;;
     esac
 }
@@ -1519,6 +1864,22 @@ pd_instance_exists() {
 
 select_installed_instance() {
     INSTANCE_NAME=""
+    if [ -n "$CLI_INSTANCE" ]; then
+        mapfile -t DISTROS < <(pd_instances)
+        local _found=0 _d
+        for _d in "${DISTROS[@]}"; do [ "$_d" = "$CLI_INSTANCE" ] && _found=1; done
+        if [ "$_found" != "1" ]; then
+            echo "No installed distribution named '$CLI_INSTANCE'." >&2
+            return 1
+        fi
+        INSTANCE_NAME="$CLI_INSTANCE"
+        CONF_FILE="$(pd_conf "$INSTANCE_NAME")"
+        if [ -f "$CONF_FILE" ]; then
+            # shellcheck source=/dev/null
+            source "$CONF_FILE"
+        fi
+        return 0
+    fi
     mapfile -t DISTROS < <(pd_instances)
     if [ ${#DISTROS[@]} -eq 0 ]; then
         echo "No distributions installed."
@@ -1526,6 +1887,10 @@ select_installed_instance() {
         show_menu
     elif [ ${#DISTROS[@]} -eq 1 ]; then
         INSTANCE_NAME=${DISTROS[0]}
+    elif [ "$LFA_CLI_MODE" = "1" ]; then
+        echo "Multiple distributions found. Choose one with -i NAME:" >&2
+        printf '  %s\n' "${DISTROS[@]}" >&2
+        return 1
     else
         local -a _inst=()
         for i in "${!DISTROS[@]}"; do
@@ -1684,18 +2049,20 @@ run_guest_repair() {
 
 repair_linux() {
     require_proot_distro || return
-    select_installed_instance
-    if [ -z "$INSTANCE_NAME" ]; then return; fi
+    select_installed_instance || return 1
+    if [ -z "$INSTANCE_NAME" ]; then return 1; fi
     echo "[*] Running Doctor on $INSTANCE_NAME..."
     echo "========================================="
+    local _rc=0
     if run_guest_repair; then
         echo "Repair complete!"
     else
         echo "[!] Doctor hit an error - review the output above."
+        _rc=1
     fi
     echo "========================================="
     ui_pause
-    show_menu
+    show_menu "$_rc"
 }
 
 # Menu 12 helpers. Adding a second backend must not depend on the installer's
@@ -1797,14 +2164,22 @@ EOF
 
 vnc_set_password() {  # $1 = guest user
     local _user="$1" _b64="" _pw=""
-    if [ -f "$SETUP_CONF" ]; then
+    if [ -n "${LFA_VNC_PASSWORD:-}" ]; then
+        _pw="$LFA_VNC_PASSWORD"
+    elif [ -f "$SETUP_CONF" ]; then
         _b64="$(sed -n 's/^SETUP_USER_B64="\(.*\)"/\1/p' "$SETUP_CONF" 2>/dev/null | head -n1)"
     fi
-    if [ -n "$_b64" ]; then
+    if [ -z "$_pw" ] && [ -n "$_b64" ]; then
         _pw="$(printf '%s' "$_b64" | base64 -d 2>/dev/null || true)"
     fi
     if [ -z "$_pw" ]; then
-        setup_confirm_secret _pw "VNC password [default: root]: " "root"
+        if [ "$LFA_CLI_MODE" = "1" ] || [ ! -t 0 ]; then
+            _pw="root"
+            echo "[!] No saved VNC password; using the default 'root'." >&2
+            echo "    Change it with: lfa switch vnc -i $INSTANCE_NAME" >&2
+        else
+            setup_confirm_secret _pw "VNC password [default: root]: " "root"
+        fi
     fi
     # shellcheck disable=SC2046  # flag list, not one argument
     printf '%s\n' "$_pw" | proot-distro login $(pd_login_flags) "$INSTANCE_NAME" \
@@ -1816,6 +2191,344 @@ enable_vnc_backend() {
     vnc_set_password "$LINUX_USER" || return 1
     write_vnc_xstartup "$ROOTFS" "$LINUX_USER" "$DE" || return 1
     SERVER="both"
+}
+
+# ------------------------------------------------------------
+# Backend switching and clean package removal.
+# ------------------------------------------------------------
+lfa_conf_set() {  # $1 = conf file, $2 = key, $3 = value
+    local _f="$1" _k="$2" _v="$3"
+    [ -f "$_f" ] || return 1
+    if grep -q "^${_k}=" "$_f" 2>/dev/null; then
+        sed -i "s|^${_k}=.*|${_k}=\"${_v}\"|" "$_f"
+    else
+        printf '%s="%s"\n' "$_k" "$_v" >> "$_f"
+    fi
+}
+
+guest_remove_pkgs() {  # $@ = package names
+    [ "$#" -gt 0 ] || return 0
+    case "${DISTRO:-}" in
+        ubuntu|debian|kali)
+            # shellcheck disable=SC2046
+            proot-distro login $(pd_login_flags) "$INSTANCE_NAME" -- apt-get remove -y "$@" ;;
+        fedora)
+            # shellcheck disable=SC2046
+            proot-distro login $(pd_login_flags) "$INSTANCE_NAME" -- dnf remove -y "$@" ;;
+        opensuse)
+            # shellcheck disable=SC2046
+            proot-distro login $(pd_login_flags) "$INSTANCE_NAME" -- zypper remove -y "$@" ;;
+        archlinux)
+            # shellcheck disable=SC2046
+            proot-distro login $(pd_login_flags) "$INSTANCE_NAME" -- pacman -R --noconfirm "$@" ;;
+        void)
+            # shellcheck disable=SC2046
+            proot-distro login $(pd_login_flags) "$INSTANCE_NAME" -- xbps-remove -y "$@" ;;
+        alpine)
+            # shellcheck disable=SC2046
+            proot-distro login $(pd_login_flags) "$INSTANCE_NAME" -- apk del "$@" ;;
+        *)
+            echo "[!] Unknown package manager for ${DISTRO:-unknown}." >&2
+            return 1 ;;
+    esac
+}
+
+x11_used_by_another_instance() {  # $1 = instance to exclude
+    local _skip="$1" _inst _conf
+    while IFS= read -r _inst; do
+        [ -n "$_inst" ] || continue
+        [ "$_inst" = "$_skip" ] && continue
+        _conf="$(pd_conf "$_inst" 2>/dev/null)"
+        [ -f "$_conf" ] || continue
+        if ( . "$_conf" 2>/dev/null; [ "${SERVER:-none}" = "x11" ] || [ "${SERVER:-none}" = "both" ] ); then
+            return 0
+        fi
+    done < <(pd_instances 2>/dev/null)
+    return 1
+}
+
+remove_x11_backend() {  # $1 = force (0/1)
+    local _force="${1:-0}"
+    if x11_used_by_another_instance "$INSTANCE_NAME"; then
+        if [ "$_force" != "1" ]; then
+            echo "[!] Another installed distro still uses Termux:X11." >&2
+            echo "    Remove both backends from it first, or use --force." >&2
+            return 1
+        fi
+        echo "[!] --force: removing Termux:X11 while another distro still uses it."
+    fi
+    echo "[*] Removing Termux:X11 host packages..."
+    if ! pkg uninstall -y termux-x11-nightly 2>/dev/null; then
+        pkg uninstall termux-x11-nightly 2>/dev/null || {
+            echo "[!] Could not remove termux-x11-nightly." >&2
+            return 1
+        }
+    fi
+    echo "[i] To restore X11 later: lfa switch x11 -i $INSTANCE_NAME (or lfa switch both)"
+}
+
+remove_vnc_backend() {
+    local _rootfs="$1" _user="$2"
+    echo "[*] Removing VNC guest packages..."
+    guest_remove_pkgs "$(vnc_pkg_for_distro)" || return 1
+    rm -rf "$_rootfs/home/$_user/.vnc" "$_rootfs/home/$_user/.config/tigervnc" 2>/dev/null || true
+    echo "[i] To restore VNC later: lfa switch vnc -i $INSTANCE_NAME (or lfa switch both)"
+}
+
+boot_script_targets() {  # $1 = instance name
+    local _f="$HOME/.termux/boot/start-linux-services.sh"
+    [ -f "$_f" ] || return 1
+    grep -qF -- "--instance \"$1\"" "$_f" 2>/dev/null
+}
+
+boot_script_has_ssh() {
+    grep -q '^sshd ' "$HOME/.termux/boot/start-linux-services.sh" 2>/dev/null
+}
+
+write_boot_script() {  # $1 = instance, $2 = x11|vnc|none, $3 = ssh 0/1
+    local _inst="$1" _srv="$2" _ssh="${3:-0}"
+    mkdir -p ~/.termux/boot
+    {
+        echo "#!/bin/bash"
+        echo "# Generated by Linux-for-Android: starts services at boot."
+        echo "termux-wake-lock 2>/dev/null || true"
+        if [ "$_ssh" = "1" ]; then
+            echo "sshd 2>/dev/null || true"
+        fi
+        if [ "$_srv" = "none" ]; then
+            echo "# Desktop autostart is disabled for this install."
+        else
+            echo "sleep 5"
+            echo "nohup \"$PREFIX/bin/start-linux\" --instance \"$_inst\" --server \"$_srv\" >/dev/null 2>&1 &"
+        fi
+    } > ~/.termux/boot/start-linux-services.sh
+    chmod +x ~/.termux/boot/start-linux-services.sh
+}
+
+change_backend() {  # change_backend TARGET [flags]
+    local _target="${1:-}"; shift || true
+    local _remove_old=0 _force=0
+    [ -n "$_target" ] || { echo "Usage: switch x11|vnc|both" >&2; return 2; }
+    case "$_target" in x11|vnc|both) ;; *) echo "Unknown backend: $_target" >&2; return 2 ;; esac
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            -i|--instance) CLI_INSTANCE="${2:-}"; shift 2 ;;
+            --remove-old|--remove-packages) _remove_old=1; shift ;;
+            --keep-packages) _remove_old=0; shift ;;
+            --force) _force=1; shift ;;
+            *) echo "Unknown option: $1" >&2; return 2 ;;
+        esac
+    done
+    select_installed_instance || return 1
+    [ -n "$INSTANCE_NAME" ] || return 1
+    [ -f "$CONF_FILE" ] || { echo "[!] Missing config for $INSTANCE_NAME." >&2; return 1; }
+    local _old="$SERVER"
+    local _rootfs _user
+    _rootfs="$(pd_rootfs "$INSTANCE_NAME")"
+    _user="${USER_NAME:-${LINUX_USER:-user}}"
+
+    if [ "${DE:-none}" = "none" ]; then
+        echo "[!] $INSTANCE_NAME has no desktop installed (CLI-only)." >&2
+        echo "    Re-install it with a desktop first, for example:" >&2
+        echo "      lfa install --distro ${DISTRO:-debian} --desktop xfce4 --backend $_target -i $INSTANCE_NAME" >&2
+        return 1
+    fi
+    if [ "$IS_LEGACY" = "1" ] && { [ "$_target" = "x11" ] || [ "$_target" = "both" ]; }; then
+        echo "[!] Termux:X11 requires Android 8 or newer." >&2
+        echo "    This device (Android SDK ${ANDROID_SDK:-unknown}) can only use VNC." >&2
+        echo "    Nothing was changed; the current VNC desktop keeps working." >&2
+        echo "    Stay on VNC with: lfa switch vnc -i $INSTANCE_NAME" >&2
+        if [ "$_remove_old" = "1" ]; then
+            echo "" >&2
+            echo "[!] --remove-old was ignored on purpose: deleting the VNC packages" >&2
+            echo "    would leave this device with no desktop at all." >&2
+            echo "    If VNC is ever removed by hand, restore it with:" >&2
+            echo "      lfa switch vnc -i $INSTANCE_NAME" >&2
+            echo "    That reinstalls the VNC server, password and xstartup." >&2
+        fi
+        return 1
+    fi
+    if [ "$_target" = "$_old" ] && [ "$_remove_old" != "1" ]; then
+        echo "[*] $INSTANCE_NAME already uses $_target."
+        return 0
+    fi
+
+    # Stop the running session before touching packages.
+    if [ -x "$PREFIX/bin/stop-linux" ]; then
+        "$PREFIX/bin/stop-linux" -i "$INSTANCE_NAME" >/dev/null 2>&1 || true
+    fi
+
+    # Install the backend we are entering *before* removing anything. If a
+    # download fails, the old backend is still installed and still works.
+    case "$_target" in
+        x11|both)
+            if ! command -v termux-x11 >/dev/null 2>&1; then
+                echo "[*] Installing Termux:X11 host packages..."
+                { pkg install -y x11-repo && pkg install -y termux-x11-nightly; } || {
+                    echo "[!] Termux:X11 packages could not be installed; nothing was removed." >&2
+                    return 1
+                }
+            fi
+            ;;
+    esac
+    case "$_target" in
+        vnc|both)
+            if ! vnc_guest_ready "$_rootfs"; then
+                echo "[*] Installing VNC guest packages..."
+                guest_install_pkgs "$(vnc_pkg_for_distro)" || {
+                    echo "[!] VNC packages could not be installed; nothing was removed." >&2
+                    return 1
+                }
+            fi
+            # Do not overwrite a password the user set inside the guest.
+            if [ ! -f "$_rootfs/home/$_user/.vnc/passwd" ]; then
+                vnc_set_password "$_user" || { echo "[!] Could not write the VNC password; nothing was removed." >&2; return 1; }
+            fi
+            write_vnc_xstartup "$_rootfs" "$_user" "$DE" || { echo "[!] Could not write the VNC xstartup; nothing was removed." >&2; return 1; }
+            ;;
+    esac
+
+    # Remove the backend we are leaving, when asked, now that the new one is
+    # in place.
+    if [ "$_remove_old" = "1" ]; then
+        case "$_old" in
+            both)
+                if [ "$_target" = "x11" ]; then
+                    remove_vnc_backend "$_rootfs" "$_user" || return 1
+                elif [ "$_target" = "vnc" ]; then
+                    remove_x11_backend "$_force" || return 1
+                fi
+                ;;
+            x11)
+                [ "$_target" = "vnc" ] && { remove_x11_backend "$_force" || return 1; }
+                ;;
+            vnc)
+                [ "$_target" = "x11" ] && { remove_vnc_backend "$_rootfs" "$_user" || return 1; }
+                ;;
+        esac
+    fi
+
+    lfa_conf_set "$CONF_FILE" SERVER "$_target"
+    # Older configs may not have an autostart backend yet. Pick the new one
+    # only when this instance is the boot target; otherwise record "none".
+    if [ -z "${AUTOSTART_SERVER:-}" ]; then
+        if [ "${DO_AUTOSTART:-0}" = "1" ] || boot_script_targets "$INSTANCE_NAME"; then
+            AUTOSTART_SERVER="$_target"
+        else
+            AUTOSTART_SERVER="none"
+        fi
+        lfa_conf_set "$CONF_FILE" AUTOSTART_SERVER "$AUTOSTART_SERVER"
+    fi
+    # Keep autostart pointing at a backend that still exists.
+    if [ "${AUTOSTART_SERVER:-none}" = "x11" ] && [ "$_target" = "vnc" ]; then
+        AUTOSTART_SERVER="vnc"
+    elif [ "${AUTOSTART_SERVER:-none}" = "vnc" ] && [ "$_target" = "x11" ]; then
+        AUTOSTART_SERVER="x11"
+    elif [ "${AUTOSTART_SERVER:-none}" = "both" ]; then
+        AUTOSTART_SERVER="$_target"
+    fi
+    [ "${AUTOSTART_SERVER:-none}" = "none" ] || lfa_conf_set "$CONF_FILE" AUTOSTART_SERVER "$AUTOSTART_SERVER"
+    rm -f "$HOME/.config/linux-for-android/last-server-$INSTANCE_NAME" 2>/dev/null || true
+    if [ "${DO_AUTOSTART:-0}" = "1" ] || boot_script_targets "$INSTANCE_NAME"; then
+        local _boot_ssh="${DO_SSH:-0}"
+        if [ "$_boot_ssh" != "1" ] && boot_script_targets "$INSTANCE_NAME" && boot_script_has_ssh; then
+            _boot_ssh=1
+        fi
+        write_boot_script "$INSTANCE_NAME" "${AUTOSTART_SERVER:-none}" "$_boot_ssh"
+    fi
+    echo "[*] $INSTANCE_NAME now uses $_target."
+}
+
+menu_change_backend() {
+    CLI_INSTANCE=""
+    select_installed_instance
+    [ -n "$INSTANCE_NAME" ] || return
+    local _cur="${SERVER:-none}" _target _remove=""
+    if [ "${DE:-none}" = "none" ]; then
+        echo ""
+        echo "$INSTANCE_NAME is a CLI-only install (no desktop)."
+        echo "Re-install it with a desktop to use display backends."
+        ui_pause
+        show_menu
+        return
+    fi
+    if [ "$IS_LEGACY" = "1" ]; then
+        echo ""
+        echo "Android 5/6 supports VNC only. Termux:X11 needs Android 8 or newer,"
+        echo "so X11 and Both are not offered on this device."
+        echo "Current backend: $_cur (VNC)."
+        ui_pause
+        show_menu
+        return
+    fi
+    local _def="1"
+    case "$_cur" in vnc) _def="2" ;; both) _def="3" ;; esac
+    if ! ui_select "Display backend for $INSTANCE_NAME (now: $_cur)" "$_def" \
+        "1|Termux:X11|hardware acceleration" \
+        "2|VNC|software rendering" \
+        "3|Both|install both; choose each start"; then
+        show_menu
+        return
+    fi
+    case "$UI_SELECTED" in
+        1) _target="x11" ;;
+        2) _target="vnc" ;;
+        3) _target="both" ;;
+    esac
+    if [ "$_cur" != "$_target" ] && [ "$_target" != "both" ]; then
+        if ui_confirm "Remove the unused backend packages?" y; then
+            _remove="--remove-old"
+        fi
+    fi
+    change_backend "$_target" -i "$INSTANCE_NAME" $_remove || true
+    ui_pause
+    show_menu
+}
+
+set_autostart() {  # set_autostart x11|vnc|none [flags]
+    local _srv="${1:-}"; shift || true
+    case "$_srv" in x11|vnc|none) ;; *) echo "Usage: autostart x11|vnc|none" >&2; return 2 ;; esac
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            -i|--instance) CLI_INSTANCE="${2:-}"; shift 2 ;;
+            *) echo "Unknown option: $1" >&2; return 2 ;;
+        esac
+    done
+    select_installed_instance || return 1
+    [ -n "$INSTANCE_NAME" ] || return 1
+    [ -f "$CONF_FILE" ] || { echo "[!] Missing config for $INSTANCE_NAME." >&2; return 1; }
+    if [ "${DE:-none}" = "none" ] && [ "$_srv" != "none" ]; then
+        echo "[!] $INSTANCE_NAME has no desktop installed (CLI-only)." >&2
+        echo "    Autostart needs a desktop; re-install with one first." >&2
+        return 1
+    fi
+    if [ "$_srv" = "x11" ] && [ "$IS_LEGACY" = "1" ]; then
+        echo "[!] Termux:X11 requires Android 8 or newer; use VNC." >&2
+        return 1
+    fi
+    if [ "$_srv" = "vnc" ] && [ "${SERVER:-none}" != "vnc" ] && [ "${SERVER:-none}" != "both" ]; then
+        echo "[!] $INSTANCE_NAME does not have VNC installed." >&2
+        echo "    Run: lfa switch both -i $INSTANCE_NAME" >&2
+        return 1
+    fi
+    if [ "$_srv" = "x11" ] && [ "${SERVER:-none}" != "x11" ] && [ "${SERVER:-none}" != "both" ]; then
+        echo "[!] $INSTANCE_NAME does not have Termux:X11 enabled." >&2
+        echo "    Run: lfa switch both -i $INSTANCE_NAME" >&2
+        return 1
+    fi
+    AUTOSTART_SERVER="$_srv"
+    if [ "$_srv" = "none" ]; then
+        lfa_conf_set "$CONF_FILE" DO_AUTOSTART 0
+    else
+        lfa_conf_set "$CONF_FILE" DO_AUTOSTART 1
+    fi
+    lfa_conf_set "$CONF_FILE" AUTOSTART_SERVER "$_srv"
+    local _boot_ssh="${DO_SSH:-0}"
+    if [ "$_boot_ssh" != "1" ] && boot_script_targets "$INSTANCE_NAME" && boot_script_has_ssh; then
+        _boot_ssh=1
+    fi
+    write_boot_script "$INSTANCE_NAME" "$_srv" "$_boot_ssh"
+    echo "[*] $INSTANCE_NAME autostart: $_srv"
 }
 
 # Guest-side migration tweaks for an already-installed distro.
@@ -1880,7 +2593,7 @@ upgrade_existing() {
     # Load what the old install recorded; supply defaults for newer keys.
     USER_NAME="user"; DE="none"; SERVER="none"; RESOLUTION=""; PSTYLE="minimal"
     HOSTNAME="localhost"; TIMEZONE="UTC"; NEED_VIRGL="1"; COLOR_MODE="light"
-    AUTOSTART_SERVER=""
+    AUTOSTART_SERVER=""; DO_AUTOSTART=""; DO_SSH="0"
     if [ -f "$CONF" ]; then
         # shellcheck disable=SC1090
         # shellcheck source=/dev/null
@@ -1915,6 +2628,15 @@ upgrade_existing() {
         grep -q '^HOSTNAME=' "$CONF" || echo 'HOSTNAME="localhost"' >> "$CONF"
         grep -q '^NEED_VIRGL=' "$CONF" || echo 'NEED_VIRGL="1"' >> "$CONF"
         grep -q '^PSTYLE=' "$CONF" || echo 'PSTYLE="minimal"' >> "$CONF"
+        if ! grep -q '^DO_AUTOSTART=' "$CONF"; then
+            if [ -f "$HOME/.termux/boot/start-linux-services.sh" ] && \
+               ! grep -q 'Desktop autostart is disabled' "$HOME/.termux/boot/start-linux-services.sh"; then
+                echo 'DO_AUTOSTART="1"' >> "$CONF"
+            else
+                echo 'DO_AUTOSTART="0"' >> "$CONF"
+            fi
+        fi
+        grep -q '^DO_SSH=' "$CONF" || echo 'DO_SSH="0"' >> "$CONF"
     fi
 
     # 2b. Offer the missing backend on an existing single-backend install.
@@ -2111,13 +2833,13 @@ EOF
     echo "Latest fixes applied!"
     echo "========================================="
     ui_pause
-    show_menu
+    show_menu 0
 }
 
 update_linux() {
     require_proot_distro || return
-    select_installed_instance
-    if [ -z "$INSTANCE_NAME" ]; then return; fi
+    select_installed_instance || return 1
+    if [ -z "$INSTANCE_NAME" ]; then return 1; fi
     echo "[*] Updating $INSTANCE_NAME..."
     # Heal the guest first: stale statoverride rows and half-configured
     # packages make apt fail, and are repaired automatically here.
@@ -2128,7 +2850,7 @@ update_linux() {
     ui_ok "Update complete!"
     echo "========================================="
     ui_pause
-    show_menu
+    show_menu 0
 }
 
 start_ssh() {
@@ -2435,26 +3157,94 @@ else
     lfa_pid_matches() { local _p="$1" _c; shift; [ -n "$_p" ] || return 1; kill -0 "$_p" 2>/dev/null || return 1; _c="$(tr '\0' ' ' < "/proc/$_p/cmdline" 2>/dev/null)" || return 1; for _pat in "$@"; do case "$_c" in *"$_pat"*) return 0 ;; esac; done; return 1; }
 fi
 
-# Non-interactive entry used by Termux:Boot. It skips the distro and backend
-# menus so boot does not depend on stdin.
+usage() {
+    cat <<'USAGE'
+Usage: start-linux [options]
+
+  -i, --instance NAME   start a specific distro
+  -b, --backend NAME    x11 or vnc
+      --x11             shortcut for --backend x11
+      --vnc             shortcut for --backend vnc
+      --desktop         start the desktop without the terminal menu
+      --no-notice       hide the start-linux change notice for this run
+  -h, --help            show this help
+USAGE
+}
+
+# Non-interactive entry used by Termux:Boot and the new CLI.
+DESKTOP_ONLY=0
+NO_NOTICE=0
+EXPLICIT_INSTANCE=0
 PRESELECT_INSTANCE=""
 PRESELECT_SERVER=""
 while [ $# -gt 0 ]; do
     case "$1" in
-        --instance) PRESELECT_INSTANCE="${2:-}"; shift 2 ;;
-        --server) PRESELECT_SERVER="${2:-}"; shift 2 ;;
-        *) shift ;;
+        -i|--instance) PRESELECT_INSTANCE="${2:-}"; EXPLICIT_INSTANCE=1; shift 2 ;;
+        -b|--backend|--server) PRESELECT_SERVER="${2:-}"; shift 2 ;;
+        --x11) PRESELECT_SERVER="x11"; shift ;;
+        --vnc) PRESELECT_SERVER="vnc"; shift ;;
+        --desktop) DESKTOP_ONLY=1; shift ;;
+        --no-notice) NO_NOTICE=1; shift ;;
+        -h|--help) usage; exit 0 ;;
+        *) echo "Unknown option: $1" >&2; usage >&2; exit 2 ;;
     esac
 done
+if [ -n "$PRESELECT_SERVER" ]; then
+    case "$PRESELECT_SERVER" in
+        x11|vnc) ;;
+        *) echo "Backend must be x11 or vnc." >&2; exit 2 ;;
+    esac
+fi
+
+# One-time-change notice, shown on interactive classic runs. It goes to
+# stderr so scripts that parse start-linux output are unaffected.
+NOTICE_FILE="$HOME/.config/linux-for-android/preferences.conf"
+START_NOTICE=1
+if [ -r "$NOTICE_FILE" ]; then
+    # shellcheck source=/dev/null
+    . "$NOTICE_FILE" 2>/dev/null || true
+fi
+if [ "$DESKTOP_ONLY" != "1" ] && [ "$NO_NOTICE" != "1" ] && \
+   [ "${LFA_NO_NOTICE:-0}" != "1" ] && [ "${START_NOTICE:-1}" != "0" ] && \
+   [ -t 0 ] && [ -t 1 ]; then
+    printf '%s\n' "" >&2
+    printf '  [i] start-linux now opens the advanced menu.\n' >&2
+    printf '\n' >&2
+    printf '      For daily use:\n' >&2
+    printf '        linux              start the desktop\n' >&2
+    printf '        lfa shell          open a terminal\n' >&2
+    printf '        lfa switch vnc     change backend\n' >&2
+    printf '        lfa help           list all commands\n' >&2
+    printf '\n' >&2
+    printf '      Disable this notice: lfa notice off\n' >&2
+    printf '\n' >&2
+fi
+
+# Prefer the last instance for the one-command desktop shortcut.
+LAST_INSTANCE_FILE="$HOME/.config/linux-for-android/last-instance"
+if [ -z "$PRESELECT_INSTANCE" ] && [ -r "$LAST_INSTANCE_FILE" ]; then
+    PRESELECT_INSTANCE="$(cat "$LAST_INSTANCE_FILE" 2>/dev/null || true)"
+fi
 
 mapfile -t DISTROS < <(lfa_instances)
+if [ -n "$PRESELECT_INSTANCE" ]; then
+    _ok=0
+    for _d in "${DISTROS[@]}"; do [ "$_d" = "$PRESELECT_INSTANCE" ] && _ok=1; done
+    if [ "$_ok" != "1" ]; then
+        if [ "$EXPLICIT_INSTANCE" = "1" ]; then
+            echo "No installed distribution named '$PRESELECT_INSTANCE'." >&2
+            exit 1
+        fi
+        PRESELECT_INSTANCE=""
+    fi
+fi
 if [ ${#DISTROS[@]} -eq 0 ]; then
     echo "No distributions installed. Please run install_linux.sh first."
     exit 1
-elif [ ${#DISTROS[@]} -eq 1 ]; then
-    DISTRO=${DISTROS[0]}
 elif [ -n "$PRESELECT_INSTANCE" ]; then
     DISTRO="$PRESELECT_INSTANCE"
+elif [ ${#DISTROS[@]} -eq 1 ]; then
+    DISTRO=${DISTROS[0]}
 else
     echo "Multiple distributions found. Please choose one to start:"
     for i in "${!DISTROS[@]}"; do
@@ -2468,6 +3258,9 @@ else
     idx=$((choice-1))
     DISTRO=${DISTROS[$idx]}
 fi
+
+mkdir -p "$(dirname "$LAST_INSTANCE_FILE")" 2>/dev/null || true
+printf '%s\n' "$DISTRO" > "$LAST_INSTANCE_FILE" 2>/dev/null || true
 
 CONF_FILE="$(lfa_conf "$DISTRO")"
 INSTANCE_NAME="$DISTRO"
@@ -2501,6 +3294,40 @@ fi
 case "$LAST_SERVER" in x11|vnc) ;; *) LAST_SERVER="" ;; esac
 SERVER_MODE="$SERVER"
 
+MODE="desktop"
+if [ "$DESKTOP_ONLY" = "1" ]; then
+    if [ -n "$PRESELECT_SERVER" ]; then
+        case "$SERVER:$PRESELECT_SERVER" in
+            both:x11|x11:x11|both:vnc|vnc:vnc) SERVER="$PRESELECT_SERVER" ;;
+            *)
+                echo "Requested backend '$PRESELECT_SERVER' is not installed for $INSTANCE_NAME." >&2
+                exit 1
+                ;;
+        esac
+    elif [ "$SERVER" = "both" ]; then
+        if [ -n "$LAST_SERVER" ]; then
+            SERVER="$LAST_SERVER"
+        elif [ -t 0 ]; then
+            echo ""
+            echo "Desktop available: $DE via Termux:X11 or VNC."
+            echo "1) Full desktop with Termux:X11"
+            echo "2) Full desktop with VNC"
+            read -p "Select [1-2]: " MODE_CHOICE
+            case "$MODE_CHOICE" in
+                1) SERVER="x11" ;;
+                2) SERVER="vnc" ;;
+                *) echo "Invalid selection." >&2; exit 1 ;;
+            esac
+        else
+            echo "Both backends are installed but no default is remembered." >&2
+            echo "Run: linux --x11   or   linux --vnc" >&2
+            exit 1
+        fi
+    elif [ "$SERVER" != "x11" ] && [ "$SERVER" != "vnc" ]; then
+        echo "No desktop is installed for $INSTANCE_NAME." >&2
+        exit 1
+    fi
+else
 MODE="desktop"
 if [ -n "$PRESELECT_SERVER" ]; then
     case "$SERVER:$PRESELECT_SERVER" in
@@ -2557,6 +3384,8 @@ else
     echo "2) User terminal ('$X11_USER' account)"
     read -p "Select [1-2]: " MODE_CHOICE
     if [ "$MODE_CHOICE" == "2" ]; then MODE="user"; else MODE="root"; fi
+fi
+
 fi
 
 if [ "$SERVER_MODE" = "both" ] && [ "$MODE" == "desktop" ]; then
@@ -2694,10 +3523,44 @@ else
     lfa_conf() { echo "$(lfa_rootfs "$1")/etc/termux-linux-manager.conf"; }
     lfa_clear_stale_x1() { local _p=999999; [ -f "$PREFIX/tmp/.X1-lock" ] && _p=$(tr -dc '0-9' < "$PREFIX/tmp/.X1-lock" 2>/dev/null); [ -n "$_p" ] && kill -0 "$_p" 2>/dev/null && return 0; rm -f "$PREFIX/tmp/.X11-unix/X1" "$PREFIX/tmp/.X1-lock" 2>/dev/null; }
 fi
+EXPLICIT_INSTANCE=0
+PRESELECT_INSTANCE=""
+STOP_ALL=0
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -i|--instance) PRESELECT_INSTANCE="${2:-}"; EXPLICIT_INSTANCE=1; shift 2 ;;
+        --all) STOP_ALL=1; shift ;;
+        -h|--help) echo "Usage: stop-linux [-i NAME|--all]"; exit 0 ;;
+        *) echo "Unknown option: $1" >&2; exit 2 ;;
+    esac
+done
+if [ "$STOP_ALL" = "1" ]; then
+    while IFS= read -r _si; do
+        [ -n "$_si" ] && "$0" -i "$_si" >/dev/null 2>&1 || true
+    done < <(lfa_instances)
+    echo "All desktop sessions stopped."
+    exit 0
+fi
+if [ -z "$PRESELECT_INSTANCE" ] && [ -r "$HOME/.config/linux-for-android/last-instance" ]; then
+    PRESELECT_INSTANCE="$(cat "$HOME/.config/linux-for-android/last-instance" 2>/dev/null || true)"
+fi
 mapfile -t DISTROS < <(lfa_instances)
+if [ -n "$PRESELECT_INSTANCE" ]; then
+    _ok=0
+    for _d in "${DISTROS[@]}"; do [ "$_d" = "$PRESELECT_INSTANCE" ] && _ok=1; done
+    if [ "$_ok" != "1" ]; then
+        if [ "$EXPLICIT_INSTANCE" = "1" ]; then
+            echo "No installed distribution named '$PRESELECT_INSTANCE'." >&2
+            exit 1
+        fi
+        PRESELECT_INSTANCE=""
+    fi
+fi
 if [ ${#DISTROS[@]} -eq 0 ]; then
     echo "No distributions installed."
     exit 1
+elif [ -n "$PRESELECT_INSTANCE" ]; then
+    DISTRO="$PRESELECT_INSTANCE"
 elif [ ${#DISTROS[@]} -eq 1 ]; then
     DISTRO=${DISTROS[0]}
 else
@@ -2811,10 +3674,42 @@ else
     lfa_clear_stale_x1() { local _p=999999; [ -f "$PREFIX/tmp/.X1-lock" ] && _p=$(tr -dc '0-9' < "$PREFIX/tmp/.X1-lock" 2>/dev/null); [ -n "$_p" ] && kill -0 "$_p" 2>/dev/null && return 0; rm -f "$PREFIX/tmp/.X11-unix/X1" "$PREFIX/tmp/.X1-lock" 2>/dev/null; }
 fi
 
+TERM_MODE=""
+EXPLICIT_INSTANCE=0
+PRESELECT_INSTANCE=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -i|--instance) PRESELECT_INSTANCE="${2:-}"; EXPLICIT_INSTANCE=1; shift 2 ;;
+        --root) TERM_MODE="root"; shift ;;
+        --user) TERM_MODE="user"; shift ;;
+        -h|--help)
+            echo "Usage: terminal-linux [-i NAME] [--root|--user]"
+            exit 0 ;;
+        *) echo "Unknown option: $1" >&2; exit 2 ;;
+    esac
+done
+
+if [ -z "$PRESELECT_INSTANCE" ] && [ -r "$HOME/.config/linux-for-android/last-instance" ]; then
+    PRESELECT_INSTANCE="$(cat "$HOME/.config/linux-for-android/last-instance" 2>/dev/null || true)"
+fi
+
 mapfile -t DISTROS < <(lfa_instances)
+if [ -n "$PRESELECT_INSTANCE" ]; then
+    _ok=0
+    for _d in "${DISTROS[@]}"; do [ "$_d" = "$PRESELECT_INSTANCE" ] && _ok=1; done
+    if [ "$_ok" != "1" ]; then
+        if [ "$EXPLICIT_INSTANCE" = "1" ]; then
+            echo "No installed distribution named '$PRESELECT_INSTANCE'." >&2
+            exit 1
+        fi
+        PRESELECT_INSTANCE=""
+    fi
+fi
 if [ ${#DISTROS[@]} -eq 0 ]; then
     echo "No distributions installed. Please run install_linux.sh first."
     exit 1
+elif [ -n "$PRESELECT_INSTANCE" ]; then
+    DISTRO="$PRESELECT_INSTANCE"
 elif [ ${#DISTROS[@]} -eq 1 ]; then
     DISTRO=${DISTROS[0]}
 else
@@ -2831,6 +3726,9 @@ else
     DISTRO=${DISTROS[$idx]}
 fi
 
+mkdir -p "$HOME/.config/linux-for-android" 2>/dev/null || true
+printf '%s\n' "$DISTRO" > "$HOME/.config/linux-for-android/last-instance" 2>/dev/null || true
+
 CONF_FILE="$(lfa_conf "$DISTRO")"
 INSTANCE_NAME="$DISTRO"
 if [ -f "$CONF_FILE" ]; then
@@ -2846,10 +3744,15 @@ if ! proot --help 2>&1 | grep -q "sysvipc"; then
     fi
 fi
 
-echo ""
-echo "1) Root terminal (admin)"
-echo "2) User terminal ('$TERM_USER' account)"
-read -p "Select [1-2, default 1]: " TERM_CHOICE
+if [ -n "$TERM_MODE" ]; then
+    TERM_CHOICE=1
+    [ "$TERM_MODE" = "user" ] && TERM_CHOICE=2
+else
+    echo ""
+    echo "1) Root terminal (admin)"
+    echo "2) User terminal ('$TERM_USER' account)"
+    read -p "Select [1-2, default 1]: " TERM_CHOICE
+fi
 if [ "$TERM_CHOICE" == "2" ]; then
     proot-distro login $NO_SYSVIPC $DISTRO --user "$TERM_USER" --shared-tmp -- /bin/bash -l
 else
@@ -2863,6 +3766,42 @@ EOF
 terminal-linux
 EOF
     chmod +x ~/.shortcuts/Terminal-Linux 2>/dev/null || true
+
+    # The unified CLI runs from a private copy so it works after the repo is
+    # moved or removed. Do not copy the runtime into itself.
+    if [ "$LFA_DIR" != "$LFA_RUNTIME" ] && [ -f "$LFA_DIR/install_linux.sh" ]; then
+        mkdir -p "$LFA_RUNTIME"
+        cp -f "$LFA_DIR/install_linux.sh" "$LFA_RUNTIME/install_linux.sh" 2>/dev/null || true
+        for _d in lib plugins assets; do
+            if [ -d "$LFA_DIR/$_d" ]; then
+                rm -rf "$LFA_RUNTIME/$_d"
+                cp -R "$LFA_DIR/$_d" "$LFA_RUNTIME/$_d" 2>/dev/null || true
+            fi
+        done
+    fi
+
+    cat << 'EOF' > "$PREFIX/bin/linux"
+#!/bin/bash
+exec "$PREFIX/bin/start-linux" --desktop "$@"
+EOF
+    cat << 'EOF' > "$PREFIX/bin/lfa"
+#!/bin/bash
+LFA_HOME="$PREFIX/lib/linux-for-android"
+if [ ! -f "$LFA_HOME/install_linux.sh" ]; then
+    echo "lfa: runtime missing. Re-run install_linux.sh or menu 12." >&2
+    exit 1
+fi
+exec bash "$LFA_HOME/install_linux.sh" --cli "$@"
+EOF
+    cat << 'EOF' > "$PREFIX/bin/switch-linux"
+#!/bin/bash
+exec "$PREFIX/bin/lfa" switch "$@"
+EOF
+    cat << 'EOF' > "$PREFIX/bin/autostart-linux"
+#!/bin/bash
+exec "$PREFIX/bin/lfa" autostart "$@"
+EOF
+    chmod +x "$PREFIX/bin/linux" "$PREFIX/bin/lfa" "$PREFIX/bin/switch-linux" "$PREFIX/bin/autostart-linux"
 }
 
 uninstall_linux() {
@@ -2891,7 +3830,7 @@ uninstall_linux() {
     if ! ui_confirm "Delete $INSTANCE_NAME permanently?" n; then
         echo "Cancelled."
         ui_pause
-        show_menu
+        show_menu 0
         return
     fi
 
@@ -2942,7 +3881,7 @@ uninstall_linux() {
     fi
 
     ui_pause
-    show_menu
+    show_menu 0
 }
 
 install_linux() {
@@ -3419,6 +4358,8 @@ install_linux() {
     echo "DE=\"$DE\"" >> "$ROOTFS/etc/termux-linux-manager.conf"
     echo "SERVER=\"$SERVER\"" >> "$ROOTFS/etc/termux-linux-manager.conf"
     echo "AUTOSTART_SERVER=\"$AUTOSTART_SERVER\"" >> "$ROOTFS/etc/termux-linux-manager.conf"
+    echo "DO_AUTOSTART=\"${DO_AUTOSTART:-0}\"" >> "$ROOTFS/etc/termux-linux-manager.conf"
+    echo "DO_SSH=\"${DO_SSH:-0}\"" >> "$ROOTFS/etc/termux-linux-manager.conf"
     if [ "$SERVER" = "both" ]; then
         rm -f "$HOME/.config/linux-for-android/last-server-$INSTANCE_NAME" 2>/dev/null || true
     fi
@@ -4121,22 +5062,7 @@ EOF
                 *) AUTOSTART_SERVER="none" ;;
             esac
         fi
-        mkdir -p ~/.termux/boot
-        {
-            echo "#!/bin/bash"
-            echo "# Generated by Linux-for-Android setup: starts services at boot."
-            echo "termux-wake-lock 2>/dev/null || true"
-            if [ "${DO_SSH:-0}" = "1" ]; then
-                echo "sshd 2>/dev/null || true"
-            fi
-            if [ "${AUTOSTART_SERVER:-none}" = "none" ]; then
-                echo "# Desktop autostart is disabled for this install."
-            else
-                echo "sleep 5"
-                echo "nohup \"$PREFIX/bin/start-linux\" --instance \"$INSTANCE_NAME\" --server \"$AUTOSTART_SERVER\" >/dev/null 2>&1 &"
-            fi
-        } > ~/.termux/boot/start-linux-services.sh
-        chmod +x ~/.termux/boot/start-linux-services.sh
+        write_boot_script "$INSTANCE_NAME" "$AUTOSTART_SERVER" "${DO_SSH:-0}"
         echo "    Boot script written to ~/.termux/boot/start-linux-services.sh"
     fi
 
@@ -4150,7 +5076,8 @@ EOF
     echo "(default, full admin) or user terminal. Install packages directly"
     echo "with apk add / apt install / dnf install ..."
     echo "GUI sessions run as '$LINUX_USER' (VNC password: the one you chose in setup)."
-    echo "Use commands: start-linux / terminal-linux (shell only) / stop-linux"
+    echo "Daily use: linux (desktop) / lfa help (commands) / lfa shell (terminal)"
+    echo "Classic commands: start-linux / terminal-linux / stop-linux"
     echo "If you installed the Termux:Widget app, a shortcut is on your home screen!"
     echo "========================================="
     ui_pause
@@ -4163,6 +5090,13 @@ EOF
 # getprop warning on a non-Android machine.
 case "${1:-}" in
     -h|--help|-V|--version) lfa_run_cli "$@" ;;
+    --cli)
+        shift
+        LFA_CLI_MODE=1
+        export LFA_CLI_MODE
+        detect_environment
+        lfa_cli "$@"
+        exit $? ;;
 esac
 
 # Initialise device profile once so IS_LEGACY / ARCH are set for menu ops

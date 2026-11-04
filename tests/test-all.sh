@@ -33,7 +33,10 @@ command -v timeout >/dev/null 2>&1 || { echo "need 'timeout' (coreutils)"; exit 
 LFA_EXPECTED_VERSION="$(sed -n 's/^LFA_VERSION="\([^"]*\)"/\1/p' "$REPO/install_linux.sh" | head -n1)"
 T="$(mktemp -d "${TMPDIR:-/tmp}/lfa-test.XXXXXX")" || exit 2
 export LFA_TEST_TMP="$T"
-cleanup_tmp() { [ -n "${T:-}" ] && rm -rf "$T" 2>/dev/null || true; }
+cleanup_tmp() {
+    [ "${LFA_KEEP_TMP:-0}" = "1" ] && { echo "kept test dir: $T"; return 0; }
+    [ -n "${T:-}" ] && rm -rf "$T" 2>/dev/null || true
+}
 trap cleanup_tmp EXIT INT TERM
 mkdir -p "$T/fakebin"
 
@@ -1005,6 +1008,146 @@ mkdir -p "$CLIROOT"
 LFA_ROOT="$CLIROOT" LFA_USER=cliuser LFA_DISTRO=ubuntu LFA_DE=none LFA_MODE=dark \
     LFA_ASSET_DIR="$REPO/assets/wallpapers" sh "$REPO/lib/wallpaper.sh" > "$T/xc.log" 2>&1
 [ ! -e "$CLIROOT/usr/share/backgrounds/lfa-default.jpg" ] && [ ! -e "$CLIROOT/home/cliuser" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: X CLI-only wallpaper not skipped"; }
+
+echo "===== Y1: lfa CLI surface, runtime copy, notice preference ====="
+fresh_env
+printf '%s\n' 1 '' 13 | bash "$REPO/install_linux.sh" > "$T/y1-base.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: run y1 base exit $rc"; }
+LFA="$T/prefix/bin/lfa"
+for _b in lfa linux switch-linux autostart-linux lfa-lib.sh; do
+    [ -x "$T/prefix/bin/$_b" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y1 missing $PREFIX/bin/$_b"; }
+done
+[ -f "$T/prefix/lib/linux-for-android/install_linux.sh" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y1 runtime copy missing"; }
+"$LFA" version > "$T/y1-version.log" 2>&1
+check "Y1 version" "Linux for Android Manager $LFA_EXPECTED_VERSION" "$T/y1-version.log"
+"$LFA" help > "$T/y1-help.log" 2>&1
+check "Y1 help switch" 'switch' "$T/y1-help.log"
+"$LFA" switch --help > "$T/y1-switch-help.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y1 switch help exit $rc"; }
+check "Y1 help notice" 'notice' "$T/y1-help.log"
+"$LFA" list > "$T/y1-list.log" 2>&1
+check "Y1 list" 'debian' "$T/y1-list.log"
+"$LFA" status -i debian > "$T/y1-status.log" 2>&1
+check "Y1 status backend" 'backend:   x11' "$T/y1-status.log"
+"$LFA" doctor -i debian > "$T/y1-doctor.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y1 doctor success exit $rc"; }
+check "Y1 doctor output" 'Repair complete!' "$T/y1-doctor.log"
+"$LFA" status -i missing > "$T/y1-missing.log" 2>&1; rc=$?; [ "$rc" = "1" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y1 missing status exit $rc"; }
+check "Y1 missing status" "No installed distribution named 'missing'." "$T/y1-missing.log"
+"$LFA" notice status > "$T/y1-notice0.log" 2>&1
+check "Y1 notice default" 'notice: on' "$T/y1-notice0.log"
+"$LFA" notice off > "$T/y1-notice1.log" 2>&1
+check "Y1 notice off file" 'START_NOTICE="0"' "$T/home/.config/linux-for-android/preferences.conf"
+"$LFA" notice status > "$T/y1-notice2.log" 2>&1
+check "Y1 notice now off" 'notice: off' "$T/y1-notice2.log"
+"$LFA" notice on > "$T/y1-notice3.log" 2>&1
+"$LFA" notice status > "$T/y1-notice4.log" 2>&1
+check "Y1 notice back on" 'notice: on' "$T/y1-notice4.log"
+"$LFA" bogus > "$T/y1-bogus.log" 2>&1; rc=$?; [ "$rc" = "2" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y1 bogus exit $rc"; }
+check "Y1 bogus message" 'Unknown command: bogus' "$T/y1-bogus.log"
+check "Y1 notice text generated" 'start-linux now opens the advanced menu' "$T/prefix/bin/start-linux"
+check "Y1 notice bypass env" 'LFA_NO_NOTICE' "$T/prefix/bin/start-linux"
+check "Y1 linux wrapper desktop" '--desktop' "$T/prefix/bin/linux"
+
+echo "===== Y2: lfa install + backend switch + package removal ====="
+fresh_env
+printf '%s\n' 1 '' 13 | bash "$REPO/install_linux.sh" > "$T/y2-base.log" 2>&1
+LFA="$T/prefix/bin/lfa"
+"$LFA" install --distro ubuntu --desktop xfce4 --backend both -i cliboth > "$T/y2-install.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y2 install exit $rc"; }
+Y2ROOT="$T/prefix/var/lib/proot-distro/installed-rootfs/cliboth"
+check "Y2 installed both" 'SERVER="both"' "$Y2ROOT/etc/termux-linux-manager.conf"
+check "Y2 installed desktop" 'DE="xfce4"' "$Y2ROOT/etc/termux-linux-manager.conf"
+"$LFA" status -i cliboth --json > "$T/y2-status.log" 2>&1
+check "Y2 status json" '"backend":"both"' "$T/y2-status.log"
+# A boot script that belongs to another distro must not be hijacked by a
+# backend switch on this one.
+mkdir -p "$T/home/.termux/boot"
+printf '#!/bin/bash\ntermux-wake-lock 2>/dev/null || true\nnohup "$PREFIX/bin/start-linux" --instance "otherinst" --server "vnc" >/dev/null 2>&1 &\n' > "$T/home/.termux/boot/start-linux-services.sh"
+# The VNC xstartup is written by the guest setup script at install time;
+# in the test harness the guest is a stub, so it is checked after `switch`.
+
+# both -> x11, remove the VNC packages and the per-user VNC config
+"$LFA" switch x11 -i cliboth --remove-old > "$T/y2-x11.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y2 switch x11 exit $rc"; }
+check "Y2 x11 conf" 'SERVER="x11"' "$Y2ROOT/etc/termux-linux-manager.conf"
+check "Y2 vnc guest removed" 'apt-get remove -y tigervnc-standalone-server' "$T/home/pd-calls.log"
+[ ! -e "$Y2ROOT/home/user/.vnc" ] && ! [ -e "$Y2ROOT/home/user/.config/tigervnc" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y2 VNC config survived removal"; }
+check "Y2 restore hint" 'lfa switch vnc -i cliboth' "$T/y2-x11.log"
+check "Y2 boot script untouched" '--instance "otherinst"' "$T/home/.termux/boot/start-linux-services.sh"
+
+# x11 -> both installs VNC again, then both -> vnc removes Termux:X11
+"$LFA" switch both -i cliboth > "$T/y2-both.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y2 switch both exit $rc"; }
+check "Y2 both again" 'SERVER="both"' "$Y2ROOT/etc/termux-linux-manager.conf"
+[ -f "$Y2ROOT/home/user/.vnc/xstartup" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y2 VNC xstartup not restored"; }
+# A password set inside the guest must survive a backend switch.
+printf 'CUSTOM-PASSWD\n' > "$Y2ROOT/home/user/.vnc/passwd"
+# The quick-install base distro is X11 too, so shared-X11 protection would
+# (correctly) stop this; --force exercises the removal path here and Y3
+# tests the guard separately.
+"$LFA" switch vnc -i cliboth --remove-old --force > "$T/y2-vnc.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y2 switch vnc exit $rc"; }
+check "Y2 vnc conf" 'SERVER="vnc"' "$Y2ROOT/etc/termux-linux-manager.conf"
+check "Y2 x11 host removed" 'STUB-PKG: uninstall -y termux-x11-nightly' "$T/y2-vnc.log"
+check "Y2 VNC password preserved" 'CUSTOM-PASSWD' "$Y2ROOT/home/user/.vnc/passwd"
+"$LFA" autostart vnc -i cliboth > "$T/y2-auto.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y2 autostart vnc exit $rc"; }
+check "Y2 autostart targets instance" '--instance "cliboth"' "$T/home/.termux/boot/start-linux-services.sh"
+check "Y2 autostart key" 'DO_AUTOSTART="1"' "$Y2ROOT/etc/termux-linux-manager.conf"
+"$LFA" autostart none -i cliboth > "$T/y2-auto-none.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y2 autostart none exit $rc"; }
+check "Y2 autostart disabled" 'Desktop autostart is disabled' "$T/home/.termux/boot/start-linux-services.sh"
+check "Y2 autostart none key" 'DO_AUTOSTART="0"' "$Y2ROOT/etc/termux-linux-manager.conf"
+
+echo "===== Y3: shared Termux:X11 is protected unless --force ====="
+X11OTHER="$T/prefix/var/lib/proot-distro/installed-rootfs/x11other"
+mkdir -p "$X11OTHER/etc" "$X11OTHER/usr"
+printf 'DISTRO="debian"\nDE="xfce4"\nSERVER="both"\nUSER_NAME="user"\n' > "$X11OTHER/etc/termux-linux-manager.conf"
+"$LFA" switch both -i cliboth > "$T/y3-both.log" 2>&1
+"$LFA" switch vnc -i cliboth --remove-old > "$T/y3-guard.log" 2>&1; rc=$?; [ "$rc" = "1" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y3 guard exit $rc"; }
+check "Y3 guard message" 'Another installed distro still uses Termux:X11.' "$T/y3-guard.log"
+check "Y3 guard config kept" 'SERVER="both"' "$Y2ROOT/etc/termux-linux-manager.conf"
+check_absent "Y3 guard no pkg removal" 'uninstall -y termux-x11-nightly' "$T/y3-guard.log"
+"$LFA" switch vnc -i cliboth --remove-old --force > "$T/y3-force.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y3 force exit $rc"; }
+check "Y3 force warning" '--force: removing Termux:X11' "$T/y3-force.log"
+check "Y3 force conf" 'SERVER="vnc"' "$Y2ROOT/etc/termux-linux-manager.conf"
+
+echo "===== Y4: explicit -i is validated and bad options are refused ====="
+"$T/prefix/bin/terminal-linux" -i nope > "$T/y4-term.log" 2>&1; rc=$?; [ "$rc" = "1" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y4 terminal -i exit $rc"; }
+check "Y4 terminal -i" "No installed distribution named 'nope'." "$T/y4-term.log"
+"$T/prefix/bin/stop-linux" -i nope > "$T/y4-stop.log" 2>&1; rc=$?; [ "$rc" = "1" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y4 stop -i exit $rc"; }
+check "Y4 stop -i" "No installed distribution named 'nope'." "$T/y4-stop.log"
+"$T/prefix/bin/start-linux" --desktop -i nope > "$T/y4-start.log" 2>&1; rc=$?; [ "$rc" = "1" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y4 start -i exit $rc"; }
+check "Y4 start -i" "No installed distribution named 'nope'." "$T/y4-start.log"
+"$T/prefix/bin/start-linux" --bogus > "$T/y4-bad.log" 2>&1; rc=$?; [ "$rc" = "2" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y4 start bad exit $rc"; }
+check "Y4 start unknown" 'Unknown option: --bogus' "$T/y4-bad.log"
+"$T/prefix/bin/start-linux" --desktop -i debian --backend both > "$T/y4-both.log" 2>&1; rc=$?; [ "$rc" = "2" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y4 start backend both exit $rc"; }
+check "Y4 backend both rejected" 'Backend must be x11 or vnc' "$T/y4-both.log"
+"$T/prefix/bin/linux" --help > "$T/y4-linux-help.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y4 linux help exit $rc"; }
+check "Y4 linux help" 'Usage: start-linux' "$T/y4-linux-help.log"
+"$T/prefix/bin/terminal-linux" --bogus > "$T/y4-term-bad.log" 2>&1; rc=$?; [ "$rc" = "2" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y4 terminal bad exit $rc"; }
+"$T/prefix/bin/stop-linux" --bogus > "$T/y4-stop-bad.log" 2>&1; rc=$?; [ "$rc" = "2" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y4 stop bad exit $rc"; }
+"$LFA" switch vnc > "$T/y4-switch.log" 2>&1; rc=$?; [ "$rc" = "1" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y4 switch no -i exit $rc"; }
+check "Y4 switch needs -i" 'Choose one with -i NAME' "$T/y4-switch.log"
+"$LFA" shell -i debian --root > "$T/y4-shell.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y4 shell exit $rc"; }
+grep -q 'login debian --shared-tmp -- /bin/bash -l' "$T/home/pd-calls.log" && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y4 shell lost -i with --root"; }
+check "Y4 shell remembers instance" 'debian' "$T/home/.config/linux-for-android/last-instance"
+
+echo "===== Y5: a both install never starts a guessed backend non-interactively ====="
+"$LFA" switch both -i cliboth > "$T/y5-reset.log" 2>&1
+rm -f "$T/home/.config/linux-for-android/last-server-cliboth"
+"$T/prefix/bin/start-linux" --desktop -i cliboth < /dev/null > "$T/y5-start.log" 2>&1; rc=$?; [ "$rc" = "1" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y5 no-default exit $rc"; }
+check "Y5 no guessed backend" 'no default is remembered' "$T/y5-start.log"
+"$LFA" switch x11 -i cliboth > "$T/y5-x11.log" 2>&1
+"$T/prefix/bin/start-linux" --desktop -i cliboth --server vnc < /dev/null > "$T/y5-wrong.log" 2>&1; rc=$?; [ "$rc" = "1" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y5 wrong backend exit $rc"; }
+check "Y5 wrong backend refused" "Requested backend 'vnc' is not installed" "$T/y5-wrong.log"
+
+echo "===== Y6: Android 5/6 refuses X11 and explains how to restore VNC ====="
+export GETPROP_SDK=22
+LEGROOT="$T/prefix/var/lib/proot-distro/installed-rootfs/legacygui"
+mkdir -p "$LEGROOT/etc" "$LEGROOT/usr" "$LEGROOT/home/user"
+printf 'DISTRO="alpine"\nDE="xfce4"\nSERVER="vnc"\nAUTOSTART_SERVER="vnc"\nUSER_NAME="user"\n' > "$LEGROOT/etc/termux-linux-manager.conf"
+"$LFA" switch x11 -i legacygui --remove-old > "$T/y6-switch.log" 2>&1; rc=$?; [ "$rc" = "1" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y6 legacy switch exit $rc"; }
+check "Y6 legacy refusal" 'Termux:X11 requires Android 8 or newer' "$T/y6-switch.log"
+check "Y6 legacy keeps vnc" 'Nothing was changed' "$T/y6-switch.log"
+check "Y6 legacy removal warning" '--remove-old was ignored on purpose' "$T/y6-switch.log"
+check "Y6 legacy restore command" 'lfa switch vnc -i legacygui' "$T/y6-switch.log"
+check "Y6 legacy conf kept" 'SERVER="vnc"' "$LEGROOT/etc/termux-linux-manager.conf"
+"$LFA" install --distro alpine --desktop xfce4 --backend both -i legacynew > "$T/y6-install.log" 2>&1; rc=$?; [ "$rc" = "1" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y6 legacy install exit $rc"; }
+check "Y6 legacy install refusal" 'use --backend vnc' "$T/y6-install.log"
+unset GETPROP_SDK
 
 echo ""
 echo "===== Z: documentation links ====="

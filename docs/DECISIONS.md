@@ -120,3 +120,33 @@ Cost: the package, password, xstartup, verification, and autostart paths all
 check for VNC rather than comparing `SERVER` to `vnc`. The two back ends still
 share display `:1` and port `5901`, so they cannot run at the same time.
 Android 5/6 keeps VNC only because Termux:X11 requires Android 8 or newer.
+
+## D12: a unified `lfa` command, a `linux` shortcut, and explicit removal
+
+Decision: `lfa` is the command-line surface, `linux` starts the desktop, and
+`lfa switch` handles backend changes. Backend packages are kept by default and
+removed only with `--remove-old`.
+
+Why: `start-linux` is a good menu but a poor scripting target. Users who live
+in the terminal need stable commands with predictable exit codes, and widget
+users need a desktop shortcut that does not stop at a menu. Keeping old
+packages by default makes switching reversible and avoids re-downloading a
+large VNC or X11 package set because a user wanted to try the other backend.
+Removal stays explicit because it crosses an instance boundary: the host X11
+package is shared, and a guest VNC removal deletes the user's VNC password and
+xstartup.
+
+Cost: `lfa` needs a private runtime copy rather than calling the clone, so an
+upgrade has one more directory to refresh. The shared-X11 guard has to inspect
+every installed config before removing a host package. Android 5/6 needs an
+extra refusal path with a recovery instruction instead of a generic "not
+supported" message.
+
+The `linux` wrapper is a real script in `$PREFIX/bin`, not a shell alias. That
+is deliberate: aliases do not exist in widgets, SSH commands, `nohup`, or
+Termux:Boot scripts.
+
+The notice about the new layout is printed by `start-linux` to stderr on
+interactive classic runs only. It can be hidden for one run with
+`--no-notice` or `LFA_NO_NOTICE=1`, and permanently with `lfa notice off`.
+The preference is stored outside the guest so it survives distro reinstalls.

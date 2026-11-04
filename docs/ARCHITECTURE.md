@@ -14,10 +14,19 @@ Termux (Android app, one UID)
 │   ├── lib/uid0.c            tiny LD_PRELOAD shim so dpkg accepts uid 0
 │   └── lib/dpkg-statoverride.sh  proot-safe statoverride replacement
 │
-├── $PREFIX/bin/start-linux   generated launcher (X11 or VNC, desktop or shell)
+├── $PREFIX/bin/start-linux   classic launcher (X11 or VNC, desktop or shell)
+├── $PREFIX/bin/linux         desktop shortcut: start-linux --desktop
 ├── $PREFIX/bin/stop-linux    generated teardown
 ├── $PREFIX/bin/terminal-linux  shell only, no display/audio servers
+├── $PREFIX/bin/lfa           unified command line (install/list/status/...)
+├── $PREFIX/bin/switch-linux  alias for lfa switch
+├── $PREFIX/bin/autostart-linux  alias for lfa autostart
 ├── $PREFIX/bin/lfa-lib.sh    shared layout/pid/display helpers
+├── $PREFIX/lib/linux-for-android/  private runtime used by lfa
+│   ├── install_linux.sh      copied manager (works after the repo moves)
+│   ├── lib/                  guest helper scripts and C sources
+│   ├── plugins/              legacy proot-distro plugins
+│   └── assets/               wallpapers used by the runtime
 │
 └── proot-distro containers
     └── <name>/rootfs         the guest filesystem
@@ -90,6 +99,26 @@ desktop choice is stored per instance under
 `~/.config/linux-for-android/last-server-<instance>`. Terminal-only sessions
 do not update it. `stop-linux` handles both values, so a both install can stop
 whichever server is running without leaving the other behind.
+
+`lfa switch` changes `SERVER` in the guest config, installs the backend being
+entered first, and only then removes the backend being left when
+`--remove-old` is given. Termux:X11 is a host package shared by every distro,
+so removal scans the other installed configs first; `--force` overrides that
+guard. VNC removal runs the guest package manager and deletes the per-user
+`.vnc` and `.config/tigervnc` directories.
+
+The generated launchers are deliberately small and self-contained. They read
+`lfa-lib.sh` when present and fall back to inline helpers, so a damaged or
+partially upgraded install still starts. `lfa` is different: it uses the
+private runtime copy under `$PREFIX/lib/linux-for-android`, which is refreshed
+on every install and on menu 12. That copy is what lets the command line keep
+working after the repository is moved, renamed, or deleted.
+
+Preferences that are not tied to one distro live in
+`~/.config/linux-for-android/preferences.conf`. The only key today is
+`START_NOTICE`, written by `lfa notice on|off`. The notice is printed to
+stderr by the classic `start-linux` path only; `linux`, non-interactive runs,
+and Termux:Boot are silent.
 
 ## Session wrappers
 

@@ -7,7 +7,7 @@ Status values:
 
 | Status | Meaning |
 |---|---|
-| `done` | code changed, suite green (`PASS=404 FAIL=0`), lint clean |
+| `done` | code changed, suite green (`PASS=491 FAIL=0`), lint clean |
 | `partial` | the main risk is addressed; a documented remainder is listed |
 | `deferred` | deliberately not fixed in this pass, with the reason recorded |
 | `device` | also exercised on the Vivo V2437 |
@@ -39,6 +39,21 @@ Lint: `shellcheck -S warning` clean, `bash -n` clean, CI workflow added.
 | G29-G35 docs | 7 | 7 | 0 | 0 | architecture, decisions, index, issues link, badges, ToC |
 | G36-G40 polish | 5 | 3 | 1 | 1 | logo, GIF, and troubleshooting screenshots open |
 | Total | 40 | 27 | 5 | 8 | |
+
+## CLI and backend switching (2026-11-04)
+
+| Item | Status | Notes |
+|---|---|---|
+| Unified `lfa` command line | `done` | install/list/status/start/shell/stop/switch/autostart/update/doctor/backup/restore/remove/diagnostics/notice/version/help |
+| `linux` desktop shortcut | `done` | script wrapper around `start-linux --desktop`; no menu, works from widgets/SSH/boot |
+| `-i` shorthand | `done` | accepted by every command and launcher that accepts `--instance` |
+| Backend switching | `done` | `lfa switch` and menu 14; install-before-remove order; remembered choice cleared |
+| Clean package removal | `done` | VNC guest packages + config, host Termux:X11; shared-X11 guard and `--force` |
+| Android 5/6 refusal | `done` | explicit explanation, `--remove-old` warning, VNC restore command |
+| `start-linux` notice | `done` | stderr, interactive classic runs only; `lfa notice`, `--no-notice`, `LFA_NO_NOTICE` |
+| Boot script ownership | `done` | switching a non-autostart instance no longer hijacks another instance's boot script |
+| Host suite | `done` | `PASS=491 FAIL=0`; new Y1-Y6 sections cover CLI, switch, removal, guard, `-i`, legacy |
+| Device verification | `partial` | host suite only for the new surfaces; repeat switch/refusal matrix on Vivo and Oppo next device pass |
 
 ## Security
 
