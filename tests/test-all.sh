@@ -801,12 +801,17 @@ fresh_env
 N3ROOT="$T/prefix/var/lib/proot-distro/installed-rootfs/vncinst"
 mkdir -p "$N3ROOT/etc" "$N3ROOT/var/lib/dpkg" "$N3ROOT/home/user"
 printf 'DISTRO="debian"\nDE="xfce4"\nSERVER="vnc"\nRESOLUTION="1280x720"\nUPDATE_CMD="apt-get update"\nUSER_NAME="user"\nAUTOSTART_SERVER="vnc"\n' > "$N3ROOT/etc/termux-linux-manager.conf"
-# Hide a real termux-x11 (present when the suite runs on a device) so this
-# exercises the missing-backend package install path deterministically.
-printf '%s\n' 3 12 y 13 | PATH="$T/fakebin:/usr/bin:/bin" bash "$REPO/install_linux.sh" > "$T/n3.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: run n3 exit $rc"; }
+printf '%s\n' 3 12 y 13 | bash "$REPO/install_linux.sh" > "$T/n3.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: run n3 exit $rc"; }
 check "N3 both conf" 'SERVER="both"' "$N3ROOT/etc/termux-linux-manager.conf"
-check "N3 x11 install attempted" 'Installing Termux:X11' "$T/n3.log"
-check "N3 x11 repo package" 'STUB-PKG: install -y x11-repo' "$T/n3.log"
+# On a real device termux-x11 may already be installed; then Menu 12 only
+# enables the backend. CI has no termux-x11 and exercises the install path.
+if command -v termux-x11 >/dev/null 2>&1; then
+    check "N3 x11 enable offered" 'Enable Termux:X11 as a second backend' "$T/n3.log"
+    check_absent "N3 no package reinstall" 'Installing Termux:X11' "$T/n3.log"
+else
+    check "N3 x11 install attempted" 'Installing Termux:X11' "$T/n3.log"
+    check "N3 x11 repo package" 'STUB-PKG: install -y x11-repo' "$T/n3.log"
+fi
 check "N3 autostart kept" 'AUTOSTART_SERVER="vnc"' "$N3ROOT/etc/termux-linux-manager.conf"
 
 echo "===== N4: absolute guest symlinks do not look like missing packages =====\""
