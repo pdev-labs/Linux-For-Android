@@ -734,7 +734,27 @@ setup_required_mb() {
 
 # shellcheck disable=SC2120  # $1 is optional (defaults to $PREFIX)
 lfa_free_mb() {
-    df -Pk "${1:-$PREFIX}" 2>/dev/null | awk 'NR==2 {print int($4/1024)}'
+    local _path="${1:-$PREFIX}" _kb _blocks _bsize _human _val
+    # GNU/BusyBox df: 1024-byte blocks in column 4.
+    _kb=$(df -Pk "$_path" 2>/dev/null | awk 'NR==2 {print $4}')
+    case "$_kb" in ''|*[!0-9]*) _kb="" ;; esac
+    if [ -n "$_kb" ]; then printf '%s' $((_kb / 1024)); return 0; fi
+    # Android 5 toybox df ignores -Pk and prints human units (3.6G). Prefer
+    # stat -f, which gives exact blocks, then fall back to the human value.
+    _blocks=$(stat -f "$_path" 2>/dev/null | awk '/Available:/ {print $2}')
+    _bsize=$(stat -f "$_path" 2>/dev/null | sed -n 's/.*Fundamental block size:[[:space:]]*\([0-9][0-9]*\).*/\1/p')
+    case "${_blocks}${_bsize}" in
+        ''|*[!0-9]*) ;;
+        *) printf '%s' $((_blocks * _bsize / 1024 / 1024)); return 0 ;;
+    esac
+    _human=$(df "$_path" 2>/dev/null | awk 'NR==2 {print $4}')
+    _val="${_human%[GgMmTt]}"
+    case "$_human" in
+        *[Gg]) printf '%s' "$(awk -v v="$_val" 'BEGIN {printf "%d", v * 1024}')" ;;
+        *[Mm]) printf '%s' "$(awk -v v="$_val" 'BEGIN {printf "%d", v}')" ;;
+        *[Tt]) printf '%s' "$(awk -v v="$_val" 'BEGIN {printf "%d", v * 1024 * 1024}')" ;;
+        *) printf '%s' "$_human" ;;
+    esac
 }
 
 # Refuse to start a multi-gigabyte install on a nearly full device: it would

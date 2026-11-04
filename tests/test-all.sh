@@ -680,6 +680,25 @@ printf '%s\n' 2 1 1 1 1 2 '2 12 14' '' '' '' '' '' '' 1 'n' '' 'n' 'n' '' '' '13
 check "M7 refuses" 'Not enough free space' "$T/disk.log"
 check_absent "M7 no install completed" 'Installation complete' "$T/disk.log"
 
+echo "===== M7b: Android 5 toybox df reports human units ====="
+fresh_env
+mkdir -p "$T/toydf"
+cat > "$T/toydf/df" <<'EOF'
+#!/bin/bash
+echo "Filesystem               Size     Used     Free   Blksize"
+echo "/dev/fake                 10.8G     7.2G     3.6G   4096"
+EOF
+cat > "$T/toydf/stat" <<'EOF'
+#!/bin/sh
+exit 1
+EOF
+chmod +x "$T/toydf/df" "$T/toydf/stat"
+printf '%s\n' 2 1 1 1 1 2 '2 12 14' '' '' '' '' '' '' 1 'n' '' 'n' 'n' '' '' '13' \
+| PATH="$T/toydf:$T/fakebin:/usr/bin:/bin" bash "$REPO/install_linux.sh" > "$T/disk-toy.log" 2>&1; rc=$?
+[ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: M7b run exit $rc"; }
+check "M7b parses human units" 'Free space check: 3686 MB available' "$T/disk-toy.log"
+check_absent "M7b no false refusal" 'Not enough free space' "$T/disk-toy.log"
+
 echo "===== M8: interrupt safety (EXIT trap removes the secret-bearing script) ====="
 fresh_env
 ( printf '%s\n' 2 1 1 1 1 2 '2 12 14' '' '' '' '' '' '' 1 'n' '' 'n' 'n' '' '' '13' \

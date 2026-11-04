@@ -7,7 +7,7 @@ Status values:
 
 | Status | Meaning |
 |---|---|
-| `done` | code changed, suite green (`PASS=393 FAIL=0`), lint clean |
+| `done` | code changed, suite green (`PASS=396 FAIL=0`), lint clean |
 | `partial` | the main risk is addressed; a documented remainder is listed |
 | `deferred` | deliberately not fixed in this pass, with the reason recorded |
 | `device` | also exercised on the Vivo V2437 |
@@ -141,7 +141,7 @@ Lint: `shellcheck -S warning` clean, `bash -n` clean, CI workflow added.
 | 2026-11-01 | Detailed troubleshooting guide | `docs/TROUBLESHOOTING.md`: 13 areas, 47 internal links, error-string index, recovery ladder |
 | 2026-11-01 | Documentation link gate | suite checks the guide, both index links, and every relative doc link (`PASS=356 FAIL=0`) |
 | 2026-11-01 | Screenshot privacy pass | notification-bar app icons and the "3 devices" chip removed from all nine phone screenshots |
-| 2026-11-04 | Device suite, Vivo V2437, Android 16 | `PASS=393 FAIL=0` |
+| 2026-11-04 | Device suite, Vivo V2437, Android 16 | `PASS=396 FAIL=0` |
 | 2026-11-04 | Both install on device | Ubuntu 24.04 + XFCE4, `bothdev`, 40m27s; host and guest packages present |
 | 2026-11-04 | X11 and VNC on device | each desktop reached display `:1`; VNC RFB banner on `127.0.0.1:5901` |
 | 2026-11-04 | Remembered backend on device | blank first start refused; later starts reused the stored X11/VNC choice |

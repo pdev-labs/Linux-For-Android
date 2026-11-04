@@ -1,6 +1,6 @@
 # Test report for v1.7.1
 
-> Current development suite: `PASS=393 FAIL=0`.
+> Current development suite: `PASS=396 FAIL=0`.
 
 ## Both backends, 2026-11-04
 
@@ -11,8 +11,8 @@ aarch64, Termux 0.118.3, proot-distro 5.10.3.
 
 | Check | Result |
 |---|---|
-| Host suite (`./tests/test-all.sh`) | `PASS=393 FAIL=0` |
-| Device suite (`./tests/device-matrix.sh`) | `PASS=393 FAIL=0` |
+| Host suite (`./tests/test-all.sh`) | `PASS=396 FAIL=0` |
+| Device suite (`./tests/device-matrix.sh`) | `PASS=396 FAIL=0` |
 | `bash -n` on the installer, libraries, and tests | clean |
 
 ### Device scenarios
