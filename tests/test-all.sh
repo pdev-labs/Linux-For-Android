@@ -694,7 +694,7 @@ exit 1
 EOF
 chmod +x "$T/toydf/df" "$T/toydf/stat"
 printf '%s\n' 2 1 1 1 1 2 '2 12 14' '' '' '' '' '' '' 1 'n' '' 'n' 'n' '' '' '13' \
-| PATH="$T/toydf:$T/fakebin:/usr/bin:/bin" bash "$REPO/install_linux.sh" > "$T/disk-toy.log" 2>&1; rc=$?
+| PATH="$T/toydf:$T/fakebin${REAL_PREFIX:+:$REAL_PREFIX/bin}:/usr/bin:/bin" bash "$REPO/install_linux.sh" > "$T/disk-toy.log" 2>&1; rc=$?
 [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: M7b run exit $rc"; }
 check "M7b parses human units" 'Free space check: 3686 MB available' "$T/disk-toy.log"
 check_absent "M7b no false refusal" 'Not enough free space' "$T/disk-toy.log"
