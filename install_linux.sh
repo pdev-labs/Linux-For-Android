@@ -2761,6 +2761,15 @@ if [ "$SERVER" = "vnc" ] || [ "$SERVER" = "both" ]; then
         fi
         rm -f "$VNC_PIDFILE"
     fi
+    # TigerVNC before 1.10 has no -kill (it prints usage and exits), and its
+    # Xvnc can reparent to init and survive the proot wrapper. Stop the
+    # managed display directly as a fallback.
+    # Anchor on argv[0]: an unanchored -f pattern also matches the shell
+    # command that invoked stop-linux and kills the caller.
+    pkill -f '^/usr/bin/Xvnc :1( |$)' 2>/dev/null || true
+    pkill -f '^/usr/bin/Xtigervnc :1( |$)' 2>/dev/null || true
+    pkill -f '^/usr/bin/vncserver :1( |$)' 2>/dev/null || true
+    pkill -f '^/usr/bin/perl /usr/bin/vncserver :1( |$)' 2>/dev/null || true
 fi
 
 # Hand display :1 back. A killed X server does not always remove its socket or
