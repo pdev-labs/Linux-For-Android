@@ -26,6 +26,15 @@ tag names, define the order. See the table at the bottom.
 
 ### Fixed
 
+- Android 5's toybox `df` ignores `-Pk` and prints human units. The disk
+  preflight read `3.6G` as zero and refused every legacy install. It now
+  falls back to `stat -f` and then to the human value.
+- Legacy Alpine's TigerVNC has no `-kill`, and its Xvnc reparents to init and
+  survives the proot wrapper, so `stop-linux` left the desktop running. It now
+  stops the managed `:1` processes directly as a fallback.
+- Menu 12 clamped `SERVER="both"` to VNC in memory on Android 5/6 but did not
+  write it back, so the next `start-linux` offered the unsupported X11 choice
+  again. The clamp is now persisted and the autostart backend is forced to VNC.
 - `stop-linux` could leave the VNC proot wrapper behind. The keepalive used a
   shell loop around `sleep`, which defers SIGTERM; it is now a single
   `exec sleep`, with a SIGKILL fallback for a wedged wrapper.

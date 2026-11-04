@@ -148,6 +148,12 @@ Lint: `shellcheck -S warning` clean, `bash -n` clean, CI workflow added.
 | 2026-11-04 | `stop-linux` on device | X11 and VNC both fully stopped; no proot wrapper or keepalive left |
 | 2026-11-04 | Menu 12 backend migration on device | X11-only gained VNC; VNC-only gained X11; stale remembered choice cleared |
 | 2026-11-04 | Both autostart menu on device | VNC, Termux:X11, and None offered; summary cancel left setup.conf unchanged |
+| 2026-11-04 | Device suite, Oppo A37fw, Android 5.1.1 | `PASS=404 FAIL=0` (python3 installed for test shims) |
+| 2026-11-04 | Legacy guided setup | X11 and Both hidden, VNC selected automatically |
+| 2026-11-04 | Legacy Alpine 3.18 + XFCE4 + VNC | installed in 9m38s; RFB banner and XFCE session on display `:1` |
+| 2026-11-04 | Legacy `stop-linux` | Xvnc, vncserver, xinit, xfce4-session, and proot wrapper all stopped |
+| 2026-11-04 | Legacy both config through Menu 12 | persisted `SERVER="vnc"`, `AUTOSTART_SERVER="vnc"`, cleared remembered choice |
+| 2026-11-04 | Android 5 bugs fixed | toybox df free space, legacy VNC stop, persisted clamp, anchored kill patterns |
 | 2026-11-04 | `bash -n` after the backend change | install script and test suite clean |
 
 ### Findings that only appeared on hardware

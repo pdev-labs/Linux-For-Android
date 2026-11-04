@@ -127,12 +127,13 @@ hardware, not simulated. Full details, root causes, and evidence are in
 | Arch Linux ARM | Yes | Yes | | v1.7.0 |
 | Void Linux | Yes | Partial | X11 works; panel inconsistent over VNC | v1.7.0 |
 | Alpine Linux (edge) | Yes | Partial | desktop and wallpaper render; `xfce4-panel` does not start | v1.7.0 |
-| Alpine 3.18 (Android 5) | Yes | Yes | legacy VNC desktop, panel works | v1.7.0 |
+| Alpine 3.18 (Android 5) | Yes | Yes | legacy VNC desktop, panel works; X11 and Both hidden | v1.7.1 |
 | Ubuntu GNOME 46 (experimental) | Yes | Yes | shell and apps run; session services missing | v1.7.0 |
 
 > The test suite runs `404` checks with 0 failures. The same suite runs on the
 > devices (`tests/device-matrix.sh`). The table is as of v1.7.1. Ubuntu was
-> re-verified on v1.7.1; the other rows were last verified on v1.7.0. A row is
+> re-verified on v1.7.1, and Alpine 3.18 was re-verified on Android 5 on
+> 2026-11-04; the other rows were last verified on v1.7.0. A row is
 > marked verified only after a real install on the device named above.
 
 Fresh v1.7.0 capture: Ubuntu 24.04, XFCE4, and Termux:X11 on the Vivo V2437

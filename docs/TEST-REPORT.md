@@ -51,6 +51,39 @@ Not exercised on hardware in this pass: Android 5/6 display-server hiding,
 GNOME with Both, and the actual Termux:Boot reboot path. Those remain covered
 by the stubbed host suite only.
 
+## Android 5 legacy verification, 2026-11-04
+
+Device: Oppo A37fw, Android 5.1.1 (SDK 22), aarch64, 2 GB RAM, 3.6 GB free.
+Termux runs the frozen Android 5 repositories; proot-distro v4.2.0 was
+installed from source by the installer.
+
+| Check | Result |
+|---|---|
+| Device suite (`./tests/device-matrix.sh`) | `PASS=404 FAIL=0` |
+| Guided setup menu | `LEGACY MODE: Android 5/6 detected`; X11 and Both absent; VNC selected automatically |
+| Fresh install, Alpine 3.18 + XFCE4 + VNC (`legacyvnc`) | completed in 9m38s; 3686 MB free reported, 2500 MB needed |
+| Guest packages | `vncserver`, `Xvnc`, `xfce4-session`, VNC password, Xstartup |
+| VNC desktop | RFB `003.008` on `127.0.0.1:5901`; `Xvnc`, `xinit`, and `xfce4-session` running |
+| `stop-linux` | Xvnc, vncserver, xinit, xfce4-session, and the proot wrapper all gone; `.X11-unix` empty |
+| Existing `SERVER="both"` config run through Menu 12 | clamped to `SERVER="vnc"`, `AUTOSTART_SERVER="vnc"`, remembered choice removed |
+| `start-linux` after clamping | showed only `Desktop available: xfce4 via vnc`; no X11/Both menu |
+
+The legacy suite needed `python3` for the test shims; it was installed from the
+main Termux repository. The installer itself does not use Python.
+
+### Findings fixed on Android 5
+
+1. Toybox `df` does not accept `-Pk` and reports `10.8G 7.2G 3.6G`. The
+   preflight parsed `3.6` as zero blocks and refused the install. `lfa_free_mb`
+   now uses `stat -f`, then the human value.
+2. Alpine's TigerVNC `vncserver` has no `-kill`. Its Xvnc re-parents to init
+   and survives the proot wrapper, so stop left the desktop running. Stop now
+   kills the managed `:1` processes with anchored patterns.
+3. The first fallback pattern was unanchored and killed the invoking SSH
+   shell. Patterns now match `argv[0]` only.
+4. Menu 12's legacy clamp changed `SERVER` in memory only. It now persists
+   `vnc`, forces the autostart backend to VNC, and clears the remembered choice.
+
 ## v1.7.1 verification, 2026-11-01
 
 This release is a hardening pass based on the audit in `issues.md`: 54
