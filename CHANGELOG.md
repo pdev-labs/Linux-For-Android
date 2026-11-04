@@ -13,6 +13,17 @@ tag names, define the order. See the table at the bottom.
 
 ## [Unreleased]
 
+### Added
+
+- Guided setup can install Termux:X11, VNC, or both. With both, `start-linux`
+  asks which backend to use, remembers the last desktop choice, and
+  `stop-linux` stops either or both.
+- Apply Latest Fixes (menu 12) can add the missing backend to an existing
+  single-backend install after confirmation.
+- Termux:Boot can start either backend when both are installed. X11 autostart
+  starts the server and desktop in the background; open the Termux:X11 app
+  when you want to see it.
+
 ### Documentation
 
 - Credited pdev-labs as the solo author and maintainer in the README,

@@ -81,6 +81,14 @@ The VNC server runs inside the proot session, which is why the launcher keeps a
 `while :; do sleep 3600; done` alive: `proot --kill-on-exit` would otherwise
 reap the server when the login command returns.
 
+An install can carry both back ends. `SERVER="both"` installs both package
+sets, and `start-linux` resolves the choice to `x11` or `vnc` before starting.
+Only one runs at a time because they share `:1` and port `5901`. The last
+desktop choice is stored per instance under
+`~/.config/linux-for-android/last-server-<instance>`. Terminal-only sessions
+do not update it. `stop-linux` handles both values, so a both install can stop
+whichever server is running without leaving the other behind.
+
 ## Session wrappers
 
 `lib/real-feel.sh` writes `/usr/local/bin/lfa-set-wallpaper` and, for GNOME,

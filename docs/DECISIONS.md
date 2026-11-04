@@ -106,3 +106,17 @@ Explicitly out of scope, so it does not get proposed again every month:
 - auto-mounting USB or SD cards
 - Android hardware sensors, GPS, camera bridging
 - nested virtualisation or Docker inside the guest
+
+## D11: one distro can carry both display back ends
+
+Decision: `SERVER` accepts `x11`, `vnc`, `both`, or `none`. `both` installs
+Termux:X11 support and the guest VNC packages, then shows a backend menu at
+each desktop start.
+
+Why: some users want X11 speed at home and VNC when they need to connect from
+another device. Reinstalling to switch was unnecessary.
+
+Cost: the package, password, xstartup, verification, and autostart paths all
+check for VNC rather than comparing `SERVER` to `vnc`. The two back ends still
+share display `:1` and port `5901`, so they cannot run at the same time.
+Android 5/6 keeps VNC only because Termux:X11 requires Android 8 or newer.

@@ -7,7 +7,7 @@ Status values:
 
 | Status | Meaning |
 |---|---|
-| `done` | code changed, suite green (`PASS=356 FAIL=0`), lint clean |
+| `done` | code changed, suite green (`PASS=390 FAIL=0`), lint clean |
 | `partial` | the main risk is addressed; a documented remainder is listed |
 | `deferred` | deliberately not fixed in this pass, with the reason recorded |
 | `device` | also exercised on the Vivo V2437 |
@@ -141,6 +141,8 @@ Lint: `shellcheck -S warning` clean, `bash -n` clean, CI workflow added.
 | 2026-11-01 | Detailed troubleshooting guide | `docs/TROUBLESHOOTING.md`: 13 areas, 47 internal links, error-string index, recovery ladder |
 | 2026-11-01 | Documentation link gate | suite checks the guide, both index links, and every relative doc link (`PASS=356 FAIL=0`) |
 | 2026-11-01 | Screenshot privacy pass | notification-bar app icons and the "3 devices" chip removed from all nine phone screenshots |
+| 2026-11-04 | Both display backends | guided setup, menu 12 migration, remembered backend, both stop path, and X11/VNC autostart covered (`PASS=390 FAIL=0`) |
+| 2026-11-04 | `bash -n` after the backend change | install script and test suite clean |
 
 ### Findings that only appeared on hardware
 

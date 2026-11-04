@@ -1,5 +1,8 @@
 # Test report for v1.7.1
 
+> Current development suite: `PASS=390 FAIL=0`. The v1.7.1 results below were
+> recorded with 356 checks, before the both-backends tests were added.
+
 ## v1.7.1 verification, 2026-11-01
 
 This release is a hardening pass based on the audit in `issues.md`: 54

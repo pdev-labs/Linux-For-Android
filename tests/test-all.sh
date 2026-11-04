@@ -263,6 +263,46 @@ check "D wallpaper monitorscreen seed" 'monitorVNC-0 monitorscreen' "$DROOT/usr/
 check "D wallpaper repaint nudge" 'xfdesktop --reload' "$DROOT/usr/local/bin/lfa-set-wallpaper"
 check "D wallpaper autostart" 'Exec=/usr/local/bin/lfa-set-wallpaper --autostart' "$DROOT/home/user/.config/autostart/lfa-wallpaper.desktop"
 
+echo "===== D5: both backends (X11 + VNC) ====="
+fresh_env
+printf '%s\n' 2 1 1 1 3 1 1 '' '' '' '' '' UTC '' 1 n n n n y 13 \
+| bash "$REPO/install_linux.sh" > "$T/d5.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: run d5 exit $rc"; }
+S=$(setup_sh_of)
+check "D5 both saved" 'SERVER="both"' "$T/home/.config/linux-for-android/setup.conf"
+check "D5 both conf" 'SERVER="both"' "$T/prefix/var/lib/proot-distro/installed-rootfs/ubuntu/etc/termux-linux-manager.conf"
+check "D5 autostart key" 'AUTOSTART_SERVER="none"' "$T/prefix/var/lib/proot-distro/installed-rootfs/ubuntu/etc/termux-linux-manager.conf"
+check "D5 vnc package" 'tigervnc-standalone-server' "$S"
+check "D5 x11 packages" 'termux-x11-nightly' "$T/d5.log"
+check "D5 start menu x11" 'Full desktop with Termux:X11' "$T/prefix/bin/start-linux"
+check "D5 start menu vnc" 'Full desktop with VNC' "$T/prefix/bin/start-linux"
+check "D5 last server file" 'last-server-$INSTANCE_NAME' "$T/prefix/bin/start-linux"
+check "D5 stop both x11" '[ "$SERVER" = "x11" ] || [ "$SERVER" = "both" ]' "$T/prefix/bin/stop-linux"
+check "D5 stop both vnc" '[ "$SERVER" = "vnc" ] || [ "$SERVER" = "both" ]' "$T/prefix/bin/stop-linux"
+bash -n "$T/prefix/bin/start-linux" && bash -n "$T/prefix/bin/stop-linux" && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: D5 launcher syntax"; }
+D5LAST="$T/home/.config/linux-for-android/last-server-ubuntu"
+printf '2\n' | timeout 3 "$T/prefix/bin/start-linux" > "$T/d5start.log" 2>&1 || true
+[ "$(cat "$D5LAST" 2>/dev/null)" = "vnc" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: D5 remember VNC choice"; }
+rm -f "$D5LAST"
+printf '\n' | timeout 3 "$T/prefix/bin/start-linux" > "$T/d5nodefault.log" 2>&1 || true
+check "D5 no default on first both start" 'Invalid selection.' "$T/d5nodefault.log"
+[ ! -e "$D5LAST" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: D5 wrote a default before a choice"; }
+
+echo "===== D6: both backends with X11 autostart ====="
+fresh_env
+printf '%s\n' 2 1 1 1 3 1 1 '' '' '' '' '' UTC '' 1 y 2 n n n y 13 \
+| bash "$REPO/install_linux.sh" > "$T/d6.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: run d6 exit $rc"; }
+check "D6 autostart x11 saved" 'AUTOSTART_SERVER="x11"' "$T/home/.config/linux-for-android/setup.conf"
+check "D6 boot starts launcher" 'start-linux" --instance "ubuntu" --server "x11"' "$T/home/.termux/boot/start-linux-services.sh"
+bash -n "$T/home/.termux/boot/start-linux-services.sh" && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: D6 boot syntax"; }
+
+echo "===== D7: GNOME with both backends keeps the warning ====="
+fresh_env
+printf '%s\n' 2 1 5 y 1 3 1 1 '' '' '' '' '' UTC '' 1 n n n n y 13 \
+| bash "$REPO/install_linux.sh" > "$T/d7.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: run d7 exit $rc"; }
+check "D7 both saved" 'SERVER="both"' "$T/home/.config/linux-for-android/setup.conf"
+check "D7 gnome both warning" 'Both keeps VNC available too' "$T/d7.log"
+check "D7 gnome package" 'gnome-shell' "$(setup_sh_of)"
+
 echo "===== D2: experimental GNOME (warning, VNC default, launcher) ====="
 fresh_env
 printf '%s\n' 2 1 5 y 1 '' 2 1 '' '' '' '' '' '' '' 1 'n' '' 'n' 'n' '' '' '13' \
@@ -369,6 +409,7 @@ check "H2 vnc auto" 'display server auto-set to VNC' "$T/h2.log"
 H2S=$(setup_sh_of)
 check "H2 alpine pinned" 's|/edge/|/v3.18/|g' "$H2S"
 check_absent "H2 legacy no GNOME option" 'GNOME (experimental)' "$T/h2.log"
+check_absent "H2 legacy hides Both" '3) Both' "$T/h2.log"
 check "H2 minimal xfce" 'xfce4-session xfwm4 xfce4-panel' "$H2S"
 H2ROOT="$T/prefix/var/lib/proot-distro/installed-rootfs/h2alpine"
 [ -s "$H2ROOT/usr/share/backgrounds/lfa-default.jpg" ] && cmp -s "$H2ROOT/usr/share/backgrounds/lfa-default.jpg" "$REPO/assets/wallpapers/alpine.jpg" && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: H2 alpine wallpaper not staged"; }
@@ -724,6 +765,30 @@ check "N xstartup updated" 'startxfce4' "$NROOT/home/user/.vnc/xstartup"
 [ -s "$NROOT/usr/share/backgrounds/lfa-default.jpg" ] && cmp -s "$NROOT/usr/share/backgrounds/lfa-default.jpg" "$REPO/assets/wallpapers/debian.jpg" && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: N upgrade wallpaper not staged"; }
 check "N wallpaper autostart" 'lfa-set-wallpaper --autostart' "$NROOT/home/user/.config/autostart/lfa-wallpaper.desktop"
 [ -f "$T/prefix/tmp/lfa-upgrade.sh" ] && bash -n "$T/prefix/tmp/lfa-upgrade.sh" && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: N upgrade script missing/invalid"; }
+
+echo "===== N2: menu 12 adds VNC to an X11 install ====="
+fresh_env
+N2ROOT="$T/prefix/var/lib/proot-distro/installed-rootfs/x11inst"
+mkdir -p "$N2ROOT/etc" "$N2ROOT/var/lib/dpkg" "$N2ROOT/home/user"
+printf 'DISTRO="ubuntu"\nDE="xfce4"\nSERVER="x11"\nRESOLUTION="1280x720"\nUPDATE_CMD="apt-get update"\nUSER_NAME="user"\n' > "$N2ROOT/etc/termux-linux-manager.conf"
+printf '%s\n' 3 12 y '' 13 | bash "$REPO/install_linux.sh" > "$T/n2.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: run n2 exit $rc"; }
+check "N2 both conf" 'SERVER="both"' "$N2ROOT/etc/termux-linux-manager.conf"
+check "N2 vnc package call" 'tigervnc-standalone-server' "$T/home/pd-calls.log"
+check "N2 xstartup written" 'startxfce4' "$N2ROOT/home/user/.vnc/xstartup"
+check "N2 autostart key" 'AUTOSTART_SERVER="vnc"' "$N2ROOT/etc/termux-linux-manager.conf"
+
+echo "===== N3: menu 12 adds X11 to a VNC install ====="
+fresh_env
+N3ROOT="$T/prefix/var/lib/proot-distro/installed-rootfs/vncinst"
+mkdir -p "$N3ROOT/etc" "$N3ROOT/var/lib/dpkg" "$N3ROOT/home/user"
+printf 'DISTRO="debian"\nDE="xfce4"\nSERVER="vnc"\nRESOLUTION="1280x720"\nUPDATE_CMD="apt-get update"\nUSER_NAME="user"\nAUTOSTART_SERVER="vnc"\n' > "$N3ROOT/etc/termux-linux-manager.conf"
+# Hide a real termux-x11 (present when the suite runs on a device) so this
+# exercises the missing-backend package install path deterministically.
+printf '%s\n' 3 12 y 13 | env PATH="$T/fakebin:/usr/bin:/bin" bash "$REPO/install_linux.sh" > "$T/n3.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: run n3 exit $rc"; }
+check "N3 both conf" 'SERVER="both"' "$N3ROOT/etc/termux-linux-manager.conf"
+check "N3 x11 install attempted" 'Installing Termux:X11' "$T/n3.log"
+check "N3 x11 repo package" 'STUB-PKG: install -y x11-repo' "$T/n3.log"
+check "N3 autostart kept" 'AUTOSTART_SERVER="vnc"' "$N3ROOT/etc/termux-linux-manager.conf"
 
 echo "===== O: proot-distro v4 containers layout ====="
 fresh_env

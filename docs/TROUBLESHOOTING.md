@@ -37,6 +37,7 @@ Commands that say *inside the distro* are run in a guest shell opened with
 | No panel, no wallpaper, no window borders | [§3.6](#36-panel-wallpaper-or-window-borders-are-missing) |
 | `stop-linux` leaves Termux:X11 open | [§3.7](#37-stop-linux-leaves-termuxx11-open) |
 | `start-linux` starts a second desktop | [§3.8](#38-start-linux-starts-a-second-desktop) |
+| Need to switch between Termux:X11 and VNC | [§3.9](#39-how-do-i-switch-between-termuxx11-and-vnc) |
 | Termux:X11 shows "display :1 not found" | [§4.1](#41-termuxx11-says-display-1-not-found) |
 | Screen is the wrong size or rotated | [§4.2](#42-wrong-resolution-or-rotation) |
 | Touch pointer is offset, keys are missing | [§4.3](#43-touch-pointer-keyboard-and-clipboard) |
@@ -528,6 +529,19 @@ Fix: always run `stop-linux` before changing resolution, desktop or display
 server. If a session is wedged, `stop-linux` is still the supported path; it
 verifies PIDs before killing, so it will not kill an unrelated process that
 happens to share a name.
+
+### 3.9 How do I switch between Termux:X11 and VNC?
+
+If both backends are installed, `start-linux` shows a desktop entry for each
+one. Pick the backend you want. After a desktop start, it remembers the choice
+and preselects it next time. Terminal-only sessions do not change it.
+
+If the install has only one backend, run `./install_linux.sh`, choose 3)
+Manager, then 12) Apply Latest Fixes. It offers to add the missing backend
+after confirmation.
+
+Run `stop-linux` before switching. The two backends share display `:1` and
+port `5901`, so they cannot run at the same time.
 
 ## 4. Display and input
 

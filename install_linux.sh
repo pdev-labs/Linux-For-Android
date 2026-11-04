@@ -629,16 +629,29 @@ ask_display_server() {        # $1 = default index (1=x11, 2=vnc)
     local _def="${1:-1}"
     ui_select "Choose Display Server" "$_def" \
         "1|Termux:X11|hardware acceleration, faster, smoother" \
-        "2|VNC|software rendering, works everywhere, slower" || return 1
+        "2|VNC|software rendering, works everywhere, slower" \
+        "3|Both|install both; choose one each time you start" || return 1
     case "$UI_SELECTED" in
         1) SERVER="x11" ;;
         2) SERVER="vnc" ;;
+        3) SERVER="both" ;;
     esac
-    if [ "$DE" = "gnome" ] && [ "$SERVER" = "x11" ]; then
+    if [ "$DE" = "gnome" ] && { [ "$SERVER" = "x11" ] || [ "$SERVER" = "both" ]; }; then
         echo "[!] GNOME over Termux:X11 is known to crash the app often."
-        echo "    VNC is more stable for GNOME - you can still continue."
+        echo "    VNC is more stable for GNOME - Both keeps VNC available too."
     fi
     return 0
+}
+
+# Both backends share one config value. These helpers keep the package,
+# password, launcher and verification paths from drifting when "both" is set.
+server_has_x11() {
+    case "${SERVER:-none}" in x11|both) return 0 ;; esac
+    return 1
+}
+server_has_vnc() {
+    case "${SERVER:-none}" in vnc|both) return 0 ;; esac
+    return 1
 }
 
 # ============================================================
@@ -652,6 +665,9 @@ SETUP_CONF="$HOME/.config/linux-for-android/setup.conf"
 # Wallpaper mode: light (default) or dark. Guided setup asks for GUI
 # installs; CLI-only installs keep the default and skip wallpaper setup.
 COLOR_MODE="light"
+# Which backend Termux:Boot should start when "both" is installed. Empty
+# means "not chosen yet"; the installer fills it before writing the script.
+AUTOSTART_SERVER=""
 
 b64enc() {
     printf '%s' "$1" | base64 2>/dev/null | tr -d '\n'
@@ -832,6 +848,7 @@ TIMEZONE="$TIMEZONE"
 HOSTNAME="$HOSTNAME"
 PSTYLE="$PSTYLE"
 NEED_VIRGL="$NEED_VIRGL"
+AUTOSTART_SERVER="$AUTOSTART_SERVER"
 DO_AUTOSTART="$DO_AUTOSTART"
 DO_STORAGE="$DO_STORAGE"
 DO_SSH="$DO_SSH"
@@ -848,7 +865,7 @@ setup_summary() {
     printf '  %s%-13s%s %s\n' "$C_GRAY" "Desktop" "$C_RESET" "$DE"
     [ "$DE" != "none" ] && printf '  %s%-13s%s %s\n' "$C_GRAY" "Wallpaper" "$C_RESET" "$COLOR_MODE"
     printf '  %s%-13s%s %s\n' "$C_GRAY" "Server" "$C_RESET" "$SERVER"
-    [ "$SERVER" = "vnc" ] && printf '  %s%-13s%s %s\n' "$C_GRAY" "Resolution" "$C_RESET" "$RESOLUTION"
+    server_has_vnc && printf '  %s%-13s%s %s\n' "$C_GRAY" "Resolution" "$C_RESET" "$RESOLUTION"
     printf '  %s%-13s%s %s\n' "$C_GRAY" "Software" "$C_RESET" "${APP_CHOICES:-none}"
     printf '  %s%-13s%s %s\n' "$C_GRAY" "Instance" "$C_RESET" "${INSTANCE_NAME:-(auto)}"
     printf '  %s%-13s%s %s\n' "$C_GRAY" "Username" "$C_RESET" "$SETUP_USER"
@@ -858,7 +875,7 @@ setup_summary() {
     printf '  %s%-13s%s %s\n' "$C_GRAY" "Hostname" "$C_RESET" "$HOSTNAME"
     printf '  %s%-13s%s %s\n' "$C_GRAY" "HW accel" "$C_RESET" "$([ "$NEED_VIRGL" = "1" ] && echo on || echo off)"
     printf '  %s%-13s%s %s\n' "$C_GRAY" "Prompt style" "$C_RESET" "$PSTYLE"
-    printf '  %s%-13s%s %s\n' "$C_GRAY" "Autostart" "$C_RESET" "$([ "$DO_AUTOSTART" = "1" ] && echo yes || echo no)"
+    printf '  %s%-13s%s %s\n' "$C_GRAY" "Autostart" "$C_RESET" "$([ "$DO_AUTOSTART" = "1" ] && echo "yes (${AUTOSTART_SERVER:-$SERVER})" || echo no)"
     printf '  %s%-13s%s %s\n' "$C_GRAY" "Storage perm" "$C_RESET" "$([ "$DO_STORAGE" = "1" ] && echo yes || echo no)"
     printf '  %s%-13s%s %s\n' "$C_GRAY" "SSH server" "$C_RESET" "$([ "$DO_SSH" = "1" ] && echo yes || echo no)"
     printf '  %s%-13s%s %s\n' "$C_GRAY" "Widget hint" "$C_RESET" "$([ "$DO_WIDGET" = "1" ] && echo yes || echo no)"
@@ -881,6 +898,7 @@ setup_quick() {
     HOSTNAME="localhost"
     PSTYLE="minimal"
     if [ "$IS_LEGACY" = "1" ]; then NEED_VIRGL=0; else NEED_VIRGL=1; fi
+    AUTOSTART_SERVER="$SERVER"
     DO_AUTOSTART=0
     DO_STORAGE=1
     DO_SSH=0
@@ -955,6 +973,7 @@ setup_guided() {
     SERVER="none"
     RESOLUTION="1280x720"
     NEED_VIRGL=0
+    AUTOSTART_SERVER=""
     if [ "$DE" != "none" ]; then
         if [ "$IS_LEGACY" = "1" ]; then
             echo "[*] Legacy Android: display server auto-set to VNC, HW acceleration off."
@@ -977,7 +996,7 @@ setup_guided() {
                 2) NEED_VIRGL=0 ;;
             esac
         fi
-        if [ "$SERVER" = "vnc" ]; then
+        if server_has_vnc; then
             if ! ui_select "Choose Display Resolution" "1" \
                 "1|Auto / 720p|recommended, works on most phones" \
                 "2|1080p|sharper, needs more RAM" \
@@ -1038,7 +1057,7 @@ setup_guided() {
     [ "$_pw" = "root" ] && echo "[!] Using the default root password 'root'."
     SETUP_ROOT_B64="$(b64enc "$_pw")"
     # VNC authentication only uses the first 8 characters of the password.
-    if [ "${SERVER:-}" = "vnc" ] && [ "${#_pw}" -gt 8 ]; then
+    if server_has_vnc && [ "${#_pw}" -gt 8 ]; then
         echo "[!] This password is ${#_pw} characters, but VNC only uses the first 8"
         echo "    ('${_pw:0:8}'). Type that shorter version in your VNC client."
     fi
@@ -1072,7 +1091,28 @@ setup_guided() {
         2) PSTYLE="informative" ;;
     esac
     # 12-14. Autostart / storage / SSH / widget
-    if ui_confirm "Autostart at boot via Termux:Boot? (needs the Termux:Boot app)" n; then DO_AUTOSTART=1; else DO_AUTOSTART=0; fi
+    if ui_confirm "Autostart at boot via Termux:Boot? (needs the Termux:Boot app)" n; then
+        DO_AUTOSTART=1
+        if [ "$SERVER" = "both" ]; then
+            if ! ui_select "Autostart backend" "1" \
+                "1|VNC|starts unattended; recommended" \
+                "2|Termux:X11|starts the server and desktop; open the app later" \
+                "3|None|do not start a desktop at boot"; then
+                show_menu
+                return
+            fi
+            case "$UI_SELECTED" in
+                1) AUTOSTART_SERVER="vnc" ;;
+                2) AUTOSTART_SERVER="x11" ;;
+                3) AUTOSTART_SERVER="none" ;;
+            esac
+        else
+            AUTOSTART_SERVER="$SERVER"
+        fi
+    else
+        DO_AUTOSTART=0
+        AUTOSTART_SERVER="none"
+    fi
     if ui_confirm "Request Android storage access now? (Downloads/Documents)" y; then DO_STORAGE=1; else DO_STORAGE=0; fi
     if ui_confirm "Start an SSH server after install? (port 8022)" n; then DO_SSH=1; else DO_SSH=0; fi
     if ui_confirm "Show Termux:Widget shortcut instructions?" n; then DO_WIDGET=1; else DO_WIDGET=0; fi
@@ -1106,6 +1146,14 @@ setup_load_saved() {
     : "${TIMEZONE:=UTC}" "${HOSTNAME:=localhost}" "${PSTYLE:=minimal}"
     : "${NEED_VIRGL:=1}" "${DO_AUTOSTART:=0}" "${DO_STORAGE:=1}"
     : "${DO_SSH:=0}" "${DO_WIDGET:=0}"
+    : "${AUTOSTART_SERVER:=}"
+    if [ -z "$AUTOSTART_SERVER" ]; then
+        case "$SERVER" in
+            both) AUTOSTART_SERVER="vnc" ;;
+            x11|vnc|none) AUTOSTART_SERVER="$SERVER" ;;
+            *) AUTOSTART_SERVER="none" ;;
+        esac
+    fi
     SETUP_ANSWERED=1
     echo "[*] Loaded saved answers from $SETUP_CONF"
     setup_summary
@@ -1623,6 +1671,126 @@ repair_linux() {
     show_menu
 }
 
+# Menu 12 helpers. Adding a second backend must not depend on the installer's
+# distro-specific variables, which are only set on a fresh install.
+vnc_pkg_for_distro() {
+    case "${DISTRO:-}" in
+        ubuntu|debian|kali) echo "tigervnc-standalone-server" ;;
+        fedora)             echo "tigervnc-server" ;;
+        opensuse|void|archlinux|alpine) echo "tigervnc" ;;
+        *)                  echo "tigervnc" ;;
+    esac
+}
+
+guest_update_pkgs() {
+    case "${DISTRO:-}" in
+        ubuntu|debian|kali)
+            # shellcheck disable=SC2046
+            proot-distro login $(pd_login_flags) "$INSTANCE_NAME" -- apt-get update -y ;;
+        fedora)
+            # shellcheck disable=SC2046
+            proot-distro login $(pd_login_flags) "$INSTANCE_NAME" -- dnf makecache ;;
+        opensuse)
+            # shellcheck disable=SC2046
+            proot-distro login $(pd_login_flags) "$INSTANCE_NAME" -- zypper refresh ;;
+        archlinux)
+            # shellcheck disable=SC2046
+            proot-distro login $(pd_login_flags) "$INSTANCE_NAME" -- pacman -Sy --noconfirm ;;
+        void)
+            # shellcheck disable=SC2046
+            proot-distro login $(pd_login_flags) "$INSTANCE_NAME" -- xbps-install -S ;;
+        alpine)
+            # shellcheck disable=SC2046
+            proot-distro login $(pd_login_flags) "$INSTANCE_NAME" -- apk update ;;
+        *) return 1 ;;
+    esac
+}
+
+guest_install_pkgs() {  # $@ = package names
+    [ "$#" -gt 0 ] || return 0
+    guest_update_pkgs || true
+    case "${DISTRO:-}" in
+        ubuntu|debian|kali)
+            # shellcheck disable=SC2046
+            proot-distro login $(pd_login_flags) "$INSTANCE_NAME" -- apt-get install -y "$@" ;;
+        fedora)
+            # shellcheck disable=SC2046
+            proot-distro login $(pd_login_flags) "$INSTANCE_NAME" -- dnf install -y "$@" ;;
+        opensuse)
+            # shellcheck disable=SC2046
+            proot-distro login $(pd_login_flags) "$INSTANCE_NAME" -- zypper install -y "$@" ;;
+        archlinux)
+            # shellcheck disable=SC2046
+            proot-distro login $(pd_login_flags) "$INSTANCE_NAME" -- pacman -S --noconfirm "$@" ;;
+        void)
+            # shellcheck disable=SC2046
+            proot-distro login $(pd_login_flags) "$INSTANCE_NAME" -- xbps-install -y "$@" ;;
+        alpine)
+            # shellcheck disable=SC2046
+            proot-distro login $(pd_login_flags) "$INSTANCE_NAME" -- apk add "$@" ;;
+        *)
+            echo "[!] Unknown package manager for $DISTRO."
+            return 1 ;;
+    esac
+}
+
+vnc_guest_ready() {  # $1 = rootfs
+    [ -x "$1/usr/bin/vncserver" ] || [ -x "$1/usr/bin/Xvnc" ]
+}
+
+write_vnc_xstartup() {  # $1 = rootfs, $2 = user, $3 = desktop
+    local _rootfs="$1" _user="$2" _de="$3" _ses=""
+    case "$_de" in
+        xfce4|xfce) _ses="startxfce4" ;;
+        lxde)       _ses="startlxde" ;;
+        mate)       _ses="mate-session" ;;
+        gnome)      _ses="/usr/local/bin/start-gnome-session" ;;
+        *) return 0 ;;
+    esac
+    for _dir in "$_rootfs/home/$_user/.vnc" "$_rootfs/home/$_user/.config/tigervnc"; do
+        mkdir -p "$_dir"
+        cat > "$_dir/xstartup" <<EOF
+#!/bin/sh
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+export PULSE_SERVER=127.0.0.1
+export XDG_RUNTIME_DIR="/tmp/xdg-\$(id -un)"
+mkdir -p "\$XDG_RUNTIME_DIR"
+chmod 700 "\$XDG_RUNTIME_DIR"
+if command -v dbus-run-session >/dev/null 2>&1; then
+    exec dbus-run-session -- $_ses
+elif command -v dbus-launch >/dev/null 2>&1; then
+    exec dbus-launch --exit-with-session $_ses
+else
+    exec $_ses
+fi
+EOF
+        chmod 755 "$_dir/xstartup"
+    done
+}
+
+vnc_set_password() {  # $1 = guest user
+    local _user="$1" _b64="" _pw=""
+    if [ -f "$SETUP_CONF" ]; then
+        _b64="$(sed -n 's/^SETUP_USER_B64="\(.*\)"/\1/p' "$SETUP_CONF" 2>/dev/null | head -n1)"
+    fi
+    if [ -n "$_b64" ]; then
+        _pw="$(printf '%s' "$_b64" | base64 -d 2>/dev/null || true)"
+    fi
+    if [ -z "$_pw" ]; then
+        setup_confirm_secret _pw "VNC password [default: root]: " "root"
+    fi
+    # shellcheck disable=SC2046  # flag list, not one argument
+    printf '%s\n' "$_pw" | proot-distro login $(pd_login_flags) "$INSTANCE_NAME" \
+        --user "$_user" --shared-tmp -- bash -c \
+        'mkdir -p "$HOME/.vnc" "$HOME/.config/tigervnc"; vncpasswd -f > "$HOME/.vnc/passwd"; cp -f "$HOME/.vnc/passwd" "$HOME/.config/tigervnc/passwd"; chmod 600 "$HOME/.vnc/passwd" "$HOME/.config/tigervnc/passwd"'
+}
+
+enable_vnc_backend() {
+    vnc_set_password "$LINUX_USER" || return 1
+    write_vnc_xstartup "$ROOTFS" "$LINUX_USER" "$DE" || return 1
+    SERVER="both"
+}
+
 # Guest-side migration tweaks for an already-installed distro.
 write_guest_upgrade_script() {
     if [ -f "$LFA_DIR/lib/uid0-build.sh" ]; then
@@ -1685,6 +1853,7 @@ upgrade_existing() {
     # Load what the old install recorded; supply defaults for newer keys.
     USER_NAME="user"; DE="none"; SERVER="none"; RESOLUTION=""; PSTYLE="minimal"
     HOSTNAME="localhost"; TIMEZONE="UTC"; NEED_VIRGL="1"; COLOR_MODE="light"
+    AUTOSTART_SERVER=""
     if [ -f "$CONF" ]; then
         # shellcheck disable=SC1090
         # shellcheck source=/dev/null
@@ -1692,6 +1861,13 @@ upgrade_existing() {
     fi
     LINUX_USER="${USER_NAME:-user}"
     if ! echo "$LINUX_USER" | grep -Eq '^[a-z_][a-z0-9_-]*$'; then LINUX_USER="user"; fi
+    if [ -z "$AUTOSTART_SERVER" ]; then
+        case "$SERVER" in
+            both) AUTOSTART_SERVER="vnc" ;;
+            x11|vnc) AUTOSTART_SERVER="$SERVER" ;;
+            *) AUTOSTART_SERVER="none" ;;
+        esac
+    fi
 
     echo "========================================="
     echo " Applying latest fixes to $INSTANCE_NAME"
@@ -1712,6 +1888,60 @@ upgrade_existing() {
         grep -q '^HOSTNAME=' "$CONF" || echo 'HOSTNAME="localhost"' >> "$CONF"
         grep -q '^NEED_VIRGL=' "$CONF" || echo 'NEED_VIRGL="1"' >> "$CONF"
         grep -q '^PSTYLE=' "$CONF" || echo 'PSTYLE="minimal"' >> "$CONF"
+    fi
+
+    # 2b. Offer the missing backend on an existing single-backend install.
+    # Default is no, so an unattended migration never downloads packages.
+    if [ "$DE" != "none" ]; then
+        if [ "$IS_LEGACY" = "1" ] && [ "$SERVER" = "both" ]; then
+            echo "[*] Android 5/6 cannot run Termux:X11; keeping VNC only."
+            SERVER="vnc"
+        fi
+        case "$SERVER" in
+            x11)
+                if ! vnc_guest_ready "$ROOTFS"; then
+                    if ui_confirm "Add VNC to $INSTANCE_NAME? It installs $(vnc_pkg_for_distro)." n; then
+                        echo "[*] Installing VNC packages..."
+                        if guest_install_pkgs "$(vnc_pkg_for_distro)" && enable_vnc_backend; then
+                            :
+                        else
+                            echo "[!] VNC install failed; keeping Termux:X11 only."
+                        fi
+                    fi
+                elif ui_confirm "Enable VNC as a second backend for $INSTANCE_NAME?" n; then
+                    enable_vnc_backend || echo "[!] VNC setup failed; keeping Termux:X11 only."
+                fi
+                ;;
+            vnc)
+                if [ "$IS_LEGACY" != "1" ] && ! command -v termux-x11 >/dev/null 2>&1; then
+                    if ui_confirm "Add Termux:X11 to $INSTANCE_NAME? It installs the Termux X11 packages." n; then
+                        echo "[*] Installing Termux:X11..."
+                        if pkg install -y x11-repo && pkg install -y termux-x11-nightly; then
+                            SERVER="both"
+                        else
+                            echo "[!] Termux:X11 install failed; keeping VNC only."
+                        fi
+                    fi
+                elif [ "$IS_LEGACY" != "1" ] && ui_confirm "Enable Termux:X11 as a second backend for $INSTANCE_NAME?" n; then
+                    SERVER="both"
+                fi
+                ;;
+        esac
+        if [ "$SERVER" = "both" ] && [ -f "$CONF" ]; then
+            if grep -q '^SERVER=' "$CONF"; then
+                sed -i 's/^SERVER=.*/SERVER="both"/' "$CONF"
+            else
+                echo 'SERVER="both"' >> "$CONF"
+            fi
+            # A backend added later starts with no remembered default.
+            rm -f "$HOME/.config/linux-for-android/last-server-$INSTANCE_NAME" 2>/dev/null || true
+        fi
+        if [ -f "$CONF" ] && ! grep -q '^AUTOSTART_SERVER=' "$CONF"; then
+            case "$SERVER" in
+                both) echo 'AUTOSTART_SERVER="vnc"' >> "$CONF" ;;
+                *)    echo "AUTOSTART_SERVER=\"$SERVER\"" >> "$CONF" ;;
+            esac
+        fi
     fi
 
     # 3. Realistic shell: prompt, banner, hostname command, clean env.
@@ -1745,7 +1975,7 @@ upgrade_existing() {
     # legacy and modern locations, and carry the password across.
     local XVNC="$ROOTFS/home/$LINUX_USER/.vnc"
     local XCFG="$ROOTFS/home/$LINUX_USER/.config/tigervnc"
-    if [ -f "$XVNC/xstartup" ] || [ "$SERVER" = "vnc" ]; then
+    if [ -f "$XVNC/xstartup" ] || server_has_vnc; then
         local SES=""
         case "$DE" in
             xfce4|xfce) SES="startxfce4" ;;
@@ -1798,7 +2028,7 @@ EOF
             [ -x "$ROOTFS/usr/bin/dconf" ] || _missing="$_missing dconf-cli"
             ;;
     esac
-    if [ "${SERVER:-none}" = "vnc" ]; then
+    if server_has_vnc; then
         if [ ! -x "$ROOTFS/usr/bin/vncserver" ] && [ ! -x "$ROOTFS/usr/bin/Xvnc" ]; then
             _missing="$_missing tigervnc"
         fi
@@ -2160,12 +2390,27 @@ else
     lfa_clear_stale_x1() { local _p=999999; [ -f "$PREFIX/tmp/.X1-lock" ] && _p=$(tr -dc '0-9' < "$PREFIX/tmp/.X1-lock" 2>/dev/null); [ -n "$_p" ] && kill -0 "$_p" 2>/dev/null && return 0; rm -f "$PREFIX/tmp/.X11-unix/X1" "$PREFIX/tmp/.X1-lock" 2>/dev/null; }
     lfa_pid_matches() { local _p="$1" _c; shift; [ -n "$_p" ] || return 1; kill -0 "$_p" 2>/dev/null || return 1; _c="$(tr '\0' ' ' < "/proc/$_p/cmdline" 2>/dev/null)" || return 1; for _pat in "$@"; do case "$_c" in *"$_pat"*) return 0 ;; esac; done; return 1; }
 fi
+
+# Non-interactive entry used by Termux:Boot. It skips the distro and backend
+# menus so boot does not depend on stdin.
+PRESELECT_INSTANCE=""
+PRESELECT_SERVER=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --instance) PRESELECT_INSTANCE="${2:-}"; shift 2 ;;
+        --server) PRESELECT_SERVER="${2:-}"; shift 2 ;;
+        *) shift ;;
+    esac
+done
+
 mapfile -t DISTROS < <(lfa_instances)
 if [ ${#DISTROS[@]} -eq 0 ]; then
     echo "No distributions installed. Please run install_linux.sh first."
     exit 1
 elif [ ${#DISTROS[@]} -eq 1 ]; then
     DISTRO=${DISTROS[0]}
+elif [ -n "$PRESELECT_INSTANCE" ]; then
+    DISTRO="$PRESELECT_INSTANCE"
 else
     echo "Multiple distributions found. Please choose one to start:"
     for i in "${!DISTROS[@]}"; do
@@ -2204,8 +2449,54 @@ fi
 
 # GUI installs can boot the full desktop or drop straight to a shell.
 # CLI-only installs go directly to a root terminal.
+LAST_SERVER_FILE="$HOME/.config/linux-for-android/last-server-$INSTANCE_NAME"
+LAST_SERVER=""
+if [ -r "$LAST_SERVER_FILE" ]; then
+    LAST_SERVER="$(cat "$LAST_SERVER_FILE" 2>/dev/null || true)"
+fi
+case "$LAST_SERVER" in x11|vnc) ;; *) LAST_SERVER="" ;; esac
+SERVER_MODE="$SERVER"
+
 MODE="desktop"
-if [ "$SERVER" == "x11" ] || [ "$SERVER" == "vnc" ]; then
+if [ -n "$PRESELECT_SERVER" ]; then
+    case "$SERVER:$PRESELECT_SERVER" in
+        both:x11|x11:x11|both:vnc|vnc:vnc) SERVER="$PRESELECT_SERVER" ;;
+        *)
+            echo "Requested backend '$PRESELECT_SERVER' is not installed for $INSTANCE_NAME."
+            exit 1
+            ;;
+    esac
+elif [ "$SERVER" = "both" ]; then
+    echo ""
+    echo "Desktop available: $DE via Termux:X11 or VNC."
+    echo "1) Full desktop with Termux:X11"
+    echo "2) Full desktop with VNC"
+    echo "3) Root terminal only (no display/audio servers)"
+    echo "4) User terminal only (no display/audio servers)"
+    if [ -n "$LAST_SERVER" ]; then
+        if [ "$LAST_SERVER" = "x11" ]; then
+            _last_choice="1"
+            _last_label="Termux:X11"
+        else
+            _last_choice="2"
+            _last_label="VNC"
+        fi
+        read -p "Select [1-4] (default: $_last_label): " MODE_CHOICE
+        [ -z "$MODE_CHOICE" ] && MODE_CHOICE="$_last_choice"
+    else
+        read -p "Select [1-4]: " MODE_CHOICE
+    fi
+    case "$MODE_CHOICE" in
+        1) SERVER="x11" ;;
+        2) SERVER="vnc" ;;
+        3) MODE="root" ;;
+        4) MODE="user" ;;
+        *)
+            echo "Invalid selection."
+            exit 1
+            ;;
+    esac
+elif [ "$SERVER" == "x11" ] || [ "$SERVER" == "vnc" ]; then
     echo ""
     echo "Desktop available: $DE via $SERVER."
     echo "1) Start full desktop (default)"
@@ -2222,6 +2513,11 @@ else
     echo "2) User terminal ('$X11_USER' account)"
     read -p "Select [1-2]: " MODE_CHOICE
     if [ "$MODE_CHOICE" == "2" ]; then MODE="user"; else MODE="root"; fi
+fi
+
+if [ "$SERVER_MODE" = "both" ] && [ "$MODE" == "desktop" ]; then
+    mkdir -p "$(dirname "$LAST_SERVER_FILE")" 2>/dev/null || true
+    printf '%s\n' "$SERVER" > "$LAST_SERVER_FILE" 2>/dev/null || true
 fi
 
 if [ "$MODE" == "root" ]; then
@@ -2401,14 +2697,15 @@ if command -v virgl_test_server_android >/dev/null 2>&1; then
     pkill -f "^virgl_test_server" 2>/dev/null || true
 fi
 
-if [ "$SERVER" == "x11" ]; then
+if [ "$SERVER" = "x11" ] || [ "$SERVER" = "both" ]; then
     echo "Stopping Termux:X11..."
     # Match the display owned by this session, not every Termux:X11 the
     # user may have started (this script manages display :1 only).
     for _p in $(pgrep -f '^termux-x11 .* :1( |$)' 2>/dev/null); do
         kill "$_p" 2>/dev/null || true
     done
-elif [ "$SERVER" == "vnc" ]; then
+fi
+if [ "$SERVER" = "vnc" ] || [ "$SERVER" = "both" ]; then
     echo "Stopping VNC Server..."
     VNC_PIDFILE="$PREFIX/tmp/lfa-vnc-$DISTRO.pid"
     if [ -f "$VNC_PIDFILE" ]; then
@@ -2446,6 +2743,7 @@ else
     lfa_conf() { echo "$(lfa_rootfs "$1")/etc/termux-linux-manager.conf"; }
     lfa_clear_stale_x1() { local _p=999999; [ -f "$PREFIX/tmp/.X1-lock" ] && _p=$(tr -dc '0-9' < "$PREFIX/tmp/.X1-lock" 2>/dev/null); [ -n "$_p" ] && kill -0 "$_p" 2>/dev/null && return 0; rm -f "$PREFIX/tmp/.X11-unix/X1" "$PREFIX/tmp/.X1-lock" 2>/dev/null; }
 fi
+
 mapfile -t DISTROS < <(lfa_instances)
 if [ ${#DISTROS[@]} -eq 0 ]; then
     echo "No distributions installed. Please run install_linux.sh first."
@@ -2647,6 +2945,7 @@ install_linux() {
     if [ "$SETUP_ANSWERED" != "1" ]; then
     DE="none"
     SERVER="none"
+    AUTOSTART_SERVER=""
     RESOLUTION="1280x720"
     COLOR_MODE="light"
 
@@ -2685,7 +2984,7 @@ install_linux() {
             fi
         fi
         
-        if [ "$SERVER" == "vnc" ]; then
+        if server_has_vnc; then
             if ! ui_select "Choose Display Resolution / UI Scaling" "1" \
                 "1|Auto / 720p|lightweight, recommended" \
                 "2|1080p|HD" \
@@ -2702,9 +3001,10 @@ install_linux() {
     fi
     # Safety clamp for answered setups replayed on legacy hardware (e.g. a
     # config saved elsewhere): X11 can never work there.
-    if [ "$IS_LEGACY" = "1" ] && [ "$DE" != "none" ] && [ "$SERVER" = "x11" ]; then
+    if [ "$IS_LEGACY" = "1" ] && [ "$DE" != "none" ] && { [ "$SERVER" = "x11" ] || [ "$SERVER" = "both" ]; }; then
         echo "[*] Legacy Android: clamping display server to VNC."
         SERVER="vnc"
+        AUTOSTART_SERVER="vnc"
         [ -z "$RESOLUTION" ] && RESOLUTION="1280x720"
     fi
 
@@ -2780,7 +3080,7 @@ install_linux() {
     
     echo "[*] Installing dependencies (universal mode, tolerates old Termux repos)..."
     NEED_X11=0
-    if [ "$SERVER" == "x11" ]; then NEED_X11=1; fi
+    if server_has_x11; then NEED_X11=1; fi
     ensure_dependencies "$NEED_X11"
     deploy_legacy_plugins
     # Stale pre-v4 pkg builds lack --override-alias, so custom instance
@@ -3041,9 +3341,20 @@ install_linux() {
     SPASS_HASH="$(printf '%s' "${SPASS_SALT}$(printf '%s' "$UPASS_B64" | base64 -d 2>/dev/null)" | sha256sum 2>/dev/null | cut -d' ' -f1)"
     [ -n "$SPASS_HASH" ] || SPASS_HASH=""
     mkdir -p "$ROOTFS/etc"
+    if [ -z "${AUTOSTART_SERVER:-}" ]; then
+        case "$SERVER" in
+            both) AUTOSTART_SERVER="vnc" ;;
+            x11|vnc) AUTOSTART_SERVER="$SERVER" ;;
+            *) AUTOSTART_SERVER="none" ;;
+        esac
+    fi
     echo "DISTRO=\"$DISTRO\"" > "$ROOTFS/etc/termux-linux-manager.conf"
     echo "DE=\"$DE\"" >> "$ROOTFS/etc/termux-linux-manager.conf"
     echo "SERVER=\"$SERVER\"" >> "$ROOTFS/etc/termux-linux-manager.conf"
+    echo "AUTOSTART_SERVER=\"$AUTOSTART_SERVER\"" >> "$ROOTFS/etc/termux-linux-manager.conf"
+    if [ "$SERVER" = "both" ]; then
+        rm -f "$HOME/.config/linux-for-android/last-server-$INSTANCE_NAME" 2>/dev/null || true
+    fi
     echo "RESOLUTION=\"$RESOLUTION\"" >> "$ROOTFS/etc/termux-linux-manager.conf"
     echo "UPDATE_CMD=\"$UPDATE_CMD\"" >> "$ROOTFS/etc/termux-linux-manager.conf"
     echo "USER_NAME=\"$LINUX_USER\"" >> "$ROOTFS/etc/termux-linux-manager.conf"
@@ -3138,7 +3449,7 @@ EOF
     if [ "$DE" == "lxde" ]; then APT_PKGS="$APT_PKGS $LXDE_PKG"; fi
     if [ "$DE" == "mate" ]; then APT_PKGS="$APT_PKGS $MATE_PKG"; fi
     if [ "$DE" == "gnome" ]; then APT_PKGS="$APT_PKGS $GNOME_PKG"; fi
-    if [ "$SERVER" == "vnc" ]; then APT_PKGS="$APT_PKGS $VNC_PKG"; fi
+    if server_has_vnc; then APT_PKGS="$APT_PKGS $VNC_PKG"; fi
     APT_PKGS=$(echo "$APT_PKGS" | xargs)
     
     if [ -n "$APT_PKGS" ]; then
@@ -3552,7 +3863,7 @@ else
 fi
 EOF
     fi
-    if [ "$SERVER" == "vnc" ]; then
+    if server_has_vnc; then
         cat << 'EOF' >> "$SETUP_SCRIPT"
 echo " -> Configuring VNC password..."
 mkdir -p /home/__LUSER__/.vnc
@@ -3641,8 +3952,8 @@ if [ "$DE" = "xfce4" ] && ! command -v xfce4-session >/dev/null 2>&1; then MISSI
 if [ "$DE" = "lxde" ] && ! command -v startlxde >/dev/null 2>&1; then MISSING_CORE="\$MISSING_CORE lxde"; fi
 if [ "$DE" = "mate" ] && ! command -v mate-session >/dev/null 2>&1; then MISSING_CORE="\$MISSING_CORE mate-session"; fi
 if [ "$DE" = "gnome" ] && ! command -v gnome-shell >/dev/null 2>&1; then MISSING_CORE="\$MISSING_CORE gnome-shell"; fi
-if [ "$SERVER" = "vnc" ] && ! command -v vncserver >/dev/null 2>&1 && ! command -v Xvnc >/dev/null 2>&1; then MISSING_CORE="\$MISSING_CORE vncserver"; fi
-if [ "$SERVER" = "vnc" ] && [ ! -s /home/$LINUX_USER/.config/tigervnc/passwd ] && [ ! -s /home/$LINUX_USER/.vnc/passwd ]; then MISSING_CORE="\$MISSING_CORE vnc-password"; fi
+if { [ "$SERVER" = "vnc" ] || [ "$SERVER" = "both" ]; } && ! command -v vncserver >/dev/null 2>&1 && ! command -v Xvnc >/dev/null 2>&1; then MISSING_CORE="\$MISSING_CORE vncserver"; fi
+if { [ "$SERVER" = "vnc" ] || [ "$SERVER" = "both" ]; } && [ ! -s /home/$LINUX_USER/.config/tigervnc/passwd ] && [ ! -s /home/$LINUX_USER/.vnc/passwd ]; then MISSING_CORE="\$MISSING_CORE vnc-password"; fi
 if [ -n "\$MISSING_CORE" ]; then
     echo "========================================="
     echo "[!] Core installation incomplete:\$MISSING_CORE"
@@ -3736,6 +4047,13 @@ EOF
     fi
     if [ "${DO_AUTOSTART:-0}" = "1" ]; then
         echo "[*] Setting up Termux:Boot autostart (needs the Termux:Boot app)..."
+        if [ -z "${AUTOSTART_SERVER:-}" ]; then
+            case "$SERVER" in
+                both) AUTOSTART_SERVER="vnc" ;;
+                x11|vnc) AUTOSTART_SERVER="$SERVER" ;;
+                *) AUTOSTART_SERVER="none" ;;
+            esac
+        fi
         mkdir -p ~/.termux/boot
         {
             echo "#!/bin/bash"
@@ -3744,15 +4062,11 @@ EOF
             if [ "${DO_SSH:-0}" = "1" ]; then
                 echo "sshd 2>/dev/null || true"
             fi
-            if [ "$SERVER" = "vnc" ]; then
+            if [ "${AUTOSTART_SERVER:-none}" = "none" ]; then
+                echo "# Desktop autostart is disabled for this install."
+            else
                 echo "sleep 5"
-                # Keep the proot session alive: vncserver daemonises and would
-                # otherwise be killed by proot-distro --kill-on-exit.
-                echo "nohup proot-distro login $(pd_login_flags) $INSTANCE_NAME --user $LINUX_USER --shared-tmp -- bash -c \"mkdir -p \$HOME/.vnc \$HOME/.config/tigervnc; printf 'geometry=%s\n' '${RESOLUTION:-1280x720}' > \$HOME/.vnc/config; printf 'geometry=%s\n' '${RESOLUTION:-1280x720}' > \$HOME/.config/tigervnc/config; vncserver :1; while :; do sleep 3600; done\" >/dev/null 2>&1 &"
-                echo "echo \$! > \"\$PREFIX/tmp/lfa-vnc-$INSTANCE_NAME.pid\""
-            elif [ "$SERVER" = "x11" ]; then
-                echo "# NOTE: Termux:X11 needs its app window open, so it cannot"
-                echo "# autostart unattended. Start it with start-linux instead."
+                echo "nohup \"$PREFIX/bin/start-linux\" --instance \"$INSTANCE_NAME\" --server \"$AUTOSTART_SERVER\" >/dev/null 2>&1 &"
             fi
         } > ~/.termux/boot/start-linux-services.sh
         chmod +x ~/.termux/boot/start-linux-services.sh

@@ -130,7 +130,7 @@ hardware, not simulated. Full details, root causes, and evidence are in
 | Alpine 3.18 (Android 5) | Yes | Yes | legacy VNC desktop, panel works | v1.7.0 |
 | Ubuntu GNOME 46 (experimental) | Yes | Yes | shell and apps run; session services missing | v1.7.0 |
 
-> The test suite runs `356` checks with 0 failures. The same suite runs on the
+> The test suite runs `390` checks with 0 failures. The same suite runs on the
 > devices (`tests/device-matrix.sh`). The table is as of v1.7.1. Ubuntu was
 > re-verified on v1.7.1; the other rows were last verified on v1.7.0. A row is
 > marked verified only after a real install on the device named above.
@@ -308,7 +308,9 @@ as experimental only.
 - VirGL configures `virglrenderer-android` and passes 3D OpenGL rendering to
   the phone's GPU.
 - Choose VNC for software rendering or Termux:X11 for a hardware-accelerated
-  desktop.
+  desktop. Guided setup can also install both. With both, `start-linux` asks
+  which backend to use and remembers the last desktop choice. Terminal-only
+  sessions do not change that choice.
 - VNC uses a modern TigerVNC config, an `exec`-style desktop session, and a
   persistent proot keepalive so `--kill-on-exit` cannot kill the server.
   `stop-linux` cleans up the server and its PID file.
@@ -493,11 +495,11 @@ terminal. The first screen offers these paths:
   credentials, the device timezone, and `localhost`.
 - Guided setup: walks through distro with a recommendation for your device,
   desktop (XFCE4, LXDE, MATE, CLI, plus experimental GNOME on supported
-  distros), light or dark wallpaper mode, display server, hardware
-  acceleration, resolution, optional software, instance name, username, user
-  and root passwords typed blind, timezone, hostname, prompt style, autostart,
-  storage, SSH, and widget. It then shows a summary with passwords masked and
-  installs without asking twice.
+  distros), light or dark wallpaper mode, display server (Termux:X11, VNC, or
+  both), hardware acceleration, resolution, optional software, instance name,
+  username, user and root passwords typed blind, timezone, hostname, prompt
+  style, autostart, storage, SSH, and widget. It then shows a summary with
+  passwords masked and installs without asking twice.
 - Manager menu: Install, update, repair (Doctor), backup, restore,
   export/import, SSH, browser acceleration, migration, and uninstall, all in
   the same arrow-key UI. Menu 12 also rewrites the proot-safe launchers for VS
@@ -525,6 +527,7 @@ aarch64.
 - Detects legacy devices with the `LEGACY MODE` banner and installs
   proot-distro v4.2.0 from source when the package is missing or broken.
 - Forces VNC. Termux:X11 needs Android 8 or newer, and VirGL is unavailable.
+  The guided setup hides Termux:X11 and Both on these devices.
 - Skips GPU and audio backends gracefully when their packages do not exist.
 
 ### 3. Recommended choices in the wizard
@@ -614,6 +617,13 @@ root terminal only, or user terminal only. Terminal modes do not start display
 or audio servers. CLI-only installs ask root or user terminal. Terminal choices
 default to root when you press Enter.
 
+When both Termux:X11 and VNC are installed, the menu has a desktop entry for
+each backend. The first start has no default, so you must pick one. After a
+desktop start, `start-linux` remembers that backend and preselects it next
+time. Only one backend runs at a time because both use display `:1` and port
+`5901`. `stop-linux` stops whichever backend is running, and stops both if both
+were started.
+
 ### Quick terminal without servers
 
 ```bash
@@ -666,7 +676,7 @@ to add one.
 Open the root terminal, option 2 in `start-linux`. It needs no password:
 
 ```bash
-start-linux     # 1) full desktop   2) root terminal   3) user terminal
+start-linux     # pick X11 or VNC if both are installed, then the root terminal
 ```
 
 From a user terminal you can also use `sudo`, which asks for the password you
@@ -913,6 +923,7 @@ Jump to a symptom:
 | GTK crash, desktop vanishes | [#12](#12-gtk-crashes-with-gtkerror--bail-out-and-the-desktop-vanishes) |
 | `snapd` fails to configure | [#13](#13-snapd-fails-to-configure-unable-to-set-cap_setfcap-effective-capability) |
 | GNOME does not start | [#16](#16-gnome-experimental-does-not-start-or-the-desktop-is-broken) |
+| Need to switch between X11 and VNC | [3.9 in the detailed guide](docs/TROUBLESHOOTING.md#39-how-do-i-switch-between-termuxx11-and-vnc) |
 
 Everything else, including known bugs, limitations, and the deferred list, is
 in [issues.md](issues.md).
@@ -1205,7 +1216,7 @@ plus `script` from util-linux for the pty test, which is skipped if absent:
 
 ```bash
 chmod +x tests/test-all.sh
-./tests/test-all.sh   # expect: PASS=356 FAIL=0
+./tests/test-all.sh   # expect: PASS=390 FAIL=0
 ```
 
 The suite is deliberately stubbed. It cannot prove a desktop actually appears.
