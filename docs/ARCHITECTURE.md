@@ -74,12 +74,14 @@ the string `Xvnc`.
 
 ```
 X11:  termux-x11 :1 ──socket──> proot-distro login --user <u> -- dbus-run-session -- <session>
-VNC:  Xvnc :1 (inside proot, keepalive loop) ──> <session>
+VNC:  Xvnc :1 (inside proot, exec sleep keepalive) ──> <session>
 ```
 
 The VNC server runs inside the proot session, which is why the launcher keeps a
-`while :; do sleep 3600; done` alive: `proot --kill-on-exit` would otherwise
-reap the server when the login command returns.
+`exec sleep 2147483647` alive: `proot --kill-on-exit` would otherwise reap
+the server when the login command returns. `exec` matters for shutdown: a
+shell loop defers SIGTERM until its current `sleep` returns, so `stop-linux`
+could leave the proot wrapper behind. The single sleep process dies at once.
 
 An install can carry both back ends. `SERVER="both"` installs both package
 sets, and `start-linux` resolves the choice to `x11` or `vnc` before starting.

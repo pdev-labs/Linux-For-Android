@@ -130,7 +130,7 @@ hardware, not simulated. Full details, root causes, and evidence are in
 | Alpine 3.18 (Android 5) | Yes | Yes | legacy VNC desktop, panel works | v1.7.0 |
 | Ubuntu GNOME 46 (experimental) | Yes | Yes | shell and apps run; session services missing | v1.7.0 |
 
-> The test suite runs `390` checks with 0 failures. The same suite runs on the
+> The test suite runs `393` checks with 0 failures. The same suite runs on the
 > devices (`tests/device-matrix.sh`). The table is as of v1.7.1. Ubuntu was
 > re-verified on v1.7.1; the other rows were last verified on v1.7.0. A row is
 > marked verified only after a real install on the device named above.
@@ -312,7 +312,8 @@ as experimental only.
   which backend to use and remembers the last desktop choice. Terminal-only
   sessions do not change that choice.
 - VNC uses a modern TigerVNC config, an `exec`-style desktop session, and a
-  persistent proot keepalive so `--kill-on-exit` cannot kill the server.
+  persistent proot keepalive so `--kill-on-exit` cannot kill the server. The
+  keepalive is a single `exec sleep`, so `stop-linux` can terminate it.
   `stop-linux` cleans up the server and its PID file.
 - Repository and package operations retry. The installer refuses to print
   "Installation complete" when the chosen desktop or VNC components are
@@ -1216,7 +1217,7 @@ plus `script` from util-linux for the pty test, which is skipped if absent:
 
 ```bash
 chmod +x tests/test-all.sh
-./tests/test-all.sh   # expect: PASS=390 FAIL=0
+./tests/test-all.sh   # expect: PASS=393 FAIL=0
 ```
 
 The suite is deliberately stubbed. It cannot prove a desktop actually appears.

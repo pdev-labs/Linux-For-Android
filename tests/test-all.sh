@@ -790,6 +790,16 @@ check "N3 x11 install attempted" 'Installing Termux:X11' "$T/n3.log"
 check "N3 x11 repo package" 'STUB-PKG: install -y x11-repo' "$T/n3.log"
 check "N3 autostart kept" 'AUTOSTART_SERVER="vnc"' "$N3ROOT/etc/termux-linux-manager.conf"
 
+echo "===== N4: absolute guest symlinks do not look like missing packages =====\""
+fresh_env
+N4ROOT="$T/prefix/var/lib/proot-distro/installed-rootfs/syminst"
+mkdir -p "$N4ROOT/etc" "$N4ROOT/var/lib/dpkg" "$N4ROOT/usr/bin" "$N4ROOT/home/user"
+printf 'DISTRO="ubuntu"\nDE="xfce4"\nSERVER="both"\nRESOLUTION="1280x720"\nUPDATE_CMD="apt-get update"\nUSER_NAME="user"\nAUTOSTART_SERVER="vnc"\n' > "$N4ROOT/etc/termux-linux-manager.conf"
+: > "$N4ROOT/usr/bin/xfce4-session"
+ln -s /etc/alternatives/vncserver "$N4ROOT/usr/bin/vncserver"
+printf '%s\n' 3 12 13 | bash "$REPO/install_linux.sh" > "$T/n4.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: run n4 exit $rc"; }
+check_absent "N4 no false tigervnc warning" 'missing components newer releases need' "$T/n4.log"
+
 echo "===== O: proot-distro v4 containers layout ====="
 fresh_env
 CROOT="$T/prefix/var/lib/proot-distro/containers/newinst/rootfs"
@@ -899,7 +909,8 @@ check "V exec desktop" 'exec dbus-run-session -- startlxde' "$VS"
 check "V clean PATH" 'export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin' "$VS"
 check "V password gate" 'vnc-password' "$VS"
 check "V noninteractive vncpasswd" 'vncpasswd -f' "$VS"
-check "V keepalive launcher" 'while :; do sleep 3600; done' "$T/prefix/bin/start-linux"
+check "V keepalive launcher" 'exec sleep 2147483647' "$T/prefix/bin/start-linux"
+check "V stop escalates stuck wrapper" 'pkill -9 -P "$VNC_PID"' "$T/prefix/bin/stop-linux"
 check "V vnc config geometry" '.config/tigervnc/config' "$T/prefix/bin/start-linux"
 check "V xvnc fallback" 'Xvnc :1 -geometry' "$T/prefix/bin/start-linux"
 check "V vnc session var" 'VNC_SES="startxfce4"' "$T/prefix/bin/start-linux"

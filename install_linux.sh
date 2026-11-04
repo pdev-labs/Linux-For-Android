@@ -654,6 +654,13 @@ server_has_vnc() {
     return 1
 }
 
+# Guest binaries are often absolute symlinks (vncserver -> /etc/alternatives/
+# vncserver). Checking them from the host follows the link into the host's
+# /etc and reports a false "missing package"; accept the link itself.
+guest_has_path() {
+    [ -e "$1" ] || [ -L "$1" ]
+}
+
 # ============================================================
 # Guided setup questionnaire (integrated first screen).
 # Asks everything up front, saves answers to setup.conf for unattended
@@ -2020,16 +2027,16 @@ EOF
     # instead of silently leaving a half-migrated distro.
     local _missing=""
     case "$DE" in
-        xfce4) [ -x "$ROOTFS/usr/bin/xfce4-session" ] || _missing="$_missing xfce4-session" ;;
-        lxde)  [ -x "$ROOTFS/usr/bin/startlxde" ] || _missing="$_missing lxde" ;;
-        mate)  [ -x "$ROOTFS/usr/bin/mate-session" ] || _missing="$_missing mate-session" ;;
+        xfce4) guest_has_path "$ROOTFS/usr/bin/xfce4-session" || _missing="$_missing xfce4-session" ;;
+        lxde)  guest_has_path "$ROOTFS/usr/bin/startlxde" || _missing="$_missing lxde" ;;
+        mate)  guest_has_path "$ROOTFS/usr/bin/mate-session" || _missing="$_missing mate-session" ;;
         gnome)
-            [ -x "$ROOTFS/usr/bin/gnome-shell" ] || _missing="$_missing gnome-shell"
-            [ -x "$ROOTFS/usr/bin/dconf" ] || _missing="$_missing dconf-cli"
+            guest_has_path "$ROOTFS/usr/bin/gnome-shell" || _missing="$_missing gnome-shell"
+            guest_has_path "$ROOTFS/usr/bin/dconf" || _missing="$_missing dconf-cli"
             ;;
     esac
     if server_has_vnc; then
-        if [ ! -x "$ROOTFS/usr/bin/vncserver" ] && [ ! -x "$ROOTFS/usr/bin/Xvnc" ]; then
+        if ! guest_has_path "$ROOTFS/usr/bin/vncserver" && ! guest_has_path "$ROOTFS/usr/bin/Xvnc"; then
             _missing="$_missing tigervnc"
         fi
     fi
@@ -2620,7 +2627,7 @@ elif [ "$SERVER" == "vnc" ]; then
         [ "$DE" = "lxde" ] && VNC_SES="startlxde"
         [ "$DE" = "mate" ] && VNC_SES="mate-session"
         [ "$DE" = "gnome" ] && VNC_SES="/usr/local/bin/start-gnome-session"
-        nohup proot-distro login $NO_SYSVIPC $DISTRO --user "$X11_USER" --shared-tmp -- bash -c "export PULSE_SERVER=127.0.0.1; mkdir -p \$HOME/.vnc \$HOME/.config/tigervnc; printf 'geometry=%s\n' '$RESOLUTION' > \$HOME/.vnc/config; printf 'geometry=%s\n' '$RESOLUTION' > \$HOME/.config/tigervnc/config; if command -v vncserver >/dev/null 2>&1; then $VIRGL_ENV vncserver :1; rc=\$?; [ \$rc -eq 0 ] || exit \$rc; else $VIRGL_ENV Xvnc :1 -geometry $RESOLUTION -depth 24 -rfbauth \$HOME/.config/tigervnc/passwd -SecurityTypes VncAuth > \$HOME/.vnc-xvnc.log 2>&1 & sleep 2; DISPLAY=:1 dbus-run-session -- $VNC_SES > \$HOME/start-linux-session.log 2>&1; fi; while :; do sleep 3600; done" > "$VNC_LOG" 2>&1 &
+        nohup proot-distro login $NO_SYSVIPC $DISTRO --user "$X11_USER" --shared-tmp -- bash -c "export PULSE_SERVER=127.0.0.1; mkdir -p \$HOME/.vnc \$HOME/.config/tigervnc; printf 'geometry=%s\n' '$RESOLUTION' > \$HOME/.vnc/config; printf 'geometry=%s\n' '$RESOLUTION' > \$HOME/.config/tigervnc/config; if command -v vncserver >/dev/null 2>&1; then $VIRGL_ENV vncserver :1; rc=\$?; [ \$rc -eq 0 ] || exit \$rc; else $VIRGL_ENV Xvnc :1 -geometry $RESOLUTION -depth 24 -rfbauth \$HOME/.config/tigervnc/passwd -SecurityTypes VncAuth > \$HOME/.vnc-xvnc.log 2>&1 & sleep 2; DISPLAY=:1 dbus-run-session -- $VNC_SES > \$HOME/start-linux-session.log 2>&1; fi; exec sleep 2147483647" > "$VNC_LOG" 2>&1 &
         echo $! > "$VNC_PIDFILE"
         printf 'Waiting for VNC on port 5901'
         for _i in $(seq 1 20); do
@@ -2707,19 +2714,33 @@ if [ "$SERVER" = "x11" ] || [ "$SERVER" = "both" ]; then
 fi
 if [ "$SERVER" = "vnc" ] || [ "$SERVER" = "both" ]; then
     echo "Stopping VNC Server..."
+    # Ask the guest to stop its own server first. Killing the proot wrapper
+    # before this leaves vncserver's perl parent alive with a defunct Xvnc
+    # child, and it can no longer find its PID file.
+    proot-distro login $NO_SYSVIPC $DISTRO --user "$VNC_USER" --shared-tmp -- bash -c "vncserver -kill :1" 2>/dev/null || true
     VNC_PIDFILE="$PREFIX/tmp/lfa-vnc-$DISTRO.pid"
     if [ -f "$VNC_PIDFILE" ]; then
         VNC_PID="$(cat "$VNC_PIDFILE" 2>/dev/null || true)"
         if [ -n "$VNC_PID" ]; then
             if lfa_pid_matches "$VNC_PID" "proot-distro" "proot" "Xvnc"; then
                 kill "$VNC_PID" 2>/dev/null || true
+                # The login wrapper runs `exec sleep`, so TERM reaches it
+                # directly. Escalate for a wedged proot: kill its children
+                # first, then the tracer, or an orphan keeps the session.
+                for _i in 1 2 3 4 5; do
+                    kill -0 "$VNC_PID" 2>/dev/null || break
+                    sleep 1
+                done
+                if kill -0 "$VNC_PID" 2>/dev/null; then
+                    pkill -9 -P "$VNC_PID" 2>/dev/null || true
+                    kill -9 "$VNC_PID" 2>/dev/null || true
+                fi
             else
                 echo "  (stale pidfile: PID $VNC_PID is not the managed VNC session, ignored)"
             fi
         fi
         rm -f "$VNC_PIDFILE"
     fi
-    proot-distro login $NO_SYSVIPC $DISTRO --user "$VNC_USER" --shared-tmp -- bash -c "vncserver -kill :1" 2>/dev/null || true
 fi
 
 # Hand display :1 back. A killed X server does not always remove its socket or

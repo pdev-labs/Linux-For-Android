@@ -1,6 +1,6 @@
 # Test report for v1.7.1
 
-> Current development suite: `PASS=390 FAIL=0`. The v1.7.1 results below were
+> Current development suite: `PASS=393 FAIL=0`. The v1.7.1 results below were
 > recorded with 356 checks, before the both-backends tests were added.
 
 ## v1.7.1 verification, 2026-11-01
