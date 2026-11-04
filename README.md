@@ -28,6 +28,7 @@
 - [GNOME (experimental)](#gnome-experimental)
 - [Key features](#key-features)
 - [Installation](#installation)
+- [Older and custom distro versions](#older-and-custom-distro-versions)
 - [First-run setup](#first-run-setup)
 - [Older devices (Android 5/6)](#older-devices-android-56-eg-oppo-a37fw)
 - [Usage guide](#usage-guide)
@@ -402,6 +403,72 @@ chmod +x install_linux.sh
 
 `--help` and `--version` work outside Termux too. Everything else still has
 its interactive path in the menu.
+
+## Older and custom distro versions
+
+The installer defaults to one image per distro. On proot-distro builds that
+support OCI images, you can override the tag for a single run with an
+environment variable. The tag must exist in the upstream registry and must
+include an arm64 build, because the guest runs on the phone's CPU without
+emulation.
+
+| Distro | Variable | Default image |
+| --- | --- | --- |
+| Ubuntu | `LFA_IMAGE_UBUNTU` | `ubuntu:24.04` |
+| Debian | `LFA_IMAGE_DEBIAN` | `debian:stable` |
+| Kali | `LFA_IMAGE_KALI` | `kalilinux/kali-rolling:latest` |
+| Fedora | `LFA_IMAGE_FEDORA` | `fedora:latest` |
+| openSUSE | `LFA_IMAGE_OPENSUSE` | `opensuse/tumbleweed:latest` |
+| Void | `LFA_IMAGE_VOID` | `ghcr.io/void-linux/void-musl:latest` |
+| Alpine | `LFA_IMAGE_ALPINE` | `alpine:latest` |
+
+Examples:
+
+```bash
+LFA_IMAGE_UBUNTU=ubuntu:22.04 ./install_linux.sh
+LFA_IMAGE_DEBIAN=debian:12 ./install_linux.sh
+LFA_IMAGE_FEDORA=fedora:44 ./install_linux.sh
+LFA_IMAGE_ALPINE=alpine:3.20 ./install_linux.sh
+```
+
+Arch Linux has no variable. The installer picks
+`danhunsaker/archlinuxarm:latest` on aarch64 and `archlinux/archlinux:latest`
+elsewhere.
+
+The override only works when `proot-distro install --help` advertises OCI image
+support. On older proot-distro plugin mode, the installer can only use the
+distro aliases shipped with proot-distro. To keep an existing install, choose a
+different instance name in guided setup. Each instance has its own rootfs. The
+chosen image is recorded as `IMAGE="..."` in
+`/etc/termux-linux-manager.conf` inside the guest.
+
+Arbitrary rootfs tarballs are not supported by the installer. `proot-distro`
+can install a custom rootfs through a plugin, but the manager will not offer it
+in the menu, and its launchers assume one of the eight supported distros.
+
+### Testing an older version
+
+Run the host suite first:
+
+```bash
+./tests/test-all.sh
+```
+
+It checks the installer logic with stubbed commands. It does not boot the image.
+Then install the tag into a separate instance and start the desktop on the
+device.
+
+Check these after the install:
+
+- `./install_linux.sh --version` reports the manager version.
+- The install finishes without a package error.
+- `start-linux` reaches the desktop, or a CLI instance opens a shell.
+- `~/start-linux-session.log` has no repeated D-Bus, locale, or GTK failure.
+- `cat /etc/termux-linux-manager.conf` inside the guest shows the tag you
+  requested.
+
+Record the device, Android version, distro tag, and backend if you report a
+result. The verified matrix in this README covers only the tags listed there.
 
 ## First-run setup
 
