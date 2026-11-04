@@ -77,7 +77,7 @@ X11:  termux-x11 :1 ──socket──> proot-distro login --user <u> -- dbus-ru
 VNC:  Xvnc :1 (inside proot, exec sleep keepalive) ──> <session>
 ```
 
-The VNC server runs inside the proot session, which is why the launcher keeps a
+The VNC server runs inside the proot session, which is why the launcher keeps an
 `exec sleep 2147483647` alive: `proot --kill-on-exit` would otherwise reap
 the server when the login command returns. `exec` matters for shutdown: a
 shell loop defers SIGTERM until its current `sleep` returns, so `stop-linux`

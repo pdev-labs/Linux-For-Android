@@ -24,6 +24,15 @@ tag names, define the order. See the table at the bottom.
   starts the server and desktop in the background; open the Termux:X11 app
   when you want to see it.
 
+### Fixed
+
+- `stop-linux` could leave the VNC proot wrapper behind. The keepalive used a
+  shell loop around `sleep`, which defers SIGTERM; it is now a single
+  `exec sleep`, with a SIGKILL fallback for a wedged wrapper.
+- Menu 12 reported `tigervnc` missing on healthy installs. `vncserver` is an
+  absolute symlink into `/etc/alternatives`, so checking it from the host
+  followed the link into the host filesystem.
+
 ### Documentation
 
 - Credited pdev-labs as the solo author and maintainer in the README,

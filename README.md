@@ -120,7 +120,7 @@ hardware, not simulated. Full details, root causes, and evidence are in
 
 | Distro | Install | Live desktop | Notes | Verified on |
 |---|---|---|---|---|
-| Ubuntu 24.04 | Yes | Yes | light and dark, clean first login | v1.7.1 |
+| Ubuntu 24.04 | Yes | Yes | light and dark; Both backends installed and each launched (2026-11-04) | v1.7.1 |
 | Kali Rolling | Yes | Yes | | v1.7.0 |
 | Fedora 44 | Yes | Yes | | v1.7.0 |
 | openSUSE Tumbleweed | Yes | Yes | first login shows a PulseAudio panel warning | v1.7.0 |

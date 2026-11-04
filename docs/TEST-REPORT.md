@@ -1,7 +1,55 @@
 # Test report for v1.7.1
 
-> Current development suite: `PASS=393 FAIL=0`. The v1.7.1 results below were
-> recorded with 356 checks, before the both-backends tests were added.
+> Current development suite: `PASS=393 FAIL=0`.
+
+## Both backends, 2026-11-04
+
+Unreleased development verification on the Vivo V2437, Android 16 (SDK 36),
+aarch64, Termux 0.118.3, proot-distro 5.10.3.
+
+### Automated
+
+| Check | Result |
+|---|---|
+| Host suite (`./tests/test-all.sh`) | `PASS=393 FAIL=0` |
+| Device suite (`./tests/device-matrix.sh`) | `PASS=393 FAIL=0` |
+| `bash -n` on the installer, libraries, and tests | clean |
+
+### Device scenarios
+
+| Scenario | Result |
+|---|---|
+| Guided setup, Ubuntu 24.04 + XFCE4 + Both (`bothdev`) | completed in 40m27s; `SERVER="both"` in setup.conf and the guest config |
+| Installed packages | host `termux-x11-nightly`; guest `vncserver`, `Xvnc`, VNC password, XFCE session |
+| First Both desktop start with blank input | `Invalid selection.`, no remembered-backend file, no server started |
+| Start Termux:X11 | `termux-x11 :1`, `xfce4-session`; guest `xdpyinfo` reports display `:1` |
+| Start VNC | `vncserver :1`, `xfce4-session`; RFB `003.008` banner on `127.0.0.1:5901` |
+| Remembered choice | X11 and VNC were each preselected on the next start; blank input used the stored value |
+| Terminal-only start | root shell opened and `last-server-<instance>` kept its previous value |
+| `stop-linux`, X11 | `termux-x11` and `xfce4-session` gone; `.X11-unix` empty, no `.X1-lock` |
+| `stop-linux`, VNC | `vncserver`, `Xtigervnc`, proot wrapper, and keepalive all gone |
+| Menu 12 on an X11-only Ubuntu install | installed `tigervnc-standalone-server`, wrote Xstartup/password, set `SERVER="both"` |
+| Menu 12 on a VNC-only config | enabled Termux:X11 as the second backend, set `SERVER="both"` |
+| Backend added by Menu 12 | removed the stale remembered-backend file |
+| `start-linux --server x11` / `--server vnc` | started the requested backend with no menu; invalid value exited 1 |
+| Guided Both autostart prompt | offered VNC, Termux:X11, and None; cancelling the summary changed nothing |
+
+### Findings fixed during device testing
+
+1. N3 assumed `termux-x11` was missing. On a device that already has it, the
+   test took the "already installed" branch and failed. The test now removes
+   the real Termux prefix from `PATH` for that case.
+2. `stop-linux` left the VNC proot wrapper and `sleep 3600` loop alive after
+   the X server was gone. The keepalive is now `exec sleep 2147483647`, and
+   stop escalates to SIGKILL if the wrapper does not exit.
+3. Menu 12 warned that `tigervnc` was missing on a healthy Both install.
+   `vncserver` and `Xvnc` are absolute symlinks into `/etc/alternatives`;
+   the host-side check followed them into the host's `/etc`. Guest checks now
+   accept symlinks.
+
+Not exercised on hardware in this pass: Android 5/6 display-server hiding,
+GNOME with Both, and the actual Termux:Boot reboot path. Those remain covered
+by the stubbed host suite only.
 
 ## v1.7.1 verification, 2026-11-01
 

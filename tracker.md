@@ -141,7 +141,13 @@ Lint: `shellcheck -S warning` clean, `bash -n` clean, CI workflow added.
 | 2026-11-01 | Detailed troubleshooting guide | `docs/TROUBLESHOOTING.md`: 13 areas, 47 internal links, error-string index, recovery ladder |
 | 2026-11-01 | Documentation link gate | suite checks the guide, both index links, and every relative doc link (`PASS=356 FAIL=0`) |
 | 2026-11-01 | Screenshot privacy pass | notification-bar app icons and the "3 devices" chip removed from all nine phone screenshots |
-| 2026-11-04 | Both display backends | guided setup, menu 12 migration, remembered backend, both stop path, and X11/VNC autostart covered (`PASS=393 FAIL=0`) |
+| 2026-11-04 | Device suite, Vivo V2437, Android 16 | `PASS=393 FAIL=0` |
+| 2026-11-04 | Both install on device | Ubuntu 24.04 + XFCE4, `bothdev`, 40m27s; host and guest packages present |
+| 2026-11-04 | X11 and VNC on device | each desktop reached display `:1`; VNC RFB banner on `127.0.0.1:5901` |
+| 2026-11-04 | Remembered backend on device | blank first start refused; later starts reused the stored X11/VNC choice |
+| 2026-11-04 | `stop-linux` on device | X11 and VNC both fully stopped; no proot wrapper or keepalive left |
+| 2026-11-04 | Menu 12 backend migration on device | X11-only gained VNC; VNC-only gained X11; stale remembered choice cleared |
+| 2026-11-04 | Both autostart menu on device | VNC, Termux:X11, and None offered; summary cancel left setup.conf unchanged |
 | 2026-11-04 | `bash -n` after the backend change | install script and test suite clean |
 
 ### Findings that only appeared on hardware
