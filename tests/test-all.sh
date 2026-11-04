@@ -819,6 +819,22 @@ ln -s /etc/alternatives/vncserver "$N4ROOT/usr/bin/vncserver"
 printf '%s\n' 3 12 13 | bash "$REPO/install_linux.sh" > "$T/n4.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: run n4 exit $rc"; }
 check_absent "N4 no false tigervnc warning" 'missing components newer releases need' "$T/n4.log"
 
+echo "===== N5: legacy both config is clamped and persisted ====="
+fresh_env
+export GETPROP_SDK=22 PD_V4=1 FREE_MB=1024
+N5ROOT="$T/prefix/var/lib/proot-distro/installed-rootfs/legacyinst"
+mkdir -p "$N5ROOT/etc" "$N5ROOT/var/lib/dpkg" "$N5ROOT/home/user" "$T/home/.config/linux-for-android"
+printf 'DISTRO="alpine"\nDE="xfce4"\nSERVER="both"\nAUTOSTART_SERVER="x11"\nRESOLUTION="1280x720"\nUPDATE_CMD="apk update"\nUSER_NAME="user"\n' > "$N5ROOT/etc/termux-linux-manager.conf"
+printf 'x11\n' > "$T/home/.config/linux-for-android/last-server-legacyinst"
+printf '%s\n' 3 12 13 | bash "$REPO/install_linux.sh" > "$T/n5.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: run n5 exit $rc"; }
+check "N5 clamp message" 'cannot run Termux:X11' "$T/n5.log"
+check "N5 persisted vnc" 'SERVER="vnc"' "$N5ROOT/etc/termux-linux-manager.conf"
+check "N5 autostart vnc" 'AUTOSTART_SERVER="vnc"' "$N5ROOT/etc/termux-linux-manager.conf"
+check_absent "N5 cleared remembered choice" 'last-server-legacyinst' "$T/n5.log"
+[ ! -e "$T/home/.config/linux-for-android/last-server-legacyinst" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: N5 remembered choice file survived"; }
+check_absent "N5 no X11 prompt" 'Enable Termux:X11 as a second backend' "$T/n5.log"
+unset GETPROP_SDK PD_V4 FREE_MB
+
 echo "===== O: proot-distro v4 containers layout ====="
 fresh_env
 CROOT="$T/prefix/var/lib/proot-distro/containers/newinst/rootfs"

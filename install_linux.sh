@@ -1919,10 +1919,12 @@ upgrade_existing() {
 
     # 2b. Offer the missing backend on an existing single-backend install.
     # Default is no, so an unattended migration never downloads packages.
+    local _LEGACY_CLAMPED=0
     if [ "$DE" != "none" ]; then
         if [ "$IS_LEGACY" = "1" ] && [ "$SERVER" = "both" ]; then
             echo "[*] Android 5/6 cannot run Termux:X11; keeping VNC only."
             SERVER="vnc"
+            _LEGACY_CLAMPED=1
         fi
         case "$SERVER" in
             x11)
@@ -1961,6 +1963,21 @@ upgrade_existing() {
                 echo 'SERVER="both"' >> "$CONF"
             fi
             # A backend added later starts with no remembered default.
+            rm -f "$HOME/.config/linux-for-android/last-server-$INSTANCE_NAME" 2>/dev/null || true
+        fi
+        if [ "$_LEGACY_CLAMPED" = "1" ] && [ -f "$CONF" ]; then
+            # Persist the clamp: leaving SERVER="both" in the file would make
+            # start-linux show the unsupported X11 choice on the next boot.
+            if grep -q '^SERVER=' "$CONF"; then
+                sed -i 's/^SERVER=.*/SERVER="vnc"/' "$CONF"
+            else
+                echo 'SERVER="vnc"' >> "$CONF"
+            fi
+            if grep -q '^AUTOSTART_SERVER=' "$CONF"; then
+                sed -i 's/^AUTOSTART_SERVER=.*/AUTOSTART_SERVER="vnc"/' "$CONF"
+            else
+                echo 'AUTOSTART_SERVER="vnc"' >> "$CONF"
+            fi
             rm -f "$HOME/.config/linux-for-android/last-server-$INSTANCE_NAME" 2>/dev/null || true
         fi
         if [ -f "$CONF" ] && ! grep -q '^AUTOSTART_SERVER=' "$CONF"; then
