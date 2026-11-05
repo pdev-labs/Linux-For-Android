@@ -148,6 +148,15 @@ LFA_E2E_DISTRO=debian LFA_E2E_DESKTOP=xfce4 LFA_E2E_BACKEND=vnc \
   bash tests/termux-e2e.sh
 ```
 
+## Runner disk
+
+The hosted `ubuntu-24.04` image carries an Android NDK, dotnet, CodeQL, and
+Docker images that the scenario does not use. The reusable workflow deletes
+them before creating the AVD and uses an 8 GiB data partition. The emulator
+refuses to start when its userdata image cannot fit (`Not enough space to
+create userdata partition`), so the cleanup is part of the scenario, not an
+optimization.
+
 ## Known gaps
 
 GitHub-hosted emulators are x86/x86_64 and use software GPU rendering. They

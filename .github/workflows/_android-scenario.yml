@@ -50,6 +50,18 @@ jobs:
           sudo usermod -aG kvm "$USER"
           ls -l /dev/kvm
 
+      - name: Free disk space
+        run: |
+          # The hosted image ships large SDK/NDK and dotnet trees that this
+          # job does not use. The emulator refuses to create its userdata
+          # partition when the data image cannot fit.
+          sudo rm -rf /usr/local/lib/android/sdk/ndk \
+            /usr/share/dotnet \
+            /opt/hostedtoolcache/CodeQL
+          docker image prune -af || true
+          sudo apt-get clean
+          df -h /
+
       - name: Cache Android APKs
         uses: actions/cache@v4
         with:
@@ -73,8 +85,8 @@ jobs:
           profile: pixel_5
           cores: 2
           ram-size: 4096M
-          disk-size: 12288M
-          emulator-boot-timeout: 900
+          disk-size: 8192M
+          emulator-boot-timeout: 1200
           disable-animations: true
           emulator-options: >-
             -no-window -no-snapshot -noaudio -no-boot-anim
