@@ -376,7 +376,8 @@ as experimental only.
   dark wallpaper for GUI instances, regenerates `start-linux`,
   `terminal-linux`, `stop-linux`, `linux`, and `lfa` from the current
   templates, updates the legacy bullseye plugin, rebuilds `libuid0` if missing,
-  and repairs EOL apt sources.
+  and repairs EOL apt sources. The same migration runs without the menu:
+  `lfa fix -i NAME`.
 - Change Display Backend (menu 14) switches X11, VNC, or Both in place and can
   remove the packages of the backend being left.
 - The system dashboard shows Android RAM availability, Termux storage use, and
@@ -444,7 +445,7 @@ is accepted.
 | `lfa install` | install without menus; accepts `--distro`, `--desktop`, `--backend`, `--autostart`, `--user`, `--hostname`, `--timezone`, `--software`, and `-i` |
 | `lfa list` | list installed distributions (`--json` for scripts) |
 | `lfa status` | show desktop, backend, autostart, and running state (`--json`) |
-| `lfa start` | start the desktop; `--x11` or `--vnc` forces a backend |
+| `lfa start` | start the desktop; `--x11` or `--vnc` forces a backend, `--restart` replaces a running session |
 | `lfa shell` | open a terminal; `--root` or `--user` picks the account |
 | `lfa stop` | stop a desktop; `--all` stops every instance |
 | `lfa switch` | switch `x11`, `vnc`, or `both`; see below |
