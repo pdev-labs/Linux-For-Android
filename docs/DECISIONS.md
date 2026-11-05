@@ -219,3 +219,22 @@ Cost: one background watcher per instance/backend for 12 seconds after a
 start, plus a per-instance config write. The watcher is locked so repeated
 starts cannot stop each other's fresh session, and it does nothing after a
 deliberate `lfa stop`.
+
+## D16: AppImages are extracted, not FUSE-mounted
+
+Decision: run AppImages by extracting them. Guest sessions export
+`APPIMAGE_EXTRACT_AND_RUN=1`, and `lfa appimage add` extracts a large app once
+into `~/.local/opt/appimages` with a launcher and a desktop entry.
+
+Why: an AppImage type 2 mounts its own squashfs through FUSE. proot does not
+expose `/dev/fuse` (`Permission denied`), and no guest package can change
+that. The runtime already supports extraction for exactly this case, so LFA
+uses the supported path instead of claiming FUSE works or asking users to pass
+an undocumented flag. This is the same rule as `lfa compat`: report the
+missing kernel facility, offer the real fallback.
+
+Cost: direct execution re-extracts on every launch, which is fine for small
+tools and slow for a 100 MB app. `lfa appimage add` pays that cost once and
+keeps the menu entry working. Extraction also needs temporary space in `/tmp`
+(the shared Termux tmp). Licensing and architecture do not change: the AppImage
+content still has to be legitimate and built for the phone's CPU.

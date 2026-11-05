@@ -15,10 +15,20 @@ tag names, define the order. See the table at the bottom.
 
 ### Added
 
+- `lfa appimage` (alias `lfa app`) adds first-class AppImage support. `add`
+  extracts an AppImage once into `~/.local/opt/appimages`, writes a launcher
+  in `~/.local/bin`, and adds a desktop entry; `list`, `run`, and `remove`
+  manage it. `lfa run FILE` runs an AppImage once without installing it.
+- Guest sessions now export `APPIMAGE_EXTRACT_AND_RUN=1`, because proot does
+  not expose `/dev/fuse` and an AppImage cannot self-mount. A direct
+  `./Foo.AppImage`, a file-manager double-click, and a menu entry all work.
+  Every distro gets the setting at install time, and `lfa appimage` adds it to
+  existing instances on demand.
 - New `lfa` command line: `install`, `list`, `status`, `start`, `shell`,
   `stop`, `switch`, `autostart`, `update`, `doctor`, `backup`, `restore`,
-  `remove`, `diagnostics`, `notice`, `version`, and `help`. `-i` is shorthand
-  for `--instance` everywhere the long form is accepted.
+  `remove`, `compat`, `android`, `appimage`, `run`, `diagnostics`, `notice`,
+  `version`, and `help`. `-i` is shorthand for `--instance` everywhere the
+  long form is accepted.
 - New `linux` shortcut starts the desktop directly without the classic
   terminal/desktop menu. It is a script, not an alias, so it works from
   widgets, SSH, and boot scripts. `start-linux` keeps the full advanced menu.
@@ -79,6 +89,17 @@ tag names, define the order. See the table at the bottom.
 
 ### Fixed
 
+- Starting a desktop twice for the same instance left two session managers on
+  display `:1`. They competed for the window manager, and the screen showed
+  only the X root cross cursor. `start-linux` now refuses a second session,
+  `--restart` replaces one, and `stop-linux` also stops the guest session
+  process instead of only the X server.
+- `lfa switch` stopped the running desktop and left the display empty. When a
+  desktop was running, the switch now restarts it on the new backend;
+  `--no-start` keeps it stopped.
+- Sessions apply a cursor theme (`XCURSOR_THEME`, `xsettings`, and an
+  `lfa-set-cursor` autostart helper), so a desktop that starts before its
+  theme is available no longer stays on the root cross cursor.
 - `lfa status` failed on a fresh install because its PID helper only existed
   in the generated launcher library, not in the CLI's private runtime. The
   helper now lives in both. X11 is also reported only for the instance whose

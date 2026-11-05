@@ -55,6 +55,7 @@ Commands that say *inside the distro* are run in a guest shell opened with
 | App closes when the terminal closes | [§5.5](#55-app-closes-with-the-terminal) |
 | No sound | [§5.6](#56-no-sound) |
 | Chromium video is black or GPU rendering crashes | [§5.7](#57-chromium-video-is-black-or-crashes) |
+| AppImage: `failed to open /dev/fuse` or nothing starts | [§5.9](#59-an-appimage-does-not-start) |
 | GNOME does not start | [§6.1](#61-gnome-experimental-does-not-start) |
 | `sudo` rejects the password or you forgot it | [§7.1](#71-sudo-rejects-the-password) |
 | `groups: cannot find name for group ID` | [§7.2](#72-groups-cannot-find-name-for-group-id) |
@@ -525,16 +526,25 @@ the app. This is normal and not a leak.
 
 ### 3.8 `start-linux` starts a second desktop
 
-Symptom: windows from two sessions appear, or the second start fails with a
-socket error after the first one is ignored.
+Symptom: windows from two sessions appear, or the screen shows only a cross
+cursor because no window manager won display `:1`.
 
-Why: `start-linux` does not kill a healthy running session; a second X
-server cannot own `:1`.
+Why: more than one `xfce4-session` (or LXDE/MATE session) was started for the
+same instance. Two session managers compete for the window manager, and the
+desktop that loses leaves the X root cursor, which is a cross.
 
-Fix: always run `stop-linux` before changing resolution, desktop or display
-server. If a session is wedged, `stop-linux` is still the supported path; it
-verifies PIDs before killing, so it will not kill an unrelated process that
-happens to share a name.
+Fix: current versions refuse to start a session when one is already running:
+
+```text
+A desktop for ubuntu is already running on display :1.
+  stop it:    stop-linux -i ubuntu
+  restart it: linux -i ubuntu --restart
+```
+
+`--restart` stops the old session (including its guest proot wrapper) and
+starts a fresh one. `stop-linux` now kills the desktop session process, not
+only the X server, so a stale session cannot survive a stop or a backend
+switch.
 
 ### 3.9 How do I switch between Termux:X11 and VNC?
 
@@ -557,11 +567,17 @@ distro, so if another instance still uses it, the switch keeps the package and
 reports `Termux:X11 is still used by another installed distro; keeping the host
 packages`. This instance still switches to VNC; add `--force` to remove the
 package anyway, which breaks the other distro's desktop. The same operation is
-menu 14, **Change Display Backend**. Run `lfa stop -i <instance>` first if a
-desktop is running; the two backends share display `:1` and port `5901` and
-cannot run together. Starting one backend now stops the other backend's server
-on `:1` automatically; if a different instance already serves VNC on port
-`5901`, start refuses instead of connecting to it and reporting success.
+menu 14, **Change Display Backend**. The two backends share display `:1` and
+port `5901` and cannot run together. Starting one backend stops the other
+backend's server on `:1` automatically; if a different instance already serves
+VNC on port `5901`, start refuses instead of connecting to it and reporting
+success.
+
+If a desktop was running when you switch, it is restarted on the new backend.
+Use `--no-start` to leave it stopped, or start it yourself with
+`linux -i <instance>`. A switch no longer leaves an empty display behind, so
+opening Termux:X11 after the switch shows the desktop instead of a lone cross
+cursor.
 
 If only one backend was installed by an old version, menu 12 can add the other
 one without touching packages. On Android 5/6, X11 and Both are refused with
@@ -959,6 +975,47 @@ that I/O much slower. Subsequent starts are faster.
 Fix: wait for the first start. Do not kill it during profile creation. If
 it never appears, check `xwininfo -root -tree` and the terminal output; a
 missing library is a package problem, not a speed problem.
+
+### 5.9 An AppImage does not start
+
+Symptom: running `./Foo.AppImage` prints
+
+```text
+fuse: failed to open /dev/fuse: Permission denied
+Cannot mount AppImage, please check your FUSE setup.
+```
+
+or the app simply exits with status 127.
+
+Why: AppImage type 2 mounts its own squashfs through FUSE. proot does not pass
+`/dev/fuse` into the guest, so the mount can never succeed. This is a kernel
+boundary, not a missing package; installing `fuse` or `libfuse2` does not help.
+
+Fix: run the AppImage extracted instead of mounted. LFA exports
+`APPIMAGE_EXTRACT_AND_RUN=1` in every guest session, so this works as-is:
+
+```bash
+./Foo.AppImage
+```
+
+For a large AppImage, extract it once and use the menu entry:
+
+```bash
+lfa appimage add ~/Foo.AppImage
+lfa appimage list
+lfa appimage run Foo
+```
+
+`lfa appimage add` keeps the unpacked app in `~/.local/opt/appimages/<name>`,
+writes a launcher to `~/.local/bin/<name>`, and adds
+`~/.local/share/applications/<name>.desktop`. Direct execution re-extracts on
+every launch and leaves nothing behind.
+
+If `lfa run` says `No desktop is running`, start the desktop first
+(`lfa start -i <instance>`). If extraction fails, the file is not a valid
+AppImage or it is truncated; check it with `sha256sum` against the download
+page. On a musl guest (Alpine), an AppImage that bundles glibc programs may
+still fail to start after extraction; use a glibc distro for that app.
 
 ## 6. Desktop environments
 

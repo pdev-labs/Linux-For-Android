@@ -133,7 +133,7 @@ hardware, not simulated. Full details, root causes, and evidence are in
 | Alpine 3.18 (Android 5) | Yes | Yes | legacy VNC desktop, panel works; X11 and Both hidden | v1.7.1 |
 | Ubuntu GNOME 46 (experimental) | Yes | Yes | shell and apps run; session services missing | v1.7.0 |
 
-> The test suite runs `550` checks with 0 failures. The same suite runs on the
+> The test suite runs `591` checks with 0 failures. The same suite runs on the
 > devices (`tests/device-matrix.sh`). The table is as of v1.7.1. Ubuntu was
 > re-verified on v1.7.1, and Alpine 3.18 was re-verified on Android 5 on
 > 2026-11-04; the other rows were last verified on v1.7.0. A row is
@@ -321,6 +321,11 @@ as experimental only.
   remove it while another installed distro still uses it unless `--force` is
   given. Android 5/6 refuses X11 and Both switches and explains how to restore
   VNC if its packages are ever removed by hand.
+- If a desktop was running, `lfa switch` restarts it on the new backend;
+  `--no-start` leaves it stopped. A second `linux`/`start-linux` for the same
+  instance is refused instead of starting a competing session, and
+  `linux --restart` replaces a wedged one. This is what prevents the
+  "two session managers, no window manager, cross cursor" state.
 - VNC uses a modern TigerVNC config, an `exec`-style desktop session, and a
   persistent proot keepalive so `--kill-on-exit` cannot kill the server. The
   keepalive is a single `exec sleep`, so `stop-linux` can terminate it.
@@ -443,6 +448,8 @@ is accepted.
 | `lfa remove` | delete a distribution (`-y` skips the question) |
 | `lfa compat` | list, explain, enable, or disable compatibility shims |
 | `lfa android` | check, install, test, and enable the Termux:API bridge |
+| `lfa appimage` / `lfa app` | extract an AppImage once and add a menu entry |
+| `lfa run` | run an AppImage once without installing it |
 | `lfa diagnostics` | write a redacted support bundle |
 | `lfa notice` | `on`, `off`, or `status` for the `start-linux` change notice |
 | `lfa version` / `lfa help` | version and command list |
@@ -458,6 +465,8 @@ lfa autostart vnc -i ubuntu
 lfa install --distro debian --desktop xfce4 --software python,git,htop -i dev
 lfa compat list
 lfa android test
+lfa appimage add ~/Foo.AppImage
+lfa appimage run Foo
 lfa notice off
 ```
 
@@ -492,6 +501,33 @@ Neither layer pretends to provide a kernel feature. Docker, Podman, Flatpak,
 TUN/TAP, iptables, CUDA, ROCm, KVM, and kernel modules remain unavailable.
 The full list, with reasons, is in
 [docs/INCOMPATIBLE.md](docs/INCOMPATIBLE.md).
+
+### AppImages
+
+An AppImage normally mounts itself through FUSE. proot does not expose
+`/dev/fuse`, so a raw `./Foo.AppImage` fails with
+`fuse: failed to open /dev/fuse: Permission denied`. LFA does not pretend
+FUSE works; it runs the AppImage the way the runtime supports, by extracting:
+
+```bash
+./Foo.AppImage                    # works: the session exports APPIMAGE_EXTRACT_AND_RUN=1
+lfa run ~/Foo.AppImage            # run once, without installing
+lfa appimage add ~/Foo.AppImage   # extract once and add a menu entry
+lfa appimage list                 # name, app title, install date
+lfa appimage run Foo              # launch the installed copy
+lfa appimage remove Foo -y        # delete it
+```
+
+`lfa appimage add` is the better choice for large apps: it extracts to
+`~/.local/opt/appimages/<name>`, writes a launcher in `~/.local/bin`, and adds
+a desktop entry, so the menu and the command line share one copy. Direct
+execution re-extracts on every launch, which is fine for small tools but slow
+for a 100 MB launcher.
+
+Extraction uses `/tmp` (the Termux tmp directory, shared with the guest), so
+make sure the phone has free space for the unpacked app. An AppImage that
+bundles glibc programs still needs a glibc guest; that part is unchanged by
+the extraction method.
 
 ## Older and custom distro versions
 
@@ -1385,7 +1421,7 @@ plus `script` from util-linux for the pty test, which is skipped if absent:
 
 ```bash
 chmod +x tests/test-all.sh
-./tests/test-all.sh   # expect: PASS=550 FAIL=0
+./tests/test-all.sh   # expect: PASS=591 FAIL=0
 ```
 
 The suite is deliberately stubbed. It cannot prove a desktop actually appears.

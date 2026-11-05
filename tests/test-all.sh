@@ -788,7 +788,10 @@ check "N hostname shim" 'cat /etc/hostname' "$NROOT/usr/local/bin/hostname"
 check "N etc hostname synced" 'oldphone' "$NROOT/etc/hostname"
 check "N welcome banner" 'Welcome to' "$NROOT/etc/profile.d/00-lfa-welcome.sh"
 check "N env cleanup" 'TERMUX' "$NROOT/etc/profile.d/zz-lfa-env.sh"
+check "N appimage env" 'APPIMAGE_EXTRACT_AND_RUN=1' "$NROOT/etc/profile.d/zz-lfa-env.sh"
 check "N login profile" 'linux-for-android profile' "$NROOT/home/user/.profile"
+check "N cursor helper" 'Gtk/CursorThemeName' "$NROOT/usr/local/bin/lfa-set-cursor"
+[ -f "$NROOT/etc/xdg/autostart/lfa-cursor.desktop" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: N cursor autostart missing"; }
 check "N launcher updated" 'command -v dbus-launch' "$T/prefix/bin/start-linux"
 check "N xstartup updated" 'startxfce4' "$NROOT/home/user/.vnc/xstartup"
 [ -s "$NROOT/usr/share/backgrounds/lfa-default.jpg" ] && cmp -s "$NROOT/usr/share/backgrounds/lfa-default.jpg" "$REPO/assets/wallpapers/debian.jpg" && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: N upgrade wallpaper not staged"; }
@@ -1072,6 +1075,11 @@ check "Y1 bogus message" 'Unknown command: bogus' "$T/y1-bogus.log"
 check "Y1 notice text generated" 'start-linux now opens the advanced menu' "$T/prefix/bin/start-linux"
 check "Y1 notice bypass env" 'LFA_NO_NOTICE' "$T/prefix/bin/start-linux"
 check "Y1 linux wrapper desktop" '--desktop' "$T/prefix/bin/linux"
+check "Y1 restart option" '--restart' "$T/prefix/bin/start-linux"
+check "Y1 duplicate session guard" 'is already running on display :1' "$T/prefix/bin/start-linux"
+check "Y1 stop kills guest session" 'lfa_kill_guest_session' "$T/prefix/bin/stop-linux"
+check "Y1 cursor env in session" 'XCURSOR_THEME=Adwaita' "$T/prefix/bin/start-linux"
+check "Y1 switch restarts desktop" 'Restarting the desktop on' "$T/prefix/lib/linux-for-android/install_linux.sh"
 
 echo "===== Y2: lfa install + backend switch + package removal ====="
 fresh_env
@@ -1272,6 +1280,71 @@ print("matrix assertions passed")
 PY
 [ "$?" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y9 matrix assertions"; }
 python3 "$REPO/tests/generate-android-matrix.py" --mode smoke --shard 2 --total-shards 1 >/dev/null 2>&1; rc=$?; [ "$rc" = "2" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y9 invalid shard exit $rc"; }
+
+echo "===== Y10: lfa appimage (extract-once AppImage support) ====="
+fresh_env
+printf '%s\n' 1 '' 13 | bash "$REPO/install_linux.sh" > "$T/y10-base.log" 2>&1
+LFA="$T/prefix/bin/lfa"
+"$LFA" appimage help > "$T/y10-help.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y10 help exit $rc"; }
+check "Y10 help add" 'add FILE' "$T/y10-help.log"
+check "Y10 help explains fuse" '/dev/fuse' "$T/y10-help.log"
+"$LFA" app help > "$T/y10-alias.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y10 app alias exit $rc"; }
+check "Y10 alias works" 'add FILE' "$T/y10-alias.log"
+"$LFA" help > "$T/y10-tophelp.log" 2>&1
+check "Y10 top-level help" 'appimage' "$T/y10-tophelp.log"
+check "Y10 top-level run" 'run an AppImage' "$T/y10-tophelp.log"
+
+"$LFA" appimage add /nonexistent/X.AppImage > "$T/y10-missing.log" 2>&1; rc=$?
+[ "$rc" = "1" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y10 missing file exit $rc"; }
+check "Y10 missing file message" 'No such file: /nonexistent/X.AppImage' "$T/y10-missing.log"
+
+printf 'not an appimage\n' > "$T/notapp.AppImage"
+"$LFA" appimage add "$T/notapp.AppImage" > "$T/y10-notapp.log" 2>&1; rc=$?
+[ "$rc" = "1" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y10 non-AppImage exit $rc"; }
+check "Y10 non-AppImage refused" 'Not an AppImage' "$T/y10-notapp.log"
+check "Y10 magic explained" "'AI' marker at byte 8" "$T/y10-notapp.log"
+
+# ELF magic plus the AppImage 'AI' marker. The guest login is stubbed, so
+# this exercises the host path (validation, staging, name, wrapper script).
+printf '\177ELF\002\001\001\000AI\002\000\000\000\000\000\000\000' > "$T/Foo.AppImage"
+chmod +x "$T/Foo.AppImage"
+"$LFA" appimage add "$T/Foo.AppImage" -i debian > "$T/y10-add.log" 2>&1; rc=$?
+[ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y10 add exit $rc"; }
+check "Y10 add reports install" 'Installed Foo' "$T/y10-add.log"
+check "Y10 add names the launcher" '.local/bin/Foo' "$T/y10-add.log"
+[ -f "$T/prefix/tmp/lfa-appimage-add.sh" ] && bash -n "$T/prefix/tmp/lfa-appimage-add.sh" \
+    && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y10 guest add script missing/invalid"; }
+check "Y10 guest script checks AppRun" 'AppRun' "$T/prefix/tmp/lfa-appimage-add.sh"
+check "Y10 guest script writes desktop entry" 'Desktop Entry' "$T/prefix/tmp/lfa-appimage-add.sh"
+check "Y10 guest script records sha" 'SHA256=' "$T/prefix/tmp/lfa-appimage-add.sh"
+check "Y10 add runs as desktop user" '--user user --shared-tmp' "$T/home/pd-calls.log"
+[ ! -e "$T/prefix/tmp/lfa-appimage-Foo.AppImage" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y10 staged AppImage left behind"; }
+
+Y10ROOT="$T/prefix/var/lib/proot-distro/installed-rootfs/debian"
+mkdir -p "$Y10ROOT/home/user/.local/opt/appimages/Foo"
+printf '#!/bin/sh\nexit 0\n' > "$Y10ROOT/home/user/.local/opt/appimages/Foo/AppRun"
+chmod +x "$Y10ROOT/home/user/.local/opt/appimages/Foo/AppRun"
+printf 'NAME=Foo\nDISPLAY_NAME=Foo App\nSHA256=0123456789abcdef0123456789abcdef\nINSTALLED=2026-01-02T03:04:05Z\n' \
+    > "$Y10ROOT/home/user/.local/opt/appimages/Foo/.lfa-appimage"
+"$LFA" appimage list -i debian > "$T/y10-list.log" 2>&1; rc=$?
+[ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y10 list exit $rc"; }
+check "Y10 list name" 'Foo' "$T/y10-list.log"
+check "Y10 list display name" 'Foo App' "$T/y10-list.log"
+check "Y10 list date" '2026-01-02T03:04:05Z' "$T/y10-list.log"
+
+"$LFA" appimage run Foo -i debian > "$T/y10-run.log" 2>&1; rc=$?
+[ "$rc" = "1" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y10 run without desktop exit $rc"; }
+check "Y10 run refuses without desktop" 'No desktop is running' "$T/y10-run.log"
+
+"$LFA" appimage remove Foo -i debian > "$T/y10-rm-no.log" 2>&1; rc=$?
+[ "$rc" = "2" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y10 remove without -y exit $rc"; }
+check "Y10 remove needs -y" 'Refusing to remove without -y' "$T/y10-rm-no.log"
+"$LFA" appimage remove Foo -y -i debian > "$T/y10-rm.log" 2>&1; rc=$?
+[ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y10 remove exit $rc"; }
+[ ! -e "$Y10ROOT/home/user/.local/opt/appimages/Foo" ] && pass=$((pass+1)) \
+    || { fail=$((fail+1)); echo "FAIL: Y10 AppImage directory survived remove"; }
+check "Y10 env marker added" 'APPIMAGE_EXTRACT_AND_RUN=1' "$Y10ROOT/etc/profile.d/zz-lfa-env.sh"
+check "Y10 env marker exported" 'export APPIMAGE_EXTRACT_AND_RUN' "$Y10ROOT/etc/profile.d/zz-lfa-env.sh"
 
 echo ""
 echo "===== Z: documentation links ====="

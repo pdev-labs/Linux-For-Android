@@ -1367,6 +1367,8 @@ Usage: lfa <command> [options]
   remove        delete a distro
   compat        inspect or enable compatibility shims
   android       inspect or enable the Termux:API bridge
+  appimage      extract and run an AppImage (alias: app)
+  run           run an AppImage once without installing it
   diagnostics   write a support bundle
   notice        show, hide, or query the start-linux notice
   version       print the version
@@ -1407,6 +1409,10 @@ Examples:
   lfa compat list
   lfa compat enable upower -i ubuntu
   lfa android test
+  lfa appimage add ~/Foo.AppImage
+  lfa appimage list
+  lfa appimage run Foo
+  lfa run ~/Foo.AppImage
   lfa notice off
 HELP
 }
@@ -2230,6 +2236,415 @@ lfa_cli_status_one() {  # $1 = instance, $2 = json
     fi
 }
 
+# ------------------------------------------------------------
+# AppImage support
+#
+# A type-2 AppImage self-mounts through FUSE. proot does not expose
+# /dev/fuse, so running one directly fails with
+#     fuse: failed to open /dev/fuse: Permission denied
+# The AppImage runtime can extract instead. lib/real-feel.sh exports
+# APPIMAGE_EXTRACT_AND_RUN=1 in the guest session, so a direct run, a
+# file-manager double-click and a menu entry all work. `lfa appimage add`
+# extracts once and writes a menu entry, which avoids re-extracting a large
+# AppImage on every launch.
+# ------------------------------------------------------------
+LFA_APPIMAGE_DIR=".local/opt/appimages"
+
+lfa_appimage_user() {  # $1 = instance; print the desktop user
+    local _conf _u=""
+    _conf="$(pd_conf "$1" 2>/dev/null)"
+    if [ -f "$_conf" ]; then
+        _u="$( . "$_conf" 2>/dev/null; printf '%s' "${USER_NAME:-${SETUP_USER:-}}" )"
+    fi
+    [ -n "$_u" ] || _u="user"
+    printf '%s' "$_u"
+}
+
+lfa_appimage_ensure_env() {  # $1 = instance
+    local _rf _f
+    _rf="$(pd_rootfs "$1")"
+    [ -d "$_rf/etc" ] || return 0
+    _f="$_rf/etc/profile.d/zz-lfa-env.sh"
+    mkdir -p "$(dirname "$_f")" 2>/dev/null || true
+    if [ ! -f "$_f" ]; then
+        printf '#!/bin/sh\n' > "$_f" 2>/dev/null || return 1
+    fi
+    if ! grep -q 'APPIMAGE_EXTRACT_AND_RUN' "$_f" 2>/dev/null; then
+        {
+            printf '\n# proot cannot mount AppImages (no /dev/fuse); extract instead.\n'
+            printf 'APPIMAGE_EXTRACT_AND_RUN=1; export APPIMAGE_EXTRACT_AND_RUN\n'
+        } >> "$_f" 2>/dev/null || return 1
+    fi
+    chmod 644 "$_f" 2>/dev/null || true
+    return 0
+}
+
+lfa_is_appimage() {  # $1 = file; ELF magic plus the 'AI' marker at byte 8
+    [ -f "$1" ] && [ -r "$1" ] || return 1
+    [ "$(dd if="$1" bs=1 count=4 2>/dev/null | od -An -tx1 | tr -d ' \n')" = "7f454c46" ] || return 1
+    [ "$(dd if="$1" bs=1 skip=8 count=2 2>/dev/null | od -An -tx1 | tr -d ' \n')" = "4149" ] || return 1
+}
+
+lfa_appimage_default_name() {  # $1 = file
+    local _b
+    _b="$(basename -- "$1")"
+    _b="${_b%.AppImage}"; _b="${_b%.appimage}"
+    _b="$(printf '%s' "$_b" | tr -c 'A-Za-z0-9._-' '-')"
+    _b="${_b#-}"; _b="${_b%-}"
+    [ -n "$_b" ] || _b="appimage"
+    printf '%s' "$_b"
+}
+
+lfa_appimage_display_ready() {  # $1 = instance
+    local _p
+    if [ -f "$PREFIX/tmp/lfa-vnc-$1.pid" ]; then
+        _p="$(cat "$PREFIX/tmp/lfa-vnc-$1.pid" 2>/dev/null || true)"
+        lfa_pid_matches "$_p" "proot" "Xvnc" && return 0
+    fi
+    if pgrep -f '^termux-x11 .* :1( |$)' >/dev/null 2>&1 && \
+       lfa_instance_session_running "$1"; then
+        return 0
+    fi
+    return 1
+}
+
+# The extraction runs inside the guest: the AppImage runtime is a glibc
+# binary and cannot run on Android's bionic libc directly.
+lfa_appimage_write_add_script() {  # $1 = path
+    cat > "$1" <<'LFA_APPIMAGE_ADD'
+#!/bin/bash
+# Runs inside the guest as the desktop user.
+# $1 = staged AppImage, $2 = install dir, $3 = name, $4 = sha256, $5 = source
+set -u
+src="$1"; dest="$2"; name="$3"; sha="$4"; source_label="${5:-}"
+[ -n "${HOME:-}" ] || { echo "lfa-appimage: HOME is not set" >&2; exit 1; }
+[ -f "$src" ] || { echo "lfa-appimage: staged file is missing" >&2; exit 1; }
+chmod +x "$src" 2>/dev/null || true
+work="$(mktemp -d "${TMPDIR:-/tmp}/lfa-appimage.XXXXXX")" || exit 1
+trap 'rm -rf "$work"' EXIT
+cd "$work" || exit 1
+# --appimage-extract does not need FUSE and works for type 1 and type 2.
+if ! "$src" --appimage-extract >/dev/null 2>&1; then
+    echo "lfa-appimage: extraction failed; is this a valid AppImage?" >&2
+    exit 1
+fi
+[ -d squashfs-root ] || { echo "lfa-appimage: no squashfs-root was produced" >&2; exit 1; }
+[ -f squashfs-root/AppRun ] || { echo "lfa-appimage: the AppImage has no AppRun" >&2; exit 1; }
+chmod -R u+rwX squashfs-root 2>/dev/null || true
+chmod +x squashfs-root/AppRun 2>/dev/null || true
+mkdir -p "$(dirname "$dest")" || exit 1
+rm -rf "$dest"
+mv squashfs-root "$dest" || exit 1
+
+display_name="$name"
+icon="application-x-executable"
+for d in "$dest"/*.desktop; do
+    [ -f "$d" ] || continue
+    n="$(sed -n 's/^Name=//p' "$d" | head -n1)"
+    [ -n "$n" ] && display_name="$n"
+    i="$(sed -n 's/^Icon=//p' "$d" | head -n1)"
+    if [ -n "$i" ]; then
+        case "$i" in
+            /*) [ -f "$i" ] && icon="$i" ;;
+            *)
+                for c in "$dest/$i" "$dest/.DirIcon" "$dest"/*."$i" \
+                         "$dest"/usr/share/icons/hicolor/*/apps/"$i".* \
+                         "$dest"/usr/share/pixmaps/"$i".*; do
+                    [ -f "$c" ] && { icon="$c"; break; }
+                done ;;
+        esac
+    fi
+    break
+done
+
+mkdir -p "$HOME/.local/bin" "$HOME/.local/share/applications" || exit 1
+cat > "$HOME/.local/bin/$name" <<WRAPPER
+#!/bin/sh
+# Linux for Android: extracted AppImage launcher.
+exec "$dest/AppRun" "\$@"
+WRAPPER
+chmod 755 "$HOME/.local/bin/$name" || exit 1
+
+cat > "$HOME/.local/share/applications/$name.desktop" <<DESKTOP
+[Desktop Entry]
+Type=Application
+Name=$display_name
+Comment=AppImage installed by Linux for Android
+Exec=$HOME/.local/bin/$name %U
+Icon=$icon
+Terminal=false
+Categories=Utility;
+DESKTOP
+chmod 644 "$HOME/.local/share/applications/$name.desktop" 2>/dev/null || true
+
+{
+    printf 'NAME=%s\n' "$name"
+    printf 'SOURCE=%s\n' "$source_label"
+    printf 'SHA256=%s\n' "$sha"
+    printf 'INSTALLED=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)"
+    printf 'DISPLAY_NAME=%s\n' "$display_name"
+} > "$dest/.lfa-appimage" 2>/dev/null || true
+
+printf 'LFA_APPIMAGE_DEST=%s\n' "$dest"
+LFA_APPIMAGE_ADD
+    chmod 644 "$1" 2>/dev/null || true
+}
+
+lfa_appimage_usage() {
+    cat <<'APPHELP'
+Usage: lfa appimage <command> [options]   (alias: lfa app)
+
+  add FILE [--name NAME]   extract an AppImage once and add a menu entry
+  list                     show installed AppImages
+  run NAME|FILE            launch an installed AppImage, or run a file once
+  remove NAME [-y]         delete an installed AppImage
+  help                     show this help
+
+Options:
+  -i, --instance NAME      distribution to use
+  --name NAME              launcher name (default: the file name)
+
+AppImages cannot self-mount under proot because /dev/fuse is not exposed.
+LFA runs them by extracting instead; the guest session already exports
+APPIMAGE_EXTRACT_AND_RUN=1, so a direct `./App.AppImage` also works.
+
+Examples:
+  lfa appimage add ~/Foo.AppImage
+  lfa appimage add ~/Foo.AppImage --name foo
+  lfa appimage list
+  lfa appimage run Foo
+  lfa run ~/Foo.AppImage
+APPHELP
+}
+
+lfa_appimage_add() {
+    local _file="" _name=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            -i|--instance) CLI_INSTANCE="${2:-}"; shift 2 ;;
+            -n|--name) _name="${2:-}"; shift 2 ;;
+            -*) echo "Unknown option: $1" >&2; return 2 ;;
+            *) _file="$1"; shift ;;
+        esac
+    done
+    [ -n "$_file" ] || { echo "Usage: lfa appimage add FILE [--name NAME] [-i INSTANCE]" >&2; return 2; }
+    require_proot_distro || return 1
+    select_installed_instance || return 1
+    local _inst="$INSTANCE_NAME" _rf _user _home _src _stage _guest_src _dest _sha _out _rc
+    _rf="$(pd_rootfs "$_inst")"
+    _user="$(lfa_appimage_user "$_inst")"
+    _home="/home/$_user"
+
+    if [ -f "$_file" ]; then
+        _src="$_file"
+    elif [ -f "$_rf$_file" ]; then
+        _src="$_rf$_file"
+    else
+        echo "No such file: $_file" >&2
+        echo "Pass a file from Termux (e.g. ~/foo.AppImage) or a path inside $_inst." >&2
+        return 1
+    fi
+    if ! lfa_is_appimage "$_src"; then
+        echo "Not an AppImage: $_file" >&2
+        echo "An AppImage is an ELF file with the 'AI' marker at byte 8." >&2
+        return 1
+    fi
+    _name="${_name:-$(lfa_appimage_default_name "$_file")}"
+    case "$_name" in
+        ""|.|..|*[!A-Za-z0-9._-]*) echo "Invalid AppImage name: $_name" >&2; return 2 ;;
+    esac
+    _dest="$_home/$LFA_APPIMAGE_DIR/$_name"
+    _sha="$(sha256sum "$_src" 2>/dev/null | awk '{print $1}')" || _sha=""
+    _stage="$PREFIX/tmp/lfa-appimage-$_name.AppImage"
+    if [ ! "$_src" -ef "$_stage" ]; then
+        cp -f "$_src" "$_stage" 2>/dev/null || { echo "Could not stage $_file" >&2; return 1; }
+    fi
+    chmod 755 "$_stage" 2>/dev/null || true
+    _guest_src="/tmp/lfa-appimage-$_name.AppImage"
+
+    lfa_appimage_ensure_env "$_inst" || true
+    lfa_appimage_write_add_script "$PREFIX/tmp/lfa-appimage-add.sh"
+    echo "[*] Extracting $_name (large AppImages take a minute)..."
+    _rc=0
+    _out="$(proot-distro login $(pd_login_flags) "$_inst" --user "$_user" --shared-tmp -- \
+        bash /tmp/lfa-appimage-add.sh "$_guest_src" "$_dest" "$_name" "${_sha:-unknown}" "$_file" 2>&1)" || _rc=$?
+    rm -f "$_stage" 2>/dev/null || true
+    if [ "$_rc" -ne 0 ]; then
+        echo "$_out" >&2
+        echo "Could not install $_name." >&2
+        return 1
+    fi
+    echo "[*] Installed $_name"
+    echo "    launcher:   $_home/.local/bin/$_name"
+    echo "    menu entry: $_home/.local/share/applications/$_name.desktop"
+    echo "    run now:    lfa appimage run $_name -i $_inst"
+}
+
+lfa_appimage_list() {
+    local _inst=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            -i|--instance) _inst="${2:-}"; shift 2 ;;
+            *) echo "Unknown option: $1" >&2; return 2 ;;
+        esac
+    done
+    local -a _insts=()
+    if [ -n "$_inst" ]; then
+        pd_instances 2>/dev/null | grep -Fxq -- "$_inst" || {
+            echo "No installed distribution named '$_inst'." >&2; return 1; }
+        _insts=("$_inst")
+    else
+        mapfile -t _insts < <(pd_instances)
+    fi
+    local _found=0 _i _rf _u _dir _n _meta _disp _sha _date
+    for _i in "${_insts[@]}"; do
+        [ -n "$_i" ] || continue
+        _rf="$(pd_rootfs "$_i")"
+        _u="$(lfa_appimage_user "$_i")"
+        _dir="$_rf/home/$_u/$LFA_APPIMAGE_DIR"
+        [ -d "$_dir" ] || continue
+        for _n in "$_dir"/*; do
+            [ -d "$_n" ] || continue
+            if [ "$_found" = "0" ]; then
+                printf '%-12s %-24s %-24s %s\n' "INSTANCE" "NAME" "APP" "INSTALLED"
+                _found=1
+            fi
+            _disp="$(basename "$_n")"; _sha=""; _date=""
+            _meta="$_n/.lfa-appimage"
+            if [ -f "$_meta" ]; then
+                _disp="$(sed -n 's/^DISPLAY_NAME=//p' "$_meta" | tail -n1)"
+                [ -n "$_disp" ] || _disp="$(basename "$_n")"
+                _sha="$(sed -n 's/^SHA256=//p' "$_meta" | tail -n1)"
+                _date="$(sed -n 's/^INSTALLED=//p' "$_meta" | tail -n1)"
+            fi
+            printf '%-12s %-24s %-24s %s\n' "$_i" "$(basename "$_n")" "$_disp" "${_date:-unknown}"
+            if [ -n "$_sha" ]; then
+                printf '%-12s %-24s %s\n' "" "" "sha256 ${_sha:0:16}..."
+            fi
+        done
+    done
+    if [ "$_found" = "0" ]; then
+        echo "No AppImages installed."
+        echo "Add one with: lfa appimage add FILE"
+    fi
+}
+
+lfa_appimage_remove() {
+    local _name="${1:-}" _yes=0 _inst=""
+    [ $# -gt 0 ] && shift || true
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            -i|--instance) _inst="${2:-}"; shift 2 ;;
+            -y|--yes) _yes=1; shift ;;
+            *) echo "Unknown option: $1" >&2; return 2 ;;
+        esac
+    done
+    [ -n "$_name" ] || { echo "Usage: lfa appimage remove NAME [-y] [-i INSTANCE]" >&2; return 2; }
+    case "$_name" in
+        .|..|*[!A-Za-z0-9._-]*) echo "Invalid AppImage name: $_name" >&2; return 2 ;;
+    esac
+    require_proot_distro || return 1
+    [ -n "$_inst" ] && CLI_INSTANCE="$_inst"
+    select_installed_instance || return 1
+    local _id="$INSTANCE_NAME" _rf _user _home _dest
+    _rf="$(pd_rootfs "$_id")"
+    _user="$(lfa_appimage_user "$_id")"
+    _home="/home/$_user"
+    _dest="$_rf$_home/$LFA_APPIMAGE_DIR/$_name"
+    if [ ! -d "$_dest" ]; then
+        echo "No AppImage named '$_name' for $_id." >&2
+        echo "List them with: lfa appimage list -i $_id" >&2
+        return 1
+    fi
+    if [ "$_yes" != "1" ]; then
+        if [ -t 0 ]; then
+            local _a=""
+            read -rp "Remove $_name from $_id? [y/N] " _a || true
+            case "$_a" in y|Y|yes|YES) ;; *) echo "Cancelled."; return 0 ;; esac
+        else
+            echo "Refusing to remove without -y." >&2
+            return 2
+        fi
+    fi
+    rm -rf "$_dest"
+    rm -f "$_rf$_home/.local/bin/$_name" \
+          "$_rf$_home/.local/share/applications/$_name.desktop" 2>/dev/null || true
+    echo "[*] Removed $_name from $_id."
+}
+
+lfa_appimage_run() {
+    local _target="${1:-}" _nocheck=0 _inst=""
+    [ $# -gt 0 ] && shift || true
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            -i|--instance) _inst="${2:-}"; shift 2 ;;
+            --no-display-check) _nocheck=1; shift ;;
+            *) echo "Unknown option: $1" >&2; return 2 ;;
+        esac
+    done
+    [ -n "$_target" ] || { echo "Usage: lfa appimage run NAME|FILE [-i INSTANCE]" >&2; return 2; }
+    require_proot_distro || return 1
+    [ -n "$_inst" ] && CLI_INSTANCE="$_inst"
+    select_installed_instance || return 1
+    local _id="$INSTANCE_NAME" _rf _user _home _file _stage
+    _rf="$(pd_rootfs "$_id")"
+    _user="$(lfa_appimage_user "$_id")"
+    _home="/home/$_user"
+
+    if [ -f "$_target" ] || [ -f "$_rf$_target" ]; then
+        _file="$_target"
+        [ -f "$_file" ] || _file="$_rf$_target"
+        if ! lfa_is_appimage "$_file"; then
+            echo "Not an AppImage: $_target" >&2
+            return 1
+        fi
+        if [ "$_nocheck" != "1" ] && ! lfa_appimage_display_ready "$_id"; then
+            echo "[!] No desktop is running for $_id." >&2
+            echo "    Start it first: lfa start -i $_id" >&2
+            echo "    Override with: lfa appimage run $_target --no-display-check" >&2
+            return 1
+        fi
+        _stage="$PREFIX/tmp/lfa-appimage-run-$$.AppImage"
+        cp -f "$_file" "$_stage" 2>/dev/null || { echo "Could not stage $_target" >&2; return 1; }
+        chmod 755 "$_stage" 2>/dev/null || true
+        lfa_appimage_ensure_env "$_id" || true
+        echo "[*] Extracting and running $_target (install it to avoid this each time)..."
+        local _rc=0
+        proot-distro login $(pd_login_flags) "$_id" --user "$_user" --shared-tmp -- \
+            bash -lc 'export APPIMAGE_EXTRACT_AND_RUN=1; export DISPLAY="${DISPLAY:-:1}"; exec "$1"' \
+            _ "/tmp/$(basename "$_stage")" || _rc=$?
+        rm -f "$_stage" 2>/dev/null || true
+        return $_rc
+    fi
+
+    local _dest="$_home/$LFA_APPIMAGE_DIR/$_target"
+    if [ ! -x "$_rf$_dest/AppRun" ]; then
+        echo "No AppImage named '$_target' for $_id." >&2
+        echo "List them with: lfa appimage list -i $_id" >&2
+        return 1
+    fi
+    if [ "$_nocheck" != "1" ] && ! lfa_appimage_display_ready "$_id"; then
+        echo "[!] No desktop is running for $_id." >&2
+        echo "    Start it first: lfa start -i $_id" >&2
+        return 1
+    fi
+    proot-distro login $(pd_login_flags) "$_id" --user "$_user" --shared-tmp -- \
+        bash -lc 'export DISPLAY="${DISPLAY:-:1}"; exec "$1"' _ "$_dest/AppRun" || return $?
+}
+
+lfa_cli_appimage() {
+    local _sub="${1:-help}"
+    [ $# -gt 0 ] && shift || true
+    case "$_sub" in
+        help|-h|--help|"") lfa_appimage_usage ;;
+        add|install) lfa_appimage_add "$@" ;;
+        list|ls) lfa_appimage_list "$@" ;;
+        remove|rm|uninstall) lfa_appimage_remove "$@" ;;
+        run|start) lfa_appimage_run "$@" ;;
+        *) echo "Unknown appimage command: $_sub" >&2; lfa_appimage_usage >&2; return 2 ;;
+    esac
+}
+
 lfa_software_choices() {  # $1 = comma-separated names -> space-separated menu numbers
     local _list="$1" _name _out="" _n
     local IFS=','
@@ -2464,6 +2879,8 @@ lfa_cli() {
         install) lfa_cli_install "$@" ;;
         compat) lfa_cli_compat "$@" ;;
         android) lfa_android_cmd "$@" ;;
+        appimage|app) lfa_cli_appimage "$@" ;;
+        run) lfa_appimage_run "$@" ;;
         update)
             while [ $# -gt 0 ]; do case "$1" in -i|--instance) CLI_INSTANCE="${2:-}"; shift 2 ;; *) echo "Unknown option: $1" >&2; return 2 ;; esac; done
             LFA_NONINTERACTIVE=1 LFA_CLI_MODE=1 update_linux ;;
@@ -2995,6 +3412,8 @@ write_vnc_xstartup() {  # $1 = rootfs, $2 = user, $3 = desktop
 #!/bin/sh
 export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 export PULSE_SERVER=127.0.0.1
+export XCURSOR_THEME=Adwaita
+export XCURSOR_SIZE=24
 export XDG_RUNTIME_DIR="/tmp/xdg-\$(id -un)"
 mkdir -p "\$XDG_RUNTIME_DIR"
 chmod 700 "\$XDG_RUNTIME_DIR"
@@ -3159,7 +3578,7 @@ write_boot_script() {  # $1 = instance, $2 = x11|vnc|none, $3 = ssh 0/1
 
 change_backend() {  # change_backend TARGET [flags]
     local _target="${1:-}"; shift || true
-    local _remove_old=0 _force=0
+    local _remove_old=0 _force=0 _no_start=0 _was_running=0
     [ -n "$_target" ] || { echo "Usage: switch x11|vnc|both" >&2; return 2; }
     case "$_target" in x11|vnc|both) ;; *) echo "Unknown backend: $_target" >&2; return 2 ;; esac
     while [ $# -gt 0 ]; do
@@ -3168,6 +3587,7 @@ change_backend() {  # change_backend TARGET [flags]
             --remove-old|--remove-packages) _remove_old=1; shift ;;
             --keep-packages) _remove_old=0; shift ;;
             --force) _force=1; shift ;;
+            --no-start) _no_start=1; shift ;;
             *) echo "Unknown option: $1" >&2; return 2 ;;
         esac
     done
@@ -3203,6 +3623,15 @@ change_backend() {  # change_backend TARGET [flags]
     if [ "$_target" = "$_old" ] && [ "$_remove_old" != "1" ]; then
         echo "[*] $INSTANCE_NAME already uses $_target."
         return 0
+    fi
+
+    # Remember whether a desktop was live: the switch stops it below, and a
+    # desktop that was in use should come back on the new backend instead of
+    # leaving the user with an empty display and the root cross cursor.
+    lfa_instance_session_running "$INSTANCE_NAME" && _was_running=1
+    if [ -f "$PREFIX/tmp/lfa-vnc-$INSTANCE_NAME.pid" ]; then
+        lfa_pid_matches "$(cat "$PREFIX/tmp/lfa-vnc-$INSTANCE_NAME.pid" 2>/dev/null || true)" \
+            "proot" "Xvnc" && _was_running=1
     fi
 
     # Stop the running session before touching packages.
@@ -3289,6 +3718,18 @@ change_backend() {  # change_backend TARGET [flags]
         write_boot_script "$INSTANCE_NAME" "${AUTOSTART_SERVER:-none}" "$_boot_ssh"
     fi
     echo "[*] $INSTANCE_NAME now uses $_target."
+    if [ "$_no_start" = "1" ]; then
+        return 0
+    fi
+    if [ "$_was_running" = "1" ] && [ "${DE:-none}" != "none" ]; then
+        local _start_backend="$_target"
+        if [ "$_start_backend" = "both" ]; then
+            case "$_old" in x11|vnc) _start_backend="$_old" ;; *) _start_backend="x11" ;; esac
+        fi
+        echo "[*] Restarting the desktop on $_start_backend..."
+        nohup "$PREFIX/bin/start-linux" -i "$INSTANCE_NAME" \
+            --server "$_start_backend" --desktop >/dev/null 2>&1 &
+    fi
 }
 
 menu_change_backend() {
@@ -3612,6 +4053,8 @@ upgrade_existing() {
 #!/bin/sh
 export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 export PULSE_SERVER=127.0.0.1
+export XCURSOR_THEME=Adwaita
+export XCURSOR_SIZE=24
 export XDG_RUNTIME_DIR="/tmp/xdg-\$(id -un)"
 mkdir -p "\$XDG_RUNTIME_DIR"
 chmod 700 "\$XDG_RUNTIME_DIR"
@@ -4106,6 +4549,22 @@ lfa_pid_matches() {   # $1 = pid, rest = patterns that must appear in cmdline
     done
     return 1
 }
+# Is a real desktop session for this instance running? A terminal login also
+# contains the instance path, so only a session command counts.
+lfa_instance_session_running() {  # $1 = instance
+    local _c _cmd
+    for _c in /proc/[0-9]*/cmdline; do
+        [ -r "$_c" ] || continue
+        _cmd="$(tr '\0' ' ' < "$_c" 2>/dev/null)" || continue
+        case "$_cmd" in
+            *"/containers/$1/"*|*"/installed-rootfs/$1/"*)
+                case "$_cmd" in
+                    *startxfce4*|*startlxde*|*mate-session*|*gnome-shell*|*start-gnome-session*) return 0 ;;
+                esac ;;
+        esac
+    done
+    return 1
+}
 EOF
     chmod +x "$PREFIX/bin/lfa-lib.sh"
     echo "[*] Generating Universal Quick-Launch Scripts..."
@@ -4130,6 +4589,7 @@ Usage: start-linux [options]
       --x11             shortcut for --backend x11
       --vnc             shortcut for --backend vnc
       --desktop         start the desktop without the terminal menu
+      --restart         stop a running desktop, then start a fresh one
       --no-notice       hide the start-linux change notice for this run
   -h, --help            show this help
 USAGE
@@ -4138,6 +4598,7 @@ USAGE
 # Non-interactive entry used by Termux:Boot and the new CLI.
 DESKTOP_ONLY=0
 NO_NOTICE=0
+RESTART_SESSION=0
 EXPLICIT_INSTANCE=0
 PRESELECT_INSTANCE=""
 PRESELECT_SERVER=""
@@ -4148,6 +4609,7 @@ while [ $# -gt 0 ]; do
         --x11) PRESELECT_SERVER="x11"; shift ;;
         --vnc) PRESELECT_SERVER="vnc"; shift ;;
         --desktop) DESKTOP_ONLY=1; shift ;;
+        --restart) RESTART_SESSION=1; shift ;;
         --no-notice) NO_NOTICE=1; shift ;;
         -h|--help) usage; exit 0 ;;
         *) echo "Unknown option: $1" >&2; usage >&2; exit 2 ;;
@@ -4365,6 +4827,21 @@ elif [ "$MODE" == "user" ]; then
     exit 0
 fi
 
+# Never start a second session on display :1. Two xfce4-session processes
+# fight for the window manager, and the desktop that loses leaves only the
+# root cross cursor. Replace a broken session with --restart.
+if lfa_instance_session_running "$DISTRO"; then
+    if [ "$RESTART_SESSION" = "1" ]; then
+        echo "Restarting the desktop for $DISTRO..."
+        "$PREFIX/bin/stop-linux" -i "$DISTRO" >/dev/null 2>&1 || true
+    else
+        echo "A desktop for $DISTRO is already running on display :1."
+        echo "  stop it:    stop-linux -i $DISTRO"
+        echo "  restart it: linux -i $DISTRO --restart"
+        exit 0
+    fi
+fi
+
 echo "Starting PulseAudio..."
 if command -v pulseaudio >/dev/null 2>&1; then
     pulseaudio --start --load="module-native-protocol-tcp auth-ip-acl=127.0.0.1 auth-anonymous=1" --exit-idle-time=-1 2>/dev/null || echo "[!] PulseAudio not available on this device, continuing without audio."
@@ -4440,15 +4917,15 @@ if [ "$SERVER" == "x11" ]; then
     # visible instead of hidden.
     echo "Starting $DISTRO desktop as '$X11_USER' (session log: ~/start-linux-session.log)..."
     if [ "$DE" == "xfce4" ]; then
-        nohup proot-distro login $NO_SYSVIPC $DISTRO --user "$X11_USER" --shared-tmp -- bash -c "mkdir -p /tmp/.X11-unix; chmod 1777 /tmp/.X11-unix; export XDG_RUNTIME_DIR=/tmp/xdg-\$USER-$DISTRO; mkdir -p "\$XDG_RUNTIME_DIR"; chmod 700 "\$XDG_RUNTIME_DIR"; export LANG=\${LANG:-C.UTF-8}; export PULSE_SERVER=127.0.0.1; export DISPLAY=:1; $VIRGL_ENV if command -v dbus-run-session >/dev/null 2>&1; then dbus-run-session -- startxfce4 > \$HOME/start-linux-session.log 2>&1; elif command -v dbus-launch >/dev/null 2>&1; then dbus-launch --exit-with-session startxfce4 > \$HOME/start-linux-session.log 2>&1; else startxfce4 > \$HOME/start-linux-session.log 2>&1; fi" &
+        nohup proot-distro login $NO_SYSVIPC $DISTRO --user "$X11_USER" --shared-tmp -- bash -c "mkdir -p /tmp/.X11-unix; chmod 1777 /tmp/.X11-unix; export XDG_RUNTIME_DIR=/tmp/xdg-\$USER-$DISTRO; mkdir -p "\$XDG_RUNTIME_DIR"; chmod 700 "\$XDG_RUNTIME_DIR"; export LANG=\${LANG:-C.UTF-8}; export PULSE_SERVER=127.0.0.1; export DISPLAY=:1; export XCURSOR_THEME=Adwaita; export XCURSOR_SIZE=24; $VIRGL_ENV if command -v dbus-run-session >/dev/null 2>&1; then dbus-run-session -- startxfce4 > \$HOME/start-linux-session.log 2>&1; elif command -v dbus-launch >/dev/null 2>&1; then dbus-launch --exit-with-session startxfce4 > \$HOME/start-linux-session.log 2>&1; else startxfce4 > \$HOME/start-linux-session.log 2>&1; fi" &
     elif [ "$DE" == "lxde" ]; then
-        nohup proot-distro login $NO_SYSVIPC $DISTRO --user "$X11_USER" --shared-tmp -- bash -c "mkdir -p /tmp/.X11-unix; chmod 1777 /tmp/.X11-unix; export XDG_RUNTIME_DIR=/tmp/xdg-\$USER-$DISTRO; mkdir -p "\$XDG_RUNTIME_DIR"; chmod 700 "\$XDG_RUNTIME_DIR"; export LANG=\${LANG:-C.UTF-8}; export PULSE_SERVER=127.0.0.1; export DISPLAY=:1; $VIRGL_ENV if command -v dbus-run-session >/dev/null 2>&1; then dbus-run-session -- startlxde > \$HOME/start-linux-session.log 2>&1; elif command -v dbus-launch >/dev/null 2>&1; then dbus-launch --exit-with-session startlxde > \$HOME/start-linux-session.log 2>&1; else startlxde > \$HOME/start-linux-session.log 2>&1; fi" &
+        nohup proot-distro login $NO_SYSVIPC $DISTRO --user "$X11_USER" --shared-tmp -- bash -c "mkdir -p /tmp/.X11-unix; chmod 1777 /tmp/.X11-unix; export XDG_RUNTIME_DIR=/tmp/xdg-\$USER-$DISTRO; mkdir -p "\$XDG_RUNTIME_DIR"; chmod 700 "\$XDG_RUNTIME_DIR"; export LANG=\${LANG:-C.UTF-8}; export PULSE_SERVER=127.0.0.1; export DISPLAY=:1; export XCURSOR_THEME=Adwaita; export XCURSOR_SIZE=24; $VIRGL_ENV if command -v dbus-run-session >/dev/null 2>&1; then dbus-run-session -- startlxde > \$HOME/start-linux-session.log 2>&1; elif command -v dbus-launch >/dev/null 2>&1; then dbus-launch --exit-with-session startlxde > \$HOME/start-linux-session.log 2>&1; else startlxde > \$HOME/start-linux-session.log 2>&1; fi" &
     elif [ "$DE" == "mate" ]; then
-        nohup proot-distro login $NO_SYSVIPC $DISTRO --user "$X11_USER" --shared-tmp -- bash -c "mkdir -p /tmp/.X11-unix; chmod 1777 /tmp/.X11-unix; export XDG_RUNTIME_DIR=/tmp/xdg-\$USER-$DISTRO; mkdir -p "\$XDG_RUNTIME_DIR"; chmod 700 "\$XDG_RUNTIME_DIR"; export LANG=\${LANG:-C.UTF-8}; export PULSE_SERVER=127.0.0.1; export DISPLAY=:1; $VIRGL_ENV if command -v dbus-run-session >/dev/null 2>&1; then dbus-run-session -- mate-session > \$HOME/start-linux-session.log 2>&1; elif command -v dbus-launch >/dev/null 2>&1; then dbus-launch --exit-with-session mate-session > \$HOME/start-linux-session.log 2>&1; else mate-session > \$HOME/start-linux-session.log 2>&1; fi" &
+        nohup proot-distro login $NO_SYSVIPC $DISTRO --user "$X11_USER" --shared-tmp -- bash -c "mkdir -p /tmp/.X11-unix; chmod 1777 /tmp/.X11-unix; export XDG_RUNTIME_DIR=/tmp/xdg-\$USER-$DISTRO; mkdir -p "\$XDG_RUNTIME_DIR"; chmod 700 "\$XDG_RUNTIME_DIR"; export LANG=\${LANG:-C.UTF-8}; export PULSE_SERVER=127.0.0.1; export DISPLAY=:1; export XCURSOR_THEME=Adwaita; export XCURSOR_SIZE=24; $VIRGL_ENV if command -v dbus-run-session >/dev/null 2>&1; then dbus-run-session -- mate-session > \$HOME/start-linux-session.log 2>&1; elif command -v dbus-launch >/dev/null 2>&1; then dbus-launch --exit-with-session mate-session > \$HOME/start-linux-session.log 2>&1; else mate-session > \$HOME/start-linux-session.log 2>&1; fi" &
     elif [ "$DE" == "gnome" ]; then
         # Experimental: gnome-session is skipped (no systemd/logind in proot);
         # start-gnome-session runs lfa-set-wallpaper then `gnome-shell --x11`.
-        nohup proot-distro login $NO_SYSVIPC $DISTRO --user "$X11_USER" --shared-tmp -- bash -c "mkdir -p /tmp/.X11-unix; chmod 1777 /tmp/.X11-unix; export XDG_RUNTIME_DIR=/tmp/xdg-\$USER-$DISTRO; mkdir -p "\$XDG_RUNTIME_DIR"; chmod 700 "\$XDG_RUNTIME_DIR"; export PULSE_SERVER=127.0.0.1; export DISPLAY=:1; $VIRGL_ENV if command -v dbus-run-session >/dev/null 2>&1; then dbus-run-session -- /usr/local/bin/start-gnome-session > \$HOME/start-linux-session.log 2>&1; else /usr/local/bin/start-gnome-session > \$HOME/start-linux-session.log 2>&1; fi" &
+        nohup proot-distro login $NO_SYSVIPC $DISTRO --user "$X11_USER" --shared-tmp -- bash -c "mkdir -p /tmp/.X11-unix; chmod 1777 /tmp/.X11-unix; export XDG_RUNTIME_DIR=/tmp/xdg-\$USER-$DISTRO; mkdir -p "\$XDG_RUNTIME_DIR"; chmod 700 "\$XDG_RUNTIME_DIR"; export PULSE_SERVER=127.0.0.1; export DISPLAY=:1; export XCURSOR_THEME=Adwaita; export XCURSOR_SIZE=24; $VIRGL_ENV if command -v dbus-run-session >/dev/null 2>&1; then dbus-run-session -- /usr/local/bin/start-gnome-session > \$HOME/start-linux-session.log 2>&1; else /usr/local/bin/start-gnome-session > \$HOME/start-linux-session.log 2>&1; fi" &
     fi
     echo "If the screen stays on the X cursor, the desktop failed to start:"
     echo "  cat ~/start-linux-session.log   (inside the distro) for the reason."
@@ -4481,7 +4958,7 @@ elif [ "$SERVER" == "vnc" ]; then
         [ "$DE" = "lxde" ] && VNC_SES="startlxde"
         [ "$DE" = "mate" ] && VNC_SES="mate-session"
         [ "$DE" = "gnome" ] && VNC_SES="/usr/local/bin/start-gnome-session"
-        nohup proot-distro login $NO_SYSVIPC $DISTRO --user "$X11_USER" --shared-tmp -- bash -c "export PULSE_SERVER=127.0.0.1; mkdir -p \$HOME/.vnc \$HOME/.config/tigervnc; printf 'geometry=%s\n' '$RESOLUTION' > \$HOME/.vnc/config; printf 'geometry=%s\n' '$RESOLUTION' > \$HOME/.config/tigervnc/config; if command -v vncserver >/dev/null 2>&1; then $VIRGL_ENV vncserver :1; rc=\$?; [ \$rc -eq 0 ] || exit \$rc; else $VIRGL_ENV Xvnc :1 -geometry $RESOLUTION -depth 24 -rfbauth \$HOME/.config/tigervnc/passwd -SecurityTypes VncAuth > \$HOME/.vnc-xvnc.log 2>&1 & sleep 2; DISPLAY=:1 dbus-run-session -- $VNC_SES > \$HOME/start-linux-session.log 2>&1; fi; exec sleep 2147483647" > "$VNC_LOG" 2>&1 &
+        nohup proot-distro login $NO_SYSVIPC $DISTRO --user "$X11_USER" --shared-tmp -- bash -c "export PULSE_SERVER=127.0.0.1; mkdir -p \$HOME/.vnc \$HOME/.config/tigervnc; printf 'geometry=%s\n' '$RESOLUTION' > \$HOME/.vnc/config; printf 'geometry=%s\n' '$RESOLUTION' > \$HOME/.config/tigervnc/config; if command -v vncserver >/dev/null 2>&1; then $VIRGL_ENV vncserver :1; rc=\$?; [ \$rc -eq 0 ] || exit \$rc; else $VIRGL_ENV Xvnc :1 -geometry $RESOLUTION -depth 24 -rfbauth \$HOME/.config/tigervnc/passwd -SecurityTypes VncAuth > \$HOME/.vnc-xvnc.log 2>&1 & sleep 2; export XCURSOR_THEME=Adwaita; export XCURSOR_SIZE=24; DISPLAY=:1 dbus-run-session -- $VNC_SES > \$HOME/start-linux-session.log 2>&1; fi; exec sleep 2147483647" > "$VNC_LOG" 2>&1 &
         echo $! > "$VNC_PIDFILE"
         printf 'Waiting for VNC on port 5901'
         for _i in $(seq 1 20); do
@@ -4607,6 +5084,27 @@ if [ "$SERVER" = "x11" ] || [ "$SERVER" = "both" ]; then
     for _p in $(pgrep -f '^termux-x11 .* :1( |$)' 2>/dev/null); do
         kill "$_p" 2>/dev/null || true
     done
+    # The guest desktop is its own proot process. Killing the X server alone
+    # leaves xfce4-session behind; the next start then has two session
+    # managers on :1, no window manager, and only the root cross cursor.
+    lfa_kill_guest_session() {
+        local _pid _cmd _round
+        for _round in 1 2 3; do
+            for _pid in $(pgrep -f "/containers/$DISTRO/|/installed-rootfs/$DISTRO/" 2>/dev/null); do
+                _cmd="$(tr '\0' ' ' < "/proc/$_pid/cmdline" 2>/dev/null)" || continue
+                case "$_cmd" in
+                    *startxfce4*|*startlxde*|*mate-session*|*start-gnome-session*)
+                        if [ "$_round" = "1" ]; then
+                            kill "$_pid" 2>/dev/null || true
+                        else
+                            kill -9 "$_pid" 2>/dev/null || true
+                        fi ;;
+                esac
+            done
+            [ "$_round" = "1" ] && sleep 2
+        done
+    }
+    lfa_kill_guest_session
 fi
 if [ "$SERVER" = "vnc" ] || [ "$SERVER" = "both" ]; then
     echo "Stopping VNC Server..."
@@ -5898,6 +6396,8 @@ cat > "\$_lfa_vdir/xstartup" <<'STARTUP'
 #!/bin/sh
 export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 export PULSE_SERVER=127.0.0.1
+export XCURSOR_THEME=Adwaita
+export XCURSOR_SIZE=24
 export XDG_RUNTIME_DIR="/tmp/xdg-\$(id -un)"
 mkdir -p "\$XDG_RUNTIME_DIR"
 chmod 700 "\$XDG_RUNTIME_DIR"

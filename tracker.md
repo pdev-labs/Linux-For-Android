@@ -188,6 +188,9 @@ Lint: `shellcheck -S warning` clean, `bash -n` clean, CI workflow added.
 | 2026-11-04 | Legacy both config through Menu 12 | persisted `SERVER="vnc"`, `AUTOSTART_SERVER="vnc"`, cleared remembered choice |
 | 2026-11-04 | Android 5 bugs fixed | toybox df free space, legacy VNC stop, persisted clamp, anchored kill patterns |
 | 2026-11-04 | `bash -n` after the backend change | install script and test suite clean |
+| 2026-11-05 | AppImage support | `APPIMAGE_EXTRACT_AND_RUN=1` in every guest session; `lfa appimage add/list/run/remove` and `lfa run`; official Prism Launcher 11.1.1 AppImage extracted and launched under XFCE on the Vivo |
+| 2026-11-05 | Duplicate-session fix | `start-linux` refuses a second session, `--restart` replaces one, and `stop-linux` now stops the guest session wrapper |
+| 2026-11-05 | Cursor theme fix | `XCURSOR_THEME=Adwaita` in X11/VNC launches plus `lfa-set-cursor` autostart; cross cursor traced to duplicate sessions with no window manager |
 
 ### Findings that only appeared on hardware
 

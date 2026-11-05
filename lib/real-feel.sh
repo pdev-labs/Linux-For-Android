@@ -65,6 +65,11 @@ done
 IFS="$_ifs"
 [ -n "$_clean_path" ] && PATH="$_clean_path" && export PATH
 unset _clean_path _p _ifs
+# AppImages self-mount through FUSE, but proot does not expose /dev/fuse
+# ("fuse: failed to open /dev/fuse: Permission denied"). The AppImage
+# runtime can extract instead. Exporting this makes a direct run, a
+# file-manager double-click and a menu entry all work without flags.
+APPIMAGE_EXTRACT_AND_RUN=1; export APPIMAGE_EXTRACT_AND_RUN
 CLEAN
 
 # ---------------- name host-mapped gids ----------------
@@ -160,6 +165,41 @@ chmod 644 "$R/etc/profile.d/00-lfa-welcome.sh" \
            "$R/etc/profile.d/zz-lfa-env.sh" 2>/dev/null || true
 chmod 644 "$R/root/.profile" "$R/home/$USER_NAME/.profile" \
            "$R/root/.bashrc" "$R/home/$USER_NAME/.bashrc" 2>/dev/null || true
+
+# ---------------- cursor theme --------------------------------------
+# A session with no usable cursor theme leaves the X root cursor on screen,
+# which is a cross. Ubuntu ships Adwaita; other images may only have DMZ.
+# The helper runs from XDG autostart, after xfsettingsd has started, and
+# applies the first theme that actually exists.
+cat > "$R/usr/local/bin/lfa-set-cursor" <<'LFA_CURSOR'
+#!/bin/sh
+# Linux for Android: pick an installed cursor theme for this session.
+for _t in Adwaita DMZ-White DMZ-Black default; do
+    [ -d "/usr/share/icons/$_t/cursors" ] || continue
+    if command -v xfconf-query >/dev/null 2>&1; then
+        xfconf-query -c xsettings -p /Gtk/CursorThemeName -s "$_t" >/dev/null 2>&1 || true
+        xfconf-query -c xsettings -p /Gtk/CursorThemeSize -s 24 >/dev/null 2>&1 || true
+    fi
+    if command -v xrdb >/dev/null 2>&1; then
+        printf 'Xcursor.theme: %s\nXcursor.size: 24\n' "$_t" | xrdb -merge >/dev/null 2>&1 || true
+    fi
+    break
+done
+LFA_CURSOR
+chmod 755 "$R/usr/local/bin/lfa-set-cursor" 2>/dev/null || true
+
+mkdir -p "$R/etc/xdg/autostart" 2>/dev/null || true
+cat > "$R/etc/xdg/autostart/lfa-cursor.desktop" <<'LFA_CURSOR_DESKTOP'
+[Desktop Entry]
+Type=Application
+Name=Linux for Android cursor theme
+Comment=Use an installed cursor theme instead of the X root cross
+Exec=/usr/local/bin/lfa-set-cursor
+Terminal=false
+NoDisplay=true
+OnlyShowIn=XFCE;LXDE;MATE;GNOME;
+LFA_CURSOR_DESKTOP
+chmod 644 "$R/etc/xdg/autostart/lfa-cursor.desktop" 2>/dev/null || true
 
 # ---------------- D-Bus machine id ----------------------------------
 # Some container images ship an empty /etc/machine-id. D-Bus refuses to
