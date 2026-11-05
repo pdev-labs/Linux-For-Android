@@ -62,11 +62,34 @@ CACHE="${RUNNER_TEMP:-/tmp}/termux-apks"
 mkdir -p "$CACHE"
 APK="$CACHE/$APK_NAME"
 
+download_apk() { # $1=url $2=output
+    local _url="$1" _out="$2"
+    if curl -fL --retry 8 --retry-all-errors --retry-delay 5 \
+        --connect-timeout 20 -o "$_out.part" "$_url"; then
+        mv "$_out.part" "$_out"
+        return 0
+    fi
+    rm -f "$_out.part"
+    return 1
+}
+
 if [ ! -f "$APK" ]; then
     echo "Downloading Termux $TERMUX_VERSION ($ARCH)..."
-    curl -fL --retry 3 --retry-delay 2 -o "$APK.part" "$URL"
-    mv "$APK.part" "$APK"
+    if ! download_apk "$URL" "$APK"; then
+        # GitHub's release CDN occasionally returns 502/504 to hosted
+        # runners. The API path is authenticated and more reliable.
+        if command -v gh >/dev/null 2>&1 && [ -n "${GH_TOKEN:-${GITHUB_TOKEN:-}}" ]; then
+            echo "Direct download failed; trying the GitHub API..."
+            GH_TOKEN="${GH_TOKEN:-${GITHUB_TOKEN:-}}" \
+                gh release download "v${TERMUX_VERSION}" --repo termux/termux-app \
+                --pattern "$APK_NAME" --dir "$CACHE" --clobber
+        fi
+    fi
 fi
+[ -f "$APK" ] || {
+    echo "Could not download $APK_NAME from $URL" >&2
+    exit 1
+}
 
 echo "$APK_SHA256  $APK" | sha256sum -c -
 
@@ -87,11 +110,77 @@ adb shell settings put global animator_duration_scale 0 >/dev/null 2>&1 || true
 
 # Launch once so Termux extracts its bootstrap. `run-as` cannot do that for
 # us: the extraction happens in the app process.
-adb shell am start -n com.termux/.app.TermuxActivity >/dev/null 2>&1 || true
+adb shell am start -W -n com.termux/.app.TermuxActivity 2>&1 | sed 's/^/[termux] /' || true
+
+bootstrap_ready() {
+    adb shell run-as com.termux test -x /data/data/com.termux/files/usr/bin/bash >/dev/null 2>&1
+}
+
+# The app normally extracts the bundled bootstrap on first launch. Some
+# emulator images fail there (native-library load, background kill, or a
+# dialog that never gets dismissed). The APK also carries the same bootstrap
+# zip as lib/<abi>/libtermux-bootstrap.so, so install it through `run-as`
+# instead of leaving the whole scenario dead.
+manual_bootstrap() {
+    local _zip="$CACHE/bootstrap-$ARCH.zip"
+    local _script="$CACHE/lfa-bootstrap.sh"
+    if [ ! -s "$_zip" ]; then
+        unzip -p "$APK" "lib/$ARCH/libtermux-bootstrap.so" > "$_zip" 2>/dev/null || return 1
+    fi
+    [ -s "$_zip" ] || return 1
+    adb shell am force-stop com.termux >/dev/null 2>&1 || true
+    adb push "$_zip" /data/local/tmp/lfa-bootstrap.zip >/dev/null || return 1
+    cat > "$_script" <<'SH'
+#!/system/bin/sh
+set -e
+FILES=/data/data/com.termux/files
+STAGE=$FILES/usr-staging
+ZIP=/data/local/tmp/lfa-bootstrap.zip
+rm -rf "$STAGE" "$FILES/usr"
+mkdir -p "$STAGE" "$FILES/home"
+cd "$STAGE"
+# The bundled .so is an ELF header followed by the zip; unzip warns about
+# the extra bytes and exits non-zero even when extraction is complete.
+if [ -x /system/bin/unzip ]; then
+    /system/bin/unzip -q "$ZIP" || true
+elif [ -x /system/xbin/unzip ]; then
+    /system/xbin/unzip -q "$ZIP" || true
+elif [ -x /system/bin/toybox ]; then
+    /system/bin/toybox unzip -q "$ZIP" || true
+else
+    echo "no unzip binary on this image" >&2
+    exit 1
+fi
+[ -f bin/bash ] || { echo "bootstrap extraction did not produce bin/bash" >&2; exit 1; }
+if [ -f SYMLINKS.txt ]; then
+    while IFS= read -r line; do
+        [ -n "$line" ] || continue
+        old="${line%%←*}"
+        new="${line#*←}"
+        [ "$old" != "$line" ] || continue
+        mkdir -p "$(dirname "$new")"
+        ln -sf "$old" "$new"
+    done < SYMLINKS.txt
+    rm -f SYMLINKS.txt
+fi
+chmod 700 bin/* 2>/dev/null || true
+[ -d libexec ] && chmod -R 700 libexec
+[ -f lib/apt/apt-helper ] && chmod 700 lib/apt/apt-helper
+[ -d lib/apt/methods ] && chmod -R 700 lib/apt/methods
+[ -f etc/termux/bootstrap/termux-bootstrap-second-stage.sh ] && \
+    chmod 700 etc/termux/bootstrap/termux-bootstrap-second-stage.sh
+mv "$STAGE" "$FILES/usr"
+PREFIX=$FILES/usr HOME=$FILES/home TMPDIR=$FILES/usr/tmp TERMUX_PREFIX=$FILES/usr \
+    "$FILES/usr/bin/bash" "$FILES/usr/etc/termux/bootstrap/termux-bootstrap-second-stage.sh" || true
+SH
+    adb push "$_script" /data/local/tmp/lfa-bootstrap.sh >/dev/null || return 1
+    adb shell run-as com.termux sh /data/local/tmp/lfa-bootstrap.sh || return 1
+    bootstrap_ready
+}
 
 echo "Waiting for the Termux bootstrap..."
 for _i in $(seq 1 120); do
-    if adb shell run-as com.termux test -x /data/data/com.termux/files/usr/bin/bash >/dev/null 2>&1; then
+    if bootstrap_ready; then
         echo "Termux bootstrap is ready."
         adb shell am force-stop com.termux >/dev/null 2>&1 || true
         exit 0
@@ -99,7 +188,16 @@ for _i in $(seq 1 120); do
     sleep 2
 done
 
-echo "Termux bootstrap did not appear within 240 seconds." >&2
-adb shell run-as com.termux ls /data/data/com.termux/files 2>&1 || true
-adb logcat -d -s Termux:Boot Termux 2>/dev/null | tail -n 80 || true
+echo "Termux bootstrap did not appear within 240 seconds; installing the bundled copy." >&2
+if manual_bootstrap; then
+    echo "Termux bootstrap installed from the APK."
+    adb shell am force-stop com.termux >/dev/null 2>&1 || true
+    exit 0
+fi
+
+echo "Manual bootstrap also failed." >&2
+adb shell run-as com.termux ls -la /data/data/com.termux/files 2>&1 || true
+adb logcat -d -t 400 2>/dev/null \
+    | grep -iE 'TermuxInstaller|Termux|AndroidRuntime|FATAL EXCEPTION|UnsatisfiedLinkError' \
+    | tail -n 120 || true
 exit 1

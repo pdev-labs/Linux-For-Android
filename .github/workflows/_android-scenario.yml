@@ -78,6 +78,7 @@ jobs:
           SCENARIO_DESKTOP: ${{ inputs.desktop }}
           SCENARIO_BACKEND: ${{ inputs.backend }}
           SCENARIO_KIND: ${{ inputs.scenario }}
+          GH_TOKEN: ${{ github.token }}
         with:
           api-level: ${{ inputs.api }}
           arch: ${{ inputs.arch }}

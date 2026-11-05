@@ -49,6 +49,15 @@ race-prone. `run-as` is used only for the bootstrap, then SSH carries the
 long-running installs. The Termux **debug** APK is required because `run-as`
 only works for a debuggable package.
 
+The bootstrap is normally extracted by the Termux app on first launch. Some
+emulator images leave it half-installed (the app process is killed, a native
+library fails to load, or a dialog is never dismissed). The pinned APK also
+contains the same bootstrap zip as `lib/<abi>/libtermux-bootstrap.so`;
+`install-termux.sh` extracts it through `run-as`, recreates the symlinks from
+`SYMLINKS.txt`, and runs the second-stage script. APK downloads retry with
+backoff and fall back to the authenticated GitHub API when the release CDN
+returns 502/504.
+
 ### What `tests/termux-e2e.sh` checks
 
 - `lfa install`, `list`, `status`, `version`, `notice`, `compat`, `android`
