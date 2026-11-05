@@ -2255,6 +2255,7 @@ lfa_appimage_user() {  # $1 = instance; print the desktop user
     local _conf _u=""
     _conf="$(pd_conf "$1" 2>/dev/null)"
     if [ -f "$_conf" ]; then
+        # shellcheck disable=SC1090  # instance config path is computed at runtime
         _u="$( . "$_conf" 2>/dev/null; printf '%s' "${USER_NAME:-${SETUP_USER:-}}" )"
     fi
     [ -n "$_u" ] || _u="user"
