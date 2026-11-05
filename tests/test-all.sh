@@ -883,6 +883,26 @@ check "P removes broken" 'has been removed' "$T/p.log"
 [ ! -e "$T/prefix/var/lib/proot-distro/containers/broken" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: P broken container left behind"; }
 [ -d "$T/prefix/var/lib/proot-distro/installed-rootfs/ghost" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: P ghost stub was touched"; }
 
+echo "===== P2: a failing du does not abort uninstall ====="
+fresh_env
+mkdir -p "$T/duerr"
+cat > "$T/duerr/du" <<'SH'
+#!/bin/sh
+# Android toybox du can print a size and still exit non-zero when a few
+# entries are unreadable. The uninstall must treat the size as best-effort.
+echo "761M	$2"
+exit 1
+SH
+chmod +x "$T/duerr/du"
+BROKEN2="$T/prefix/var/lib/proot-distro/containers/broken2/rootfs"
+mkdir -p "$BROKEN2/etc"
+printf 'DISTRO="debian"\nDE="none"\nSERVER="none"\nUPDATE_CMD="true"\n' > "$BROKEN2/etc/termux-linux-manager.conf"
+printf '%s\n' 3 10 y '' 13 | PATH="$T/duerr:$PATH" timeout 60 bash "$REPO/install_linux.sh" > "$T/p2.log" 2>&1; rc=$?
+[ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: P2 exit $rc"; }
+check "P2 shows size" 'Size     : 761M' "$T/p2.log"
+check "P2 removes instance" 'has been removed' "$T/p2.log"
+[ ! -e "$T/prefix/var/lib/proot-distro/containers/broken2" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: P2 container left behind"; }
+
 echo "===== Q: EOF on stdin exits cleanly (no infinite loop) ====="
 fresh_env
 if printf '' | timeout 10 bash "$REPO/install_linux.sh" > "$T/q.log" 2>&1; then
@@ -1084,9 +1104,9 @@ check "Y2 both again" 'SERVER="both"' "$Y2ROOT/etc/termux-linux-manager.conf"
 [ -f "$Y2ROOT/home/user/.vnc/xstartup" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y2 VNC xstartup not restored"; }
 # A password set inside the guest must survive a backend switch.
 printf 'CUSTOM-PASSWD\n' > "$Y2ROOT/home/user/.vnc/passwd"
-# The quick-install base distro is X11 too, so shared-X11 protection would
-# (correctly) stop this; --force exercises the removal path here and Y3
-# tests the guard separately.
+# The quick-install base distro is X11 too, so Termux:X11 is shared.
+# --force is not needed to switch this instance; it tests the explicit
+# removal path. Y3 covers the default "keep the shared package" path.
 "$LFA" switch vnc -i cliboth --remove-old --force > "$T/y2-vnc.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y2 switch vnc exit $rc"; }
 check "Y2 vnc conf" 'SERVER="vnc"' "$Y2ROOT/etc/termux-linux-manager.conf"
 check "Y2 x11 host removed" 'STUB-PKG: uninstall -y termux-x11-nightly' "$T/y2-vnc.log"
@@ -1098,17 +1118,19 @@ check "Y2 autostart key" 'DO_AUTOSTART="1"' "$Y2ROOT/etc/termux-linux-manager.co
 check "Y2 autostart disabled" 'Desktop autostart is disabled' "$T/home/.termux/boot/start-linux-services.sh"
 check "Y2 autostart none key" 'DO_AUTOSTART="0"' "$Y2ROOT/etc/termux-linux-manager.conf"
 
-echo "===== Y3: shared Termux:X11 is protected unless --force ====="
+echo "===== Y3: shared Termux:X11 is kept unless --force ====="
 X11OTHER="$T/prefix/var/lib/proot-distro/installed-rootfs/x11other"
 mkdir -p "$X11OTHER/etc" "$X11OTHER/usr"
 printf 'DISTRO="debian"\nDE="xfce4"\nSERVER="both"\nUSER_NAME="user"\n' > "$X11OTHER/etc/termux-linux-manager.conf"
 "$LFA" switch both -i cliboth > "$T/y3-both.log" 2>&1
-"$LFA" switch vnc -i cliboth --remove-old > "$T/y3-guard.log" 2>&1; rc=$?; [ "$rc" = "1" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y3 guard exit $rc"; }
-check "Y3 guard message" 'Another installed distro still uses Termux:X11.' "$T/y3-guard.log"
-check "Y3 guard config kept" 'SERVER="both"' "$Y2ROOT/etc/termux-linux-manager.conf"
+"$LFA" switch vnc -i cliboth --remove-old > "$T/y3-guard.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y3 guard exit $rc"; }
+check "Y3 guard message" 'keeping the host packages' "$T/y3-guard.log"
+check "Y3 guard config switched" 'SERVER="vnc"' "$Y2ROOT/etc/termux-linux-manager.conf"
 check_absent "Y3 guard no pkg removal" 'uninstall -y termux-x11-nightly' "$T/y3-guard.log"
+"$LFA" switch both -i cliboth > "$T/y3-both2.log" 2>&1
 "$LFA" switch vnc -i cliboth --remove-old --force > "$T/y3-force.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y3 force exit $rc"; }
 check "Y3 force warning" '--force: removing Termux:X11' "$T/y3-force.log"
+check "Y3 force removed" 'uninstall -y termux-x11-nightly' "$T/y3-force.log"
 check "Y3 force conf" 'SERVER="vnc"' "$Y2ROOT/etc/termux-linux-manager.conf"
 
 echo "===== Y4: explicit -i is validated and bad options are refused ====="

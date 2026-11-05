@@ -33,7 +33,7 @@ Commands that say *inside the distro* are run in a guest shell opened with
 | `No distributions installed` | [§3.2](#32-no-distributions-installed) |
 | `Multiple distributions found` / `Choose one with -i NAME` | [§3.10](#310-lfa-needs-an-instance-name) |
 | `start-linux now opens the advanced menu` | [§3.11](#311-the-start-linux-change-notice) |
-| `Another installed distro still uses Termux:X11` | [§3.9](#39-how-do-i-switch-between-termuxx11-and-vnc) |
+| `Termux:X11 is still used by another installed distro` | [§3.9](#39-how-do-i-switch-between-termuxx11-and-vnc) |
 | `Termux:X11 requires Android 8 or newer` | [§3.9](#39-how-do-i-switch-between-termuxx11-and-vnc) |
 | Black screen, `Unable to contact settings server` | [§3.3](#33-black-screen-or-unable-to-contact-settings-server) |
 | Desktop dies with `Gtk:ERROR ... Bail out!` | [§3.4](#34-desktop-dies-with-a-gtk-bail-out) |
@@ -552,10 +552,16 @@ lfa switch vnc  -i <instance> --remove-old
 ```
 
 `--remove-old` removes the packages of the backend you are leaving. The new
-backend is installed first. If another distro still uses Termux:X11, removal
-is refused unless you add `--force`. The same operation is menu 14, **Change
-Display Backend**. Run `lfa stop -i <instance>` first if a desktop is running;
-the two backends share display `:1` and port `5901` and cannot run together.
+backend is installed first. Termux:X11 is a host package shared by every
+distro, so if another instance still uses it, the switch keeps the package and
+reports `Termux:X11 is still used by another installed distro; keeping the host
+packages`. This instance still switches to VNC; add `--force` to remove the
+package anyway, which breaks the other distro's desktop. The same operation is
+menu 14, **Change Display Backend**. Run `lfa stop -i <instance>` first if a
+desktop is running; the two backends share display `:1` and port `5901` and
+cannot run together. Starting one backend now stops the other backend's server
+on `:1` automatically; if a different instance already serves VNC on port
+`5901`, start refuses instead of connecting to it and reporting success.
 
 If only one backend was installed by an old version, menu 12 can add the other
 one without touching packages. On Android 5/6, X11 and Both are refused with

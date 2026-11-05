@@ -201,3 +201,21 @@ The rules are strict:
 `lfa android` is not a kernel bridge. Termux:API talks to Android framework
 services under the normal app UID; it cannot create TUN/TAP, GPU devices, or
 `/dev` nodes.
+
+## D15: VirGL is optional and self-healing
+
+Decision: keep VirGL as the preferred renderer, but verify it against the
+running session. If the session log shows a GLX context failure, write
+`NEED_VIRGL="0"` for that instance and restart it once with llvmpipe.
+
+Why: `virgl_test_server_android` can be running on a device whose driver
+cannot create a GLX context. The old code assumed that a running server meant
+a working renderer, so xfwm4 died with `BadValue` and the desktop had no
+window manager. A software fallback is slower but usable; an undecorated
+desktop is not. The fallback is recorded so later starts skip the broken path
+instead of retrying it every time.
+
+Cost: one background watcher per instance/backend for 12 seconds after a
+start, plus a per-instance config write. The watcher is locked so repeated
+starts cannot stop each other's fresh session, and it does nothing after a
+deliberate `lfa stop`.

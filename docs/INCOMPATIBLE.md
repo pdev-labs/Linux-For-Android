@@ -99,6 +99,13 @@ expose the vendor compute runtime, GPU device nodes, or command queues.
 | OpenCL/Vulkan on the phone GPU | not enabled; research only |
 | CUDA / ROCm / vendor GPU compute | unavailable |
 
+VirGL is probed at runtime, not assumed. Some Android GPU drivers keep
+`virgl_test_server_android` running but fail at `glXCreateNewContext`; the
+window manager then dies and the desktop has no decorations. LFA detects
+that in the session log, writes `NEED_VIRGL="0"` for that instance, and
+restarts it with llvmpipe. Re-enable VirGL from the installer after a driver
+update if the device starts working.
+
 ## What Termux:API can and cannot provide
 
 Termux:API talks to **Android framework services** under the normal app UID.

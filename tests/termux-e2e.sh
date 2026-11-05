@@ -21,7 +21,11 @@
 # Exit status: 0 when every check passed, 1 otherwise.
 set -uo pipefail
 
-REPO="${LFA_REPO:-$HOME/lfa}"
+if [ -n "${LFA_REPO:-}" ]; then
+    REPO="$LFA_REPO"
+else
+    REPO="$(cd "$(dirname "$0")/.." && pwd)"
+fi
 DISTRO="${LFA_E2E_DISTRO:-debian}"
 DESKTOP="${LFA_E2E_DESKTOP:-xfce4}"
 BACKEND="${LFA_E2E_BACKEND:-vnc}"
@@ -31,11 +35,15 @@ MODE="${LFA_E2E_MODE:-all}"
 LEAVE_RUNNING="${LFA_E2E_LEAVE_RUNNING:-0}"
 DIAGNOSTICS="${LFA_E2E_DIAGNOSTICS:-0}"
 VNC_PASSWORD="${LFA_VNC_PASSWORD:-lfaci}"
+USER_NAME="${LFA_E2E_USER:-}"
 SDK="$(getprop ro.build.version.sdk 2>/dev/null | tr -cd '0-9')"
 [ -n "$SDK" ] || SDK=0
 ARCH="$(uname -m)"
 PASS=0
 FAIL=0
+WORK="${TMPDIR:-$PREFIX/tmp}/lfa-e2e"
+mkdir -p "$WORK" 2>/dev/null || WORK="$HOME/.lfa-e2e"
+mkdir -p "$WORK" 2>/dev/null || true
 LFA=(bash "$REPO/install_linux.sh" --cli)
 
 say()  { printf '\n=== %s ===\n' "$*"; }
@@ -55,6 +63,28 @@ rootfs_for() { # $1 instance
     else printf '%s' "$base/installed-rootfs/$1"; fi
 }
 conf_for() { printf '%s/etc/termux-linux-manager.conf' "$(rootfs_for "$1")"; }
+conf_value() { # $1 key
+    sed -n "s/^$1=\"\(.*\)\"$/\1/p" "$(conf_for "$INSTANCE")" 2>/dev/null | head -n 1
+}
+other_x11_instance() { # instance other than $INSTANCE that still wants X11
+    local _dir _root _inst
+    for _dir in "$PREFIX"/var/lib/proot-distro/containers/* \
+                "$PREFIX"/var/lib/proot-distro/installed-rootfs/*; do
+        if [ -d "$_dir/rootfs" ]; then
+            _root="$_dir/rootfs"
+        elif [ -f "$_dir/etc/termux-linux-manager.conf" ]; then
+            _root="$_dir"
+        else
+            continue
+        fi
+        _inst="$(basename "$_dir")"
+        [ "$_inst" = "$INSTANCE" ] && continue
+        case "$(sed -n 's/^SERVER="\(.*\)"$/\1/p' "$_root/etc/termux-linux-manager.conf" 2>/dev/null)" in
+            x11|both) return 0 ;;
+        esac
+    done
+    return 1
+}
 
 pd_flag() {
     if proot --help 2>&1 | grep -q sysvipc; then return 0; fi
@@ -88,6 +118,9 @@ install_guest_test_tools() {
 }
 
 port_open() { (exec 3<>/dev/tcp/127.0.0.1/5901) 2>/dev/null; }
+desktop_session_running() {
+    pgrep -af 'xfce4-session|xfwm4|startlxde|mate-session|gnome-shell' >/dev/null 2>&1
+}
 
 wait_for() { # $1 seconds, $2 command string
     local _i=0
@@ -100,19 +133,19 @@ wait_for() { # $1 seconds, $2 command string
 }
 
 stop_desktop() {
-    "${LFA[@]}" stop -i "$INSTANCE" >/tmp/lfa-e2e-stop.log 2>&1 || true
+    "${LFA[@]}" stop -i "$INSTANCE" >$WORK/lfa-e2e-stop.log 2>&1 || true
     if port_open; then bad "VNC port 5901 is still open after stop"; else ok "VNC port 5901 is closed after stop"; fi
 }
 
 start_vnc() {
     say "Starting VNC desktop"
-    "${LFA[@]}" start -i "$INSTANCE" --vnc >/tmp/lfa-e2e-start-vnc.log 2>&1 || true
+    "${LFA[@]}" start -i "$INSTANCE" --vnc >$WORK/lfa-e2e-start-vnc.log 2>&1 || true
     if wait_for 90 'port_open'; then ok "VNC is listening on 5901"; else
         bad "VNC did not listen on 5901"
-        tail -n 40 /tmp/lfa-e2e-start-vnc.log >&2 || true
+        tail -n 40 $WORK/lfa-e2e-start-vnc.log >&2 || true
     fi
     if pgrep -af 'Xvnc|Xtigervnc' >/dev/null 2>&1; then ok "an Xvnc process is running"; else bad "no Xvnc process"; fi
-    if pgrep -af 'xfce4-session|xfwm4|startlxde|mate-session|gnome-shell' >/dev/null 2>&1; then
+    if wait_for 90 desktop_session_running; then
         ok "a desktop session process is running"
     else
         bad "no desktop session process"
@@ -130,13 +163,13 @@ start_vnc() {
 
 start_x11() {
     say "Starting Termux:X11 desktop"
-    "${LFA[@]}" start -i "$INSTANCE" --x11 >/tmp/lfa-e2e-start-x11.log 2>&1 || true
+    "${LFA[@]}" start -i "$INSTANCE" --x11 >$WORK/lfa-e2e-start-x11.log 2>&1 || true
     if wait_for 60 '[ -S "$PREFIX/tmp/.X11-unix/X1" ]'; then ok "display :1 socket exists"; else
         bad "display :1 socket did not appear"
-        tail -n 40 /tmp/lfa-e2e-start-x11.log >&2 || true
+        tail -n 40 $WORK/lfa-e2e-start-x11.log >&2 || true
     fi
     if pgrep -af 'termux-x11 .*:1' >/dev/null 2>&1; then ok "termux-x11 is running"; else bad "termux-x11 is not running"; fi
-    if pgrep -af 'xfce4-session|xfwm4|startlxde|mate-session|gnome-shell' >/dev/null 2>&1; then
+    if wait_for 120 desktop_session_running; then
         ok "a desktop session process is running"
     else bad "no desktop session process"; fi
     if guest_user 'DISPLAY=:1 xdpyinfo >/dev/null 2>&1'; then
@@ -149,40 +182,45 @@ start_x11() {
 
 test_cli_surface() {
     say "CLI surface"
-    "${LFA[@]}" version >/tmp/lfa-e2e-version.log 2>&1
-    check_contains "lfa version" "Linux for Android Manager" /tmp/lfa-e2e-version.log
-    "${LFA[@]}" list >/tmp/lfa-e2e-list.log 2>&1
-    check_contains "lfa list shows the instance" "$INSTANCE" /tmp/lfa-e2e-list.log
-    "${LFA[@]}" status -i "$INSTANCE" --json >/tmp/lfa-e2e-status.log 2>&1
-    check_contains "lfa status reports the backend" "\"backend\":\"$BACKEND\"" /tmp/lfa-e2e-status.log
-    "${LFA[@]}" notice status >/tmp/lfa-e2e-notice.log 2>&1
-    check_contains "lfa notice status" "start-linux notice:" /tmp/lfa-e2e-notice.log
-    "${LFA[@]}" compat list >/tmp/lfa-e2e-compat.log 2>&1
-    check_contains "compat list names docker" "docker" /tmp/lfa-e2e-compat.log
-    "${LFA[@]}" compat explain docker >/tmp/lfa-e2e-explain.log 2>&1
-    check_contains "compat explains docker honestly" "not shimmable" /tmp/lfa-e2e-explain.log
-    "${LFA[@]}" compat enable systemctl -i "$INSTANCE" >/tmp/lfa-e2e-compat-enable.log 2>&1
+    "${LFA[@]}" version >$WORK/lfa-e2e-version.log 2>&1
+    check_contains "lfa version" "Linux for Android Manager" $WORK/lfa-e2e-version.log
+    "${LFA[@]}" list >$WORK/lfa-e2e-list.log 2>&1
+    check_contains "lfa list shows the instance" "$INSTANCE" $WORK/lfa-e2e-list.log
+    "${LFA[@]}" status -i "$INSTANCE" --json >$WORK/lfa-e2e-status.log 2>&1
+    # The instance may already exist with another backend; status must report
+    # the configured value, not what this run asked for.
+    local _backend
+    _backend="$(conf_value SERVER)"
+    [ -n "$_backend" ] || _backend="$BACKEND"
+    check_contains "lfa status reports the backend" "\"backend\":\"$_backend\"" $WORK/lfa-e2e-status.log
+    "${LFA[@]}" notice status >$WORK/lfa-e2e-notice.log 2>&1
+    check_contains "lfa notice status" "start-linux notice:" $WORK/lfa-e2e-notice.log
+    "${LFA[@]}" compat list >$WORK/lfa-e2e-compat.log 2>&1
+    check_contains "compat list names docker" "docker" $WORK/lfa-e2e-compat.log
+    "${LFA[@]}" compat explain docker >$WORK/lfa-e2e-explain.log 2>&1
+    check_contains "compat explains docker honestly" "not shimmable" $WORK/lfa-e2e-explain.log
+    "${LFA[@]}" compat enable systemctl -i "$INSTANCE" >$WORK/lfa-e2e-compat-enable.log 2>&1
     [ -f "$(rootfs_for "$INSTANCE")/usr/local/bin/systemctl" ] && ok "systemctl shim was installed" || bad "systemctl shim missing"
-    "${LFA[@]}" compat disable systemctl -i "$INSTANCE" >/tmp/lfa-e2e-compat-disable.log 2>&1
+    "${LFA[@]}" compat disable systemctl -i "$INSTANCE" >$WORK/lfa-e2e-compat-disable.log 2>&1
     [ ! -e "$(rootfs_for "$INSTANCE")/usr/local/bin/systemctl" ] && ok "systemctl shim was removed" || bad "systemctl shim survived disable"
-    "${LFA[@]}" android status >/tmp/lfa-e2e-android.log 2>&1
-    check_contains "android status" "termux-api package:" /tmp/lfa-e2e-android.log
+    "${LFA[@]}" android status >$WORK/lfa-e2e-android.log 2>&1
+    check_contains "android status" "termux-api package:" $WORK/lfa-e2e-android.log
 }
 
 test_legacy_refusal() {
     say "Unsupported-X11 refusal (SDK $SDK)"
-    "${LFA[@]}" switch x11 -i "$INSTANCE" --remove-old >/tmp/lfa-e2e-refusal.log 2>&1
+    "${LFA[@]}" switch x11 -i "$INSTANCE" --remove-old >$WORK/lfa-e2e-refusal.log 2>&1
     local _rc=$?
     if [ "$_rc" = "1" ]; then ok "switch x11 refused"; else bad "switch x11 exit $_rc (expected 1)"; fi
-    check_contains "refusal explains the requirement" "Termux:X11 requires Android 8" /tmp/lfa-e2e-refusal.log
-    check_contains "refusal keeps the current backend" "Nothing was changed" /tmp/lfa-e2e-refusal.log
-    check_contains "refusal warns about --remove-old" "--remove-old was ignored on purpose" /tmp/lfa-e2e-refusal.log
+    check_contains "refusal explains the requirement" "Termux:X11 requires Android 8" $WORK/lfa-e2e-refusal.log
+    check_contains "refusal keeps the current backend" "Nothing was changed" $WORK/lfa-e2e-refusal.log
+    check_contains "refusal warns about --remove-old" "--remove-old was ignored on purpose" $WORK/lfa-e2e-refusal.log
     check_contains "VNC is still configured" 'SERVER="vnc"' "$(conf_for "$INSTANCE")"
 }
 
 test_switch() {
     say "Backend switching"
-    "${LFA[@]}" switch both -i "$INSTANCE" >/tmp/lfa-e2e-switch-both.log 2>&1
+    "${LFA[@]}" switch both -i "$INSTANCE" >$WORK/lfa-e2e-switch-both.log 2>&1
     check_contains "both backend installed" 'SERVER="both"' "$(conf_for "$INSTANCE")"
     start_vnc
     stop_desktop
@@ -190,10 +228,14 @@ test_switch() {
     # refused on older devices.
     start_x11
     stop_desktop
-    "${LFA[@]}" switch vnc -i "$INSTANCE" --remove-old >/tmp/lfa-e2e-switch-vnc.log 2>&1
+    "${LFA[@]}" switch vnc -i "$INSTANCE" --remove-old >$WORK/lfa-e2e-switch-vnc.log 2>&1
     check_contains "vnc backend selected" 'SERVER="vnc"' "$(conf_for "$INSTANCE")"
     if [ "$SDK" -ge 26 ]; then
-        check_contains "x11 packages removed" "uninstall -y termux-x11-nightly" /tmp/lfa-e2e-switch-vnc.log
+        if other_x11_instance; then
+            check_contains "x11 packages kept for the other instance" "keeping the host packages" $WORK/lfa-e2e-switch-vnc.log
+        else
+            check_contains "x11 packages removed" "uninstall -y termux-x11-nightly" $WORK/lfa-e2e-switch-vnc.log
+        fi
     fi
 }
 
@@ -209,9 +251,9 @@ run_install() {
     [ "$BACKEND" = "none" ] || _args+=(--backend "$BACKEND")
     [ "$SCENARIO" = "software" ] && _args+=(--software "python,git,htop")
     if ! LFA_NONINTERACTIVE=1 LFA_ASSUME_YES=1 LFA_VNC_PASSWORD="$VNC_PASSWORD" \
-        "${LFA[@]}" "${_args[@]}" >/tmp/lfa-e2e-install.log 2>&1; then
+        "${LFA[@]}" "${_args[@]}" >$WORK/lfa-e2e-install.log 2>&1; then
         bad "lfa install failed"
-        tail -n 60 /tmp/lfa-e2e-install.log >&2 || true
+        tail -n 60 $WORK/lfa-e2e-install.log >&2 || true
         return 1
     fi
     ok "lfa install completed"
@@ -220,8 +262,8 @@ run_install() {
         check_contains "desktop recorded" "DE=\"$DESKTOP\"" "$(conf_for "$INSTANCE")"
         check_contains "backend recorded" "SERVER=\"$BACKEND\"" "$(conf_for "$INSTANCE")"
     fi
-    "${LFA[@]}" status -i "$INSTANCE" >/tmp/lfa-e2e-status-text.log 2>&1
-    check_contains "status is readable" "instance:" /tmp/lfa-e2e-status-text.log
+    "${LFA[@]}" status -i "$INSTANCE" >$WORK/lfa-e2e-status-text.log 2>&1
+    check_contains "status is readable" "instance:" $WORK/lfa-e2e-status-text.log
 }
 
 main() {
@@ -257,6 +299,8 @@ main() {
         printf '\nPASS=%s FAIL=%s\n' "$PASS" "$FAIL"
         return 1
     fi
+    [ -n "$USER_NAME" ] || USER_NAME="$(conf_value USER_NAME)"
+    [ -n "$USER_NAME" ] || USER_NAME=user
 
     test_cli_surface || true
 
@@ -291,8 +335,8 @@ main() {
 
     if [ "$DIAGNOSTICS" = "1" ]; then
         say "Diagnostics bundle"
-        "${LFA[@]}" diagnostics >/tmp/lfa-e2e-diagnostics.log 2>&1 && ok "diagnostics bundle created" || bad "diagnostics failed"
-        check_contains "diagnostics path" "Diagnostics written to:" /tmp/lfa-e2e-diagnostics.log
+        "${LFA[@]}" diagnostics >$WORK/lfa-e2e-diagnostics.log 2>&1 && ok "diagnostics bundle created" || bad "diagnostics failed"
+        check_contains "diagnostics path" "Diagnostics written to:" $WORK/lfa-e2e-diagnostics.log
     fi
 
     printf '\nPASS=%s FAIL=%s\n' "$PASS" "$FAIL"

@@ -1,32 +1,68 @@
 # Test report for v1.7.1
 
-> Current development suite: `PASS=545 FAIL=0`.
+> Current development suite: `PASS=550 FAIL=0`.
 
 ## Android CI, SDK cutoffs, and compatibility layers, 2026-11-05
 
-Host verification only. The emulator workflow is new and has not run on
-GitHub Actions yet; no phone was reachable during this pass, so the
-on-device assertions remain unexecuted.
+Verified on the Vivo V2437 (Android 16, SDK 36, aarch64, Termux 0.118.3,
+proot-distro 5.10.3) and on the host. The emulator workflow is new and has
+not run on GitHub Actions yet. The Oppo A37fw (Android 5.1, SDK 22) was off
+the network during this pass, so the legacy-device rows remain pending.
 
 | Check | Result |
 |---|---|
-| Host suite (`./tests/test-all.sh`) | `PASS=545 FAIL=0` |
+| Host suite (`./tests/test-all.sh`) | `PASS=550 FAIL=0` |
+| On-device VNC scenario (`termux-e2e.sh`) | `PASS=14 FAIL=0` |
+| On-device Both → VNC/X11 switch | `PASS=22 FAIL=0` |
+| On-device X11 scenario | `PASS=14 FAIL=0` |
 | `bash -n` on the installer, libraries, tests, and CI helpers | clean |
 | Matrix generator (`smoke` / `reduced` / `full`) | 6 / 23 / 674 scenarios, sharding validated |
 | Python helpers | `py_compile` clean |
 | SDK 24/25 boundary | X11 and Both refused; VNC selected; legacy repo path not used |
-| `lfa compat` | list/status/explain/enable/disable; shims written with an explicit `LFA compatibility shim` marker |
-| `lfa android` | status/install/permissions/test/refresh/enable/disable/pump; bridge files under `$PREFIX/tmp` |
-| `lfa install --software` | maps names to the existing software selector |
+| `lfa compat` | systemctl, logind, upower, snap, and bwrap enabled and exercised; CPU Vulkan installed lavapipe; Alpine OpenCL refused honestly |
+| `lfa android` | battery, clipboard, and notification bridge exercised; stalled Termux:API calls now time out instead of hanging |
+| `lfa install --software` | Alpine CLI install with `python,git,htop`; `software-probe.sh` `PASS=12 FAIL=0 SKIP=10` |
+| VirGL fallback | device GLX context failure detected; instance switched to llvmpipe; `xfwm4` stayed running |
+
+### Device scenarios
+
+| Scenario | Result |
+|---|---|
+| VNC start/stop | RFB port 5901 listening, Xvnc and xfce4-session running, port closed after stop |
+| Both switch | VNC start, X11 start, X11 socket and `xdpyinfo`, switch back to VNC, shared Termux:X11 kept for the other instance |
+| Android bridge | `lfa android status/test/refresh`, battery data, clipboard wrapper, queued notification and `pump` |
+| Compatibility shims | `loginctl list-sessions`, `upower -d`, `snap list`, `bwrap -- /bin/echo`, `systemctl start/stop` |
+| Software | `lfa install --software python,git,htop`; Python 3.14.10, Git 2.54.0, htop 3.5.3 |
+| VirGL failure | initial xfwm4 `BadValue` with virpipe, automatic `NEED_VIRGL="0"` restart, llvmpipe GLX and live `xfwm4` |
+
+### Device findings fixed in this pass
+
+1. The E2E harness wrote logs to `/tmp`, which is read-only on Android; moved
+   to `$TMPDIR`/`$PREFIX/tmp`.
+2. `lfa status` crashed on a fresh install because its PID helper existed only
+   in the generated launcher library.
+3. X11 was reported as running for every instance because the check was global.
+4. `start-linux --vnc` claimed success when port 5901 was not listening, and a
+   VNC server owned by another instance was mistaken for this one.
+5. VNC attached to a leftover Termux:X11 server on display `:1`, so `xfwm4`
+   died with a GLX `BadValue`; each start now frees `:1` from the other backend.
+6. VirGL could be present but unable to create a GLX context; LFA now falls
+   back to llvmpipe once and records `NEED_VIRGL="0"`.
+7. Termux:API helpers could hang the CLI; probes now time out and refresh only
+   touches enabled capabilities.
+8. `lfa compat status` showed `rootfs` instead of the instance name, and a
+   failed Vulkan/OpenCL package install still marked the shim enabled.
+9. `lfa remove` exited silently without deleting the instance because Android
+   `du` returned non-zero while still printing a size; the size probe is now
+   best-effort and the host suite covers the failure (`P2`).
 
 ### Device/emulator verification still required
 
 - The PR smoke matrix on GitHub Actions (6 scenarios).
-- Real VNC RFB handshake and framebuffer probe (`vnc-probe.py`).
-- Real X11 `xdpyinfo` check and desktop process check.
-- Both → VNC/X11 switching with `--remove-old` on a real guest.
-- Android 5/6 and Android 7.0/7.1 refusal paths.
-- Software probe pass/fail entries.
+- Android 5/6 and Android 7.0/7.1 refusal paths on real devices or emulators.
+- Real VNC RFB handshake and framebuffer pixel probe (`vnc-probe.py`) on the
+  emulator image.
+- The full 674-scenario sharded matrix.
 
 The intended evidence is uploaded by `collect-artifacts.sh`: logcat,
 `getprop`, a screenshot, `lfa-diagnostics.tar.gz`, `termux-logs.tar.gz`, and

@@ -7,13 +7,14 @@ Status values:
 
 | Status | Meaning |
 |---|---|
-| `done` | code changed, suite green (`PASS=545 FAIL=0`), lint clean |
+| `done` | code changed, suite green (`PASS=550 FAIL=0`), lint clean |
 | `partial` | the main risk is addressed; a documented remainder is listed |
 | `deferred` | deliberately not fixed in this pass, with the reason recorded |
 | `device` | also exercised on the Vivo V2437 |
 
 Verification environment: Vivo V2437, Android 16 (SDK 36), aarch64, Termux
-`u0_a302` at `10.26.39.163:8022`, and the host suite on Linux.
+`u0_a302` over SSH, and the host suite on Linux. The Oppo A37fw (SDK 22) was
+off the network during the 2026-11-05 pass.
 
 ## Summary
 
@@ -52,8 +53,8 @@ Lint: `shellcheck -S warning` clean, `bash -n` clean, CI workflow added.
 | Android 5/6 refusal | `done` | explicit explanation, `--remove-old` warning, VNC restore command |
 | `start-linux` notice | `done` | stderr, interactive classic runs only; `lfa notice`, `--no-notice`, `LFA_NO_NOTICE` |
 | Boot script ownership | `done` | switching a non-autostart instance no longer hijacks another instance's boot script |
-| Host suite | `done` | `PASS=545 FAIL=0`; Y1-Y9 cover CLI, switch, removal, guard, `-i`, legacy, SDK 24/25, compat/android, matrix |
-| Device verification | `partial` | host suite only for the new surfaces; repeat switch/refusal matrix on Vivo and Oppo next device pass |
+| Host suite | `done` | `PASS=550 FAIL=0`; Y1-Y9 cover CLI, switch, removal, guard, `-i`, legacy, SDK 24/25, compat/android, matrix |
+| Device verification | `done` | Vivo V2437 (SDK 36): VNC `PASS=14`, Both switch `PASS=22`, X11 `PASS=14`, VirGL fallback, shims, bridge, `--software`; Oppo SDK 22 pending (off network) |
 
 ## Android CI and compatibility layers (2026-11-05)
 
@@ -69,7 +70,8 @@ Lint: `shellcheck -S warning` clean, `bash -n` clean, CI workflow added.
 | CI docs | `done` | `docs/CI-ANDROID.md`, `docs/INCOMPATIBLE.md` |
 | Host suite | `done` | new Y7-Y9 cases for SDK 24/25, compat/android, matrix generator |
 | Emulator run | `pending` | workflow has not run on GitHub Actions yet |
-| Device run | `pending` | no phone reachable; repeat on Vivo/Oppo when available |
+| Device run | `done` | Vivo V2437 (SDK 36): VNC, Both switch, X11, VirGL→llvmpipe fallback, shims, Android bridge, software install/probe |
+| Legacy device run | `pending` | Oppo A37fw (SDK 22) was off the network; repeat refusal/VNC checks when reachable |
 
 ## Security
 

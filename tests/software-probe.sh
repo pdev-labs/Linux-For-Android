@@ -14,6 +14,14 @@ set -uo pipefail
 
 DISTRO="${LFA_E2E_DISTRO:-debian}"
 INSTANCE="${LFA_E2E_INSTANCE:-ci-$DISTRO}"
+PD_BASE="$PREFIX/var/lib/proot-distro"
+if [ -d "$PD_BASE/containers/$INSTANCE/rootfs" ]; then
+    PROBE_ROOTFS="$PD_BASE/containers/$INSTANCE/rootfs"
+else
+    PROBE_ROOTFS="$PD_BASE/installed-rootfs/$INSTANCE"
+fi
+USER_NAME="${USER_NAME:-$(sed -n 's/^USER_NAME="\(.*\)"$/\1/p' "$PROBE_ROOTFS/etc/termux-linux-manager.conf" 2>/dev/null | head -n1)}"
+USER_NAME="${USER_NAME:-user}"
 PASS=0
 FAIL=0
 SKIP=0

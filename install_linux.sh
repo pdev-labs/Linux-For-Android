@@ -1732,7 +1732,7 @@ SHIM
             lfa_compat_install_pkgs "$_id" || true
             ;;
     esac
-    echo "[*] Enabled LFA compatibility shim '$_id' for $(basename "$_root")."
+    echo "[*] Enabled LFA compatibility shim '$_id' for $(basename "$(dirname "$_root")")."
 }
 
 lfa_compat_install_pkgs() {  # $1 = vulkan|opencl
@@ -1757,19 +1757,27 @@ lfa_compat_install_pkgs() {  # $1 = vulkan|opencl
     case "$_distro" in
         ubuntu|debian|kali)
             if [ "$_kind" = "vulkan" ]; then
-                guest_install_pkgs mesa-vulkan-drivers vulkan-tools || true
+                guest_install_pkgs mesa-vulkan-drivers vulkan-tools || return 1
             else
-                guest_install_pkgs pocl-opencl-icd clinfo || true
+                guest_install_pkgs pocl-opencl-icd clinfo || return 1
             fi ;;
         fedora)
-            if [ "$_kind" = "vulkan" ]; then guest_install_pkgs mesa-vulkan-drivers vulkan-tools || true
-            else guest_install_pkgs pocl clinfo || true; fi ;;
+            if [ "$_kind" = "vulkan" ]; then guest_install_pkgs mesa-vulkan-drivers vulkan-tools || return 1
+            else guest_install_pkgs pocl clinfo || return 1; fi ;;
         archlinux)
-            if [ "$_kind" = "vulkan" ]; then guest_install_pkgs vulkan-swrast vulkan-tools || true
-            else guest_install_pkgs pocl clinfo || true; fi ;;
+            if [ "$_kind" = "vulkan" ]; then guest_install_pkgs vulkan-swrast vulkan-tools || return 1
+            else guest_install_pkgs pocl clinfo || return 1; fi ;;
+        alpine)
+            if [ "$_kind" = "vulkan" ]; then
+                guest_install_pkgs mesa-vulkan-swrast vulkan-loader vulkan-tools || return 1
+            else
+                echo "[i] Alpine has no POCL package for this architecture." >&2
+                echo "    Install an OpenCL ICD manually, or use the CPU Vulkan path (lavapipe)." >&2
+                return 2
+            fi ;;
         *)
-            echo "[i] Install the software $([ "$_kind" = vulkan ] && echo 'Vulkan (lavapipe)' || echo 'OpenCL (POCL)') packages with your distro package manager."
-            return 0 ;;
+            echo "[i] Install the software $([ "$_kind" = vulkan ] && echo 'Vulkan (lavapipe)' || echo 'OpenCL (POCL)') packages with your distro package manager." >&2
+            return 2 ;;
     esac
 }
 
@@ -1788,7 +1796,7 @@ lfa_compat_remove_shims() {  # $1 = id
     _f="$_root/$_rel"
     if [ -f "$_f" ] && grep -q 'LFA compatibility shim' "$_f" 2>/dev/null; then
         rm -f "$_f"
-        echo "[*] Removed $_rel from $(basename "$_root")."
+        echo "[*] Removed $_rel from $(basename "$(dirname "$_root")")."
     fi
 }
 
@@ -1818,7 +1826,7 @@ lfa_cli_compat() {
         status)
             local _root
             _root="$(lfa_shim_rootfs 2>/dev/null || true)"
-            echo "Compatibility state${_root:+ (target: $(basename "$_root"))}"
+            echo "Compatibility state${_root:+ (target: $(basename "$(dirname "$_root")"))}"
             printf '  %-12s %-8s %s\n' "ID" "STATE" "QUALITY"
             lfa_list_manifest | while IFS='|' read -r _i _n _s _q _r _d; do
                 [ "$_i" = "systemctl" ] || [ "$_i" = "logind" ] || [ "$_i" = "upower" ] || \
@@ -1877,10 +1885,16 @@ lfa_cli_compat() {
             local _entry_name
             _entry_name="$(lfa_manifest_field "$_id" 2)"
             [ -n "$_entry_name" ] || { echo "No compatibility entry named '$_id'." >&2; return 1; }
-            lfa_compat_state_set "$_id" 1
             if [ "$_id" = "vulkan" ] || [ "$_id" = "opencl" ]; then
-                lfa_compat_install_pkgs "$_id"
+                if ! lfa_compat_install_pkgs "$_id"; then
+                    lfa_compat_state_set "$_id" 0
+                    echo "[!] '$_id' was not enabled: the software packages could not be installed." >&2
+                    return 1
+                fi
+                lfa_compat_state_set "$_id" 1
+                echo "[*] Enabled LFA compatibility shim '$_id'."
             else
+                lfa_compat_state_set "$_id" 1
                 lfa_compat_apply_shims "$_id"
             fi
             ;;
@@ -1892,6 +1906,43 @@ lfa_cli_compat() {
             ;;
         *) echo "Unknown compat command: $_sub" >&2; echo "Usage: lfa compat list|status|explain ID|enable ID|disable ID" >&2; return 2 ;;
     esac
+}
+
+lfa_android_pm_has() {  # $1 = package name
+    local _pkgs=""
+    command -v pm >/dev/null 2>&1 || return 1
+    if command -v timeout >/dev/null 2>&1; then
+        _pkgs="$(timeout 5 pm list packages 2>/dev/null || true)"
+    else
+        _pkgs="$(pm list packages 2>/dev/null || true)"
+    fi
+    case "$_pkgs" in *"$1"*) return 0 ;; esac
+    return 1
+}
+
+# A Termux:API helper can block forever when the app was killed or a
+# permission dialog is waiting. Never let a bridge probe hang the CLI.
+lfa_android_timeout() {  # $1 = seconds, rest = command
+    local _secs="$1"
+    shift
+    if command -v timeout >/dev/null 2>&1; then
+        timeout "$_secs" "$@"
+    else
+        "$@"
+    fi
+}
+
+# The Termux:API app can be asleep when the first broadcast arrives. One
+# short probe plus one longer retry separates "waking up" from "unavailable"
+# without letting a dead app hang the CLI.
+lfa_android_battery_json() {
+    local _out
+    _out="$(lfa_android_timeout 8 termux-battery-status 2>/dev/null || true)"
+    if [ -z "$_out" ]; then
+        sleep 1
+        _out="$(lfa_android_timeout 12 termux-battery-status 2>/dev/null || true)"
+    fi
+    printf '%s' "$_out"
 }
 
 lfa_android_cmd() {
@@ -1927,7 +1978,7 @@ HELP
         status)
             local _pkg=0 _app=0 _cap _v
             command -v termux-battery-status >/dev/null 2>&1 && _pkg=1
-            if command -v pm >/dev/null 2>&1 && pm list packages 2>/dev/null | grep -q 'com.termux.api'; then _app=1; fi
+            lfa_android_pm_has 'com.termux.api' && _app=1
             echo "Android bridge"
             echo "  termux-api package: $([ "$_pkg" = 1 ] && echo installed || echo missing)"
             echo "  Termux:API app:     $([ "$_app" = 1 ] && echo installed || echo not detected)"
@@ -1969,7 +2020,7 @@ HELP
             }
             mkdir -p "$_bridge" 2>/dev/null || true
             local _json _pct _state
-            _json="$(termux-battery-status 2>/dev/null || true)"
+            _json="$(lfa_android_battery_json)"
             if [ -n "$_json" ]; then
                 printf '%s\n' "$_json" > "$_bridge/lfa-android-battery.json"
                 _pct="$(printf '%s' "$_json" | sed -n 's/.*"percentage"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' | head -n1)"
@@ -1981,16 +2032,23 @@ HELP
                 } > "$_bridge/lfa-android-battery.env"
                 echo "[*] battery: ${_pct:-unknown}% ${_state:-unknown}"
             else
-                echo "[!] Battery probe returned nothing (permission or app missing)." >&2
+                echo "[!] Battery probe returned nothing (permission, app missing, or timed out)." >&2
             fi
-            if command -v termux-location >/dev/null 2>&1; then
-                termux-location -p network > "$_bridge/lfa-android-location.json" 2>/dev/null || true
+            # Only probe capabilities the user turned on. Location and
+            # clipboard can each wait on a permission prompt.
+            if [ "$(lfa_android_state_get location 2>/dev/null || echo 0)" = "1" ] && \
+               command -v termux-location >/dev/null 2>&1; then
+                lfa_android_timeout 12 termux-location -p network \
+                    > "$_bridge/lfa-android-location.json" 2>/dev/null || true
+                if command -v termux-wifi-connectioninfo >/dev/null 2>&1; then
+                    lfa_android_timeout 5 termux-wifi-connectioninfo \
+                        > "$_bridge/lfa-android-wifi.json" 2>/dev/null || true
+                fi
             fi
-            if command -v termux-clipboard-get >/dev/null 2>&1; then
-                termux-clipboard-get > "$_bridge/lfa-android-clipboard.txt" 2>/dev/null || true
-            fi
-            if command -v termux-wifi-connectioninfo >/dev/null 2>&1; then
-                termux-wifi-connectioninfo > "$_bridge/lfa-android-wifi.json" 2>/dev/null || true
+            if [ "$(lfa_android_state_get clipboard 2>/dev/null || echo 0)" = "1" ] && \
+               command -v termux-clipboard-get >/dev/null 2>&1; then
+                lfa_android_timeout 5 termux-clipboard-get \
+                    > "$_bridge/lfa-android-clipboard.txt" 2>/dev/null || true
             fi
             lfa_android_pump
             ;;
@@ -2002,7 +2060,7 @@ HELP
                 return 1
             fi
             local _b
-            _b="$(termux-battery-status 2>/dev/null || true)"
+            _b="$(lfa_android_battery_json)"
             if printf '%s' "$_b" | grep -q '"percentage"'; then
                 echo "PASS: battery -> $(printf '%s' "$_b" | tr -d '\n' | cut -c1-120)"
             else
@@ -2045,13 +2103,13 @@ HELP
 }
 
 lfa_android_apply_wrappers() {  # $1 = capability
-    local _root _rel
+    local _root _rel _file="" _hint=""
     _root="$(lfa_shim_rootfs 2>/dev/null)" || _root=""
     [ -n "$_root" ] || { echo "[i] No distro selected; wrappers will be installed on the next enable -i NAME."; return 0; }
     case "$1" in
-        battery) _rel="usr/local/bin/lfa-android-battery" ;;
-        location) _rel="usr/local/bin/lfa-android-location" ;;
-        clipboard) _rel="usr/local/bin/lfa-android-clipboard" ;;
+        battery) _rel="usr/local/bin/lfa-android-battery"; _file="/tmp/lfa-android-battery.env"; _hint="battery" ;;
+        location) _rel="usr/local/bin/lfa-android-location"; _file="/tmp/lfa-android-location.json"; _hint="location" ;;
+        clipboard) _rel="usr/local/bin/lfa-android-clipboard"; _file="/tmp/lfa-android-clipboard.txt"; _hint="clipboard" ;;
         notifications) _rel="usr/local/bin/lfa-android-notify" ;;
         *) return 0 ;;
     esac
@@ -2067,14 +2125,10 @@ echo "lfa-android-notify: queued (run 'lfa android pump' on the Termux side)." >
 SHIM
         return 0
     fi
-    lfa_shim_write "$_root" "$_rel" <<'SHIM'
+    lfa_shim_write "$_root" "$_rel" <<SHIM
 #!/bin/sh
 # LFA Android bridge (reads the shared /tmp file written by Termux:API).
-case "$1" in
-  battery) cat /tmp/lfa-android-battery.env 2>/dev/null || { echo "battery bridge has no data; run 'lfa android refresh'." >&2; exit 1; } ;;
-  location) cat /tmp/lfa-android-location.json 2>/dev/null || { echo "location bridge has no data; run 'lfa android refresh'." >&2; exit 1; } ;;
-  clipboard) cat /tmp/lfa-android-clipboard.txt 2>/dev/null || { echo "clipboard bridge has no data; run 'lfa android refresh'." >&2; exit 1; } ;;
-esac
+cat "$_file" 2>/dev/null || { echo "$_hint bridge has no data; run 'lfa android refresh'." >&2; exit 1; }
 SHIM
 }
 
@@ -2102,9 +2156,45 @@ lfa_android_pump() {
         local _base="${_f%.title}" _title _body
         _title="$(cat "$_f" 2>/dev/null || true)"
         _body="$(cat "$_base.body" 2>/dev/null || true)"
-        termux-notification --title "$_title" --content "$_body" >/dev/null 2>&1 || true
+        lfa_android_timeout 8 termux-notification --title "$_title" --content "$_body" >/dev/null 2>&1 || true
         rm -f "$_f" "$_base.body"
     done
+}
+
+# The CLI runs from the private runtime copy, not from the generated
+# lfa-lib.sh. Keep these two helpers here as well so `lfa status` works on a
+# fresh install (they are also written into lfa-lib.sh for the launchers).
+lfa_pid_matches() {   # $1 = pid, rest = patterns that must appear in cmdline
+    local _pid="$1" _cmd _pat
+    shift
+    [ -n "$_pid" ] || return 1
+    kill -0 "$_pid" 2>/dev/null || return 1
+    _cmd="$(tr '\0' ' ' < "/proc/$_pid/cmdline" 2>/dev/null)" || return 1
+    [ -n "$_cmd" ] || return 1
+    for _pat in "$@"; do
+        case "$_cmd" in *"$_pat"*) return 0 ;; esac
+    done
+    return 1
+}
+
+# Termux:X11 is global, but a desktop belongs to one instance. A running
+# X server must not make every installed distro look like it is running.
+lfa_instance_session_running() {  # $1 = instance
+    local _inst="$1" _c _cmd
+    [ -n "$_inst" ] || return 1
+    for _c in /proc/[0-9]*/cmdline; do
+        [ -r "$_c" ] || continue
+        _cmd="$(tr '\0' ' ' < "$_c" 2>/dev/null)" || continue
+        case "$_cmd" in
+            *"/containers/$_inst/"*|*"/installed-rootfs/$_inst/"*)
+                # A terminal login also contains the instance path. Only
+                # count a real desktop session for the X11 running state.
+                case "$_cmd" in
+                    *startxfce4*|*startlxde*|*mate-session*|*gnome-shell*|*start-gnome-session*) return 0 ;;
+                esac ;;
+        esac
+    done
+    return 1
 }
 
 lfa_cli_status_one() {  # $1 = instance, $2 = json
@@ -2122,7 +2212,11 @@ lfa_cli_status_one() {  # $1 = instance, $2 = json
         _pid="$(cat "$PREFIX/tmp/lfa-vnc-$_inst.pid" 2>/dev/null || true)"
         if lfa_pid_matches "$_pid" "proot" "Xvnc"; then _run="vnc"; fi
     fi
-    if pgrep -f '^termux-x11 .* :1( |$)' >/dev/null 2>&1; then _run="x11"; fi
+    if [ "$_run" = "none" ] && \
+       pgrep -f '^termux-x11 .* :1( |$)' >/dev/null 2>&1 && \
+       lfa_instance_session_running "$_inst"; then
+        _run="x11"
+    fi
     if [ "$_json" = "1" ]; then
         printf '{"instance":"%s","distro":"%s","desktop":"%s","backend":"%s","autostart":"%s","running":"%s"}\n' \
             "$_inst" "$_d" "$_de" "$_srv" "$_auto" "$_run"
@@ -3006,9 +3100,12 @@ remove_x11_backend() {  # $1 = force (0/1)
     local _force="${1:-0}"
     if x11_used_by_another_instance "$INSTANCE_NAME"; then
         if [ "$_force" != "1" ]; then
-            echo "[!] Another installed distro still uses Termux:X11." >&2
-            echo "    Remove both backends from it first, or use --force." >&2
-            return 1
+            # Termux:X11 is a host package shared by every instance. Keeping
+            # it installed does not stop this instance from using VNC, and
+            # removing it would break the other distro's desktop.
+            echo "[i] Termux:X11 is still used by another installed distro; keeping the host packages."
+            echo "    This instance will use VNC only. Use --force to remove them anyway."
+            return 0
         fi
         echo "[!] --force: removing Termux:X11 while another distro still uses it."
     fi
@@ -3882,6 +3979,118 @@ lfa_clear_stale_x1() {
     lfa_x1_server_pid >/dev/null 2>&1 && return 0
     rm -f "$PREFIX/tmp/.X11-unix/X1" "$PREFIX/tmp/.X1-lock" 2>/dev/null || true
 }
+# Display :1 is a singleton. Starting one backend while the other still owns
+# :1 makes the guest attach its desktop to the wrong X server: Xvnc then
+# serves a display whose window manager dies with a GLX BadValue, or
+# Termux:X11 shows only the root cursor. Free the display from the other
+# backend first. Only the process holding :1 is touched.
+lfa_stop_termux_x11() {
+    local _p
+    for _p in $(pgrep -f '^termux-x11 .* :1( |$)' 2>/dev/null); do
+        kill "$_p" 2>/dev/null || true
+    done
+    sleep 1
+    for _p in $(pgrep -f '^termux-x11 .* :1( |$)' 2>/dev/null); do
+        kill -9 "$_p" 2>/dev/null || true
+    done
+}
+lfa_stop_vnc_display() {
+    local _inst _u
+    for _inst in $(lfa_instances); do
+        _u="$(sed -n 's/^USER_NAME="\(.*\)"$/\1/p' "$(lfa_conf "$_inst")" 2>/dev/null | head -n 1)"
+        [ -n "$_u" ] || _u=user
+        # A wedged guest must not block the next backend from starting.
+        # shellcheck disable=SC2086  # NO_SYSVIPC is empty or one flag
+        if command -v timeout >/dev/null 2>&1; then
+            timeout 15 proot-distro login ${NO_SYSVIPC:-} "$_inst" --user "$_u" --shared-tmp -- \
+                bash -c "vncserver -kill :1" >/dev/null 2>&1 || true
+        else
+            proot-distro login ${NO_SYSVIPC:-} "$_inst" --user "$_u" --shared-tmp -- \
+                bash -c "vncserver -kill :1" >/dev/null 2>&1 || true
+        fi
+    done
+    pkill -f '^/usr/bin/Xvnc :1( |$)' 2>/dev/null || true
+    pkill -f '^/usr/bin/Xtigervnc :1( |$)' 2>/dev/null || true
+    pkill -f '^/usr/bin/vncserver :1( |$)' 2>/dev/null || true
+    pkill -f '^/usr/bin/perl /usr/bin/vncserver :1( |$)' 2>/dev/null || true
+    rm -f "$PREFIX/tmp/lfa-vnc-"*.pid 2>/dev/null || true
+    sleep 1
+}
+lfa_free_display_for() {  # $1 = backend about to start (x11|vnc)
+    local _owner _cmd
+    _owner="$(lfa_x1_server_pid 2>/dev/null || true)"
+    if [ -n "$_owner" ]; then
+        _cmd="$(tr '\0' ' ' < "/proc/$_owner/cmdline" 2>/dev/null)"
+        case "$1" in
+            x11)
+                case "$_cmd" in
+                    *Xvnc*|*Xtigervnc*)
+                        echo "Stopping VNC on display :1 so Termux:X11 can use it..."
+                        lfa_stop_vnc_display ;;
+                esac ;;
+            vnc)
+                case "$_cmd" in
+                    *termux-x11*)
+                        echo "Stopping Termux:X11 on display :1 so VNC can use it..."
+                        lfa_stop_termux_x11 ;;
+                esac ;;
+        esac
+    fi
+    lfa_clear_stale_x1
+}
+# VirGL can be present but unusable. Some Android GPU drivers expose
+# virgl_test_server_android while GLX context creation still fails; the
+# window manager then dies with "Could not create GLX context" and the
+# desktop has no decorations. Watch the session log, and retry once with
+# software rendering, recording the choice in the instance config so later
+# starts skip the broken path.
+lfa_virgl_watch() {  # $1=instance $2=backend $3...=logs
+    local _inst="$1" _backend="$2" _conf _f _i _found=0 _lock _old
+    shift 2
+    [ "${NEED_VIRGL:-1}" = "1" ] || return 0
+    # A start can be repeated quickly (menu, scripts, tests). Only one
+    # watcher per instance/backend may act, or two fallbacks can stop each
+    # other's fresh session.
+    _lock="$PREFIX/tmp/lfa-virgl-$_inst-$_backend.lock"
+    if ! mkdir "$_lock" 2>/dev/null; then
+        _old="$(cat "$_lock/pid" 2>/dev/null || true)"
+        if [ -n "$_old" ] && kill -0 "$_old" 2>/dev/null; then return 0; fi
+        rm -rf "$_lock" 2>/dev/null || true
+        mkdir "$_lock" 2>/dev/null || return 0
+    fi
+    echo "$$" > "$_lock/pid" 2>/dev/null || true
+    trap 'rm -rf "$_lock" 2>/dev/null || true' EXIT
+    for _i in 1 2 3 4 5 6 7 8 9 10 11 12; do
+        sleep 1
+        _found=0
+        for _f in "$@"; do
+            [ -f "$_f" ] || continue
+            if grep -qiE 'failed to create drisw screen|Could not create GLX context' "$_f" 2>/dev/null; then
+                _found=1
+                break
+            fi
+        done
+        [ "$_found" = "1" ] || continue
+        # Do not undo a deliberate stop: only retry while the desktop is
+        # still supposed to be up.
+        if [ "$_backend" = "vnc" ]; then
+            (exec 3<>/dev/tcp/127.0.0.1/5901) 2>/dev/null || return 0
+        else
+            pgrep -f '^termux-x11 .* :1( |$)' >/dev/null 2>&1 || return 0
+        fi
+        echo "[!] VirGL cannot create a GLX context; retrying $_inst with software rendering (llvmpipe)." >&2
+        _conf="$(lfa_conf "$_inst")"
+        sed -i 's/^NEED_VIRGL=.*/NEED_VIRGL="0"/' "$_conf" 2>/dev/null || true
+        if grep -q '^NEED_VIRGL="0"' "$_conf" 2>/dev/null; then
+            "$PREFIX/bin/stop-linux" -i "$_inst" >/dev/null 2>&1 || true
+            nohup "$PREFIX/bin/start-linux" -i "$_inst" --backend "$_backend" --desktop >/dev/null 2>&1 &
+            echo "[i] Restarted with llvmpipe. Re-enable VirGL from the installer if a driver update fixes it." >&2
+        else
+            echo "[!] Could not write NEED_VIRGL=0 to $_conf; not restarting." >&2
+        fi
+        return 0
+    done
+}
 # A pidfile can outlive its process: after a reboot the recorded PID may
 # belong to something completely unrelated. Verify the command line before
 # signalling anything.
@@ -4216,7 +4425,8 @@ if [ "$SERVER" == "x11" ]; then
     # A dead VNC server can leave /tmp/.X11-unix/X1 + /tmp/.X1-lock behind (all
     # distros share /tmp). Termux:X11 then refuses to start and clients talk to
     # a dead socket. Drop them only when no real X server holds display :1.
-    lfa_clear_stale_x1
+    # A live VNC server on :1 is stopped: only one backend can own the display.
+    lfa_free_display_for x11
     nohup termux-x11 :1 >/dev/null 2>&1 &
     # Wait for the socket instead of guessing: slow devices need longer,
     # fast ones should not be delayed.
@@ -4242,6 +4452,10 @@ if [ "$SERVER" == "x11" ]; then
     fi
     echo "If the screen stays on the X cursor, the desktop failed to start:"
     echo "  cat ~/start-linux-session.log   (inside the distro) for the reason."
+    (
+        lfa_virgl_watch "$DISTRO" x11 \
+            "$(lfa_rootfs "$DISTRO")/home/$X11_USER/start-linux-session.log"
+    ) &
 elif [ "$SERVER" == "vnc" ]; then
     echo "Starting VNC Server..."
     if [ -z "$RESOLUTION" ]; then RESOLUTION="1280x720"; fi
@@ -4250,7 +4464,16 @@ elif [ "$SERVER" == "vnc" ]; then
     if [ -f "$VNC_PIDFILE" ] && lfa_pid_matches "$(cat "$VNC_PIDFILE" 2>/dev/null)" "proot-distro" "proot"; then
         echo "VNC server is already running on port 5901."
     else
-        lfa_clear_stale_x1
+        # Port 5901 belongs to display :1 globally. If something else already
+        # serves it, starting here would "succeed" by connecting to that server
+        # and then claim a desktop this instance does not own.
+        if (exec 3<>/dev/tcp/127.0.0.1/5901) 2>/dev/null; then
+            echo "ERROR: port 5901 is already used by another VNC server." >&2
+            echo "Stop the instance that owns it (lfa list, then lfa stop -i NAME)." >&2
+            exit 1
+        fi
+        # Free display :1 from a live Termux:X11 session; VNC cannot share it.
+        lfa_free_display_for vnc
         # proot-distro uses --kill-on-exit: a daemonised Xvnc dies as soon as
         # the login command returns. Keep the login session alive in the
         # background so the VNC server (and its desktop) persists.
@@ -4269,9 +4492,17 @@ elif [ "$SERVER" == "vnc" ]; then
             printf '.'
             sleep 1
         done
-        (exec 3<>/dev/tcp/127.0.0.1/5901) 2>/dev/null || \
-            echo " (not listening yet - check $VNC_LOG)"
-        echo "VNC server started on port 5901 (log: $VNC_LOG)."
+        if (exec 3<>/dev/tcp/127.0.0.1/5901) 2>/dev/null; then
+            echo "VNC server started on port 5901 (log: $VNC_LOG)."
+            (
+                lfa_virgl_watch "$DISTRO" vnc "$VNC_LOG" \
+                    "$(lfa_rootfs "$DISTRO")/home/$VNC_USER"/.vnc/*.log
+            ) &
+        else
+            echo " (not listening)"
+            echo "ERROR: VNC server did not start. Read $VNC_LOG" >&2
+            exit 1
+        fi
     fi
 fi
 EOF
@@ -4577,7 +4808,12 @@ uninstall_linux() {
     local ROOTFS
     ROOTFS="$(pd_rootfs "$INSTANCE_NAME")"
     local SIZE=""
-    [ -d "$ROOTFS" ] && SIZE="$(du -sh "$ROOTFS" 2>/dev/null | awk '{print $1}')"
+    # `du` can print a size and still exit non-zero on Android when a few
+    # entries are unreadable. Under set -e/pipefail that aborted the whole
+    # removal silently, so the size is best-effort.
+    if [ -d "$ROOTFS" ]; then
+        SIZE="$(du -sh "$ROOTFS" 2>/dev/null | awk '{print $1}' || true)"
+    fi
     local STATE="ok"
     [ -x "$ROOTFS/bin/sh" ] || [ -L "$ROOTFS/bin/sh" ] || [ -e "$ROOTFS/bin/sh" ] || STATE="incomplete (partial removal?)"
 

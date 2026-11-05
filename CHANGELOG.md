@@ -25,9 +25,11 @@ tag names, define the order. See the table at the bottom.
 - `lfa switch x11|vnc|both` changes the backend in place. `--remove-old`
   removes the packages of the backend being left, and `--keep-packages` is
   the default. The new backend is installed before anything is removed.
-- `lfa switch` refuses to remove Termux:X11 while another installed distro
-  still uses it, unless `--force` is given. VNC removal also deletes the
-  per-user `.vnc` and `.config/tigervnc` directories.
+- `lfa switch` keeps the shared Termux:X11 host package when another
+  installed distro still uses it, and switches this instance anyway. `--force`
+  removes the package and warns that the other distro's desktop will break.
+  VNC removal also deletes the per-user `.vnc` and `.config/tigervnc`
+  directories.
 - Menu 14, Change Display Backend, wraps the same switch and removal logic.
 - A short change notice is printed by interactive `start-linux` runs. Hide it
   with `lfa notice off`, `start-linux --no-notice`, or `LFA_NO_NOTICE=1`;
@@ -77,6 +79,35 @@ tag names, define the order. See the table at the bottom.
 
 ### Fixed
 
+- `lfa status` failed on a fresh install because its PID helper only existed
+  in the generated launcher library, not in the CLI's private runtime. The
+  helper now lives in both. X11 is also reported only for the instance whose
+  rootfs is actually running, instead of for every installed distro.
+- `start-linux --vnc` printed "VNC server started" even when nothing was
+  listening on 5901. It now verifies the port, prints the log path, and exits
+  non-zero on failure. A VNC server owned by another instance is refused
+  instead of being mistaken for this one.
+- VNC and Termux:X11 both use display `:1`. A leftover server from the other
+  backend made the guest attach to the wrong X server, so xfwm4 died with a
+  GLX `BadValue` and the VNC desktop appeared without a window manager.
+  `start` now frees `:1` from the other backend before starting.
+- Some Android GPU drivers expose `virgl_test_server_android` but cannot
+  create a GLX context. The desktop now detects the failure in the session
+  log, switches that instance to llvmpipe, and restarts it once. The choice
+  is stored as `NEED_VIRGL="0"` so later starts are reliable.
+- Termux:API helpers can block forever when the app was killed or a
+  permission prompt is waiting. `lfa android test`, `refresh`, and `pump`
+  now apply short timeouts. `refresh` only probes location, clipboard, and
+  Wi-Fi when the matching capability is enabled.
+- `lfa compat status` printed `(target: rootfs)` instead of the instance
+  name, and `lfa compat enable vulkan|opencl` marked the shim enabled even
+  when no packages could be installed. The target label is fixed, Alpine's
+  lavapipe packages are supported, and a failed install leaves the shim
+  disabled.
+- `lfa remove` could exit silently without deleting anything. The size
+  preflight ran `du -sh` inside `set -e`/`pipefail`; Android's `du` can print
+  a size and still exit non-zero when a few entries are unreadable, which
+  aborted the function before the first prompt. The size is now best-effort.
 - Android 7.0/7.1 (SDK 24/25) was treated as fully modern and offered
   Termux:X11, Both, and GNOME even though all three require Android 8 (SDK 26).
   The package/repo cutoff (`IS_LEGACY`, SDK < 24) and the X11 cutoff
