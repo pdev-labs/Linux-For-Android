@@ -2467,6 +2467,7 @@ lfa_appimage_add() {
     lfa_appimage_write_add_script "$PREFIX/tmp/lfa-appimage-add.sh"
     echo "[*] Extracting $_name (large AppImages take a minute)..."
     _rc=0
+    # shellcheck disable=SC2046  # flag list, not one argument
     _out="$(proot-distro login $(pd_login_flags) "$_inst" --user "$_user" --shared-tmp -- \
         bash /tmp/lfa-appimage-add.sh "$_guest_src" "$_dest" "$_name" "${_sha:-unknown}" "$_file" 2>&1)" || _rc=$?
     rm -f "$_stage" 2>/dev/null || true
@@ -2611,6 +2612,7 @@ lfa_appimage_run() {
         lfa_appimage_ensure_env "$_id" || true
         echo "[*] Extracting and running $_target (install it to avoid this each time)..."
         local _rc=0
+        # shellcheck disable=SC2046  # flag list, not one argument
         proot-distro login $(pd_login_flags) "$_id" --user "$_user" --shared-tmp -- \
             bash -lc 'export APPIMAGE_EXTRACT_AND_RUN=1; export DISPLAY="${DISPLAY:-:1}"; exec "$1"' \
             _ "/tmp/$(basename "$_stage")" || _rc=$?
@@ -2629,6 +2631,7 @@ lfa_appimage_run() {
         echo "    Start it first: lfa start -i $_id" >&2
         return 1
     fi
+    # shellcheck disable=SC2046  # flag list, not one argument
     proot-distro login $(pd_login_flags) "$_id" --user "$_user" --shared-tmp -- \
         bash -lc 'export DISPLAY="${DISPLAY:-:1}"; exec "$1"' _ "$_dest/AppRun" || return $?
 }
