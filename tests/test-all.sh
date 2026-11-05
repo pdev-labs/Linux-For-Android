@@ -770,7 +770,15 @@ sh -n "$G11/usr/local/bin/code" && sh -n "$G11/usr/local/bin/chromium" \
 echo "===== N: apply latest fixes to an older distro ====="
 fresh_env
 NROOT="$T/prefix/var/lib/proot-distro/installed-rootfs/oldinst"
-mkdir -p "$NROOT/etc" "$NROOT/var/lib/dpkg" "$NROOT/home/user/.vnc" "$NROOT/root"
+mkdir -p "$NROOT/etc" "$NROOT/var/lib/dpkg" "$NROOT/home/user/.vnc" "$NROOT/root" "$NROOT/usr/bin"
+mkdir -p "$NROOT/home/user/.cache/sessions"
+printf 'stale session\n' > "$NROOT/home/user/.cache/sessions/stale-session"
+mkdir -p "$NROOT/etc/xdg/autostart"
+for _k in gnome-keyring-pkcs11 gnome-keyring-secrets gnome-keyring-ssh; do
+    printf '[Desktop Entry]\nType=Application\nName=%s\n' "$_k" > "$NROOT/etc/xdg/autostart/$_k.desktop"
+done
+printf '#!/bin/sh\nexit 0\n' > "$NROOT/usr/bin/gpgconf"
+chmod +x "$NROOT/usr/bin/gpgconf"
 printf 'DISTRO="debian"\nDE="xfce4"\nSERVER="vnc"\nRESOLUTION="1280x720"\nUPDATE_CMD="apt-get update"\nHOSTNAME="oldphone"\n' > "$NROOT/etc/termux-linux-manager.conf"
 cat > "$NROOT/home/user/.bashrc" <<'EOF'
 PS1='\u@\h:\w\$ '
@@ -791,6 +799,18 @@ check "N env cleanup" 'TERMUX' "$NROOT/etc/profile.d/zz-lfa-env.sh"
 check "N appimage env" 'APPIMAGE_EXTRACT_AND_RUN=1' "$NROOT/etc/profile.d/zz-lfa-env.sh"
 check "N login profile" 'linux-for-android profile' "$NROOT/home/user/.profile"
 check "N cursor helper" 'Gtk/CursorThemeName' "$NROOT/usr/local/bin/lfa-set-cursor"
+check "N gpgconf guard" 'gpg-connect-agent' "$NROOT/usr/local/bin/gpgconf"
+check "N gpgconf guard keeps real path" '/usr/bin/gpgconf' "$NROOT/usr/local/bin/gpgconf"
+check "N gpgconf guard handles launch" "--launch" "$NROOT/usr/local/bin/gpgconf"
+check "N gpgconf guard is versioned" "lfa-gpgconf-v3" "$NROOT/usr/local/bin/gpgconf"
+NX="$NROOT/home/user/.config/xfce4/xfconf/xfce-perchannel-xml/xfce4-session.xml"
+check "N session disables gpg-agent" 'name="gpg-agent"' "$NX"
+check "N session disables agents" 'value="false"' "$NX"
+check "N stop finds orphaned session" 'readlink "$_dir/cwd"' "$T/prefix/bin/stop-linux"
+check "N keyring autostart hidden" 'Hidden=true' "$NROOT/home/user/.config/autostart/gnome-keyring-secrets.desktop"
+check "N GNOME compat disabled" 'name="LaunchGNOME"' "$NX"
+check "N session save disabled" 'name="SaveOnExit"' "$NX"
+[ ! -e "$NROOT/home/user/.cache/sessions/stale-session" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: N stale session not cleared"; }
 [ -f "$NROOT/etc/xdg/autostart/lfa-cursor.desktop" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: N cursor autostart missing"; }
 check "N launcher updated" 'command -v dbus-launch' "$T/prefix/bin/start-linux"
 check "N xstartup updated" 'startxfce4' "$NROOT/home/user/.vnc/xstartup"
@@ -1053,6 +1073,8 @@ check "Y1 version" "Linux for Android Manager $LFA_EXPECTED_VERSION" "$T/y1-vers
 check "Y1 help switch" 'switch' "$T/y1-help.log"
 "$LFA" switch --help > "$T/y1-switch-help.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y1 switch help exit $rc"; }
 check "Y1 help notice" 'notice' "$T/y1-help.log"
+check "Y1 help fix" 'apply latest fixes' "$T/y1-help.log"
+check "Y1 fix dispatch" 'LFA_NONINTERACTIVE=1 LFA_CLI_MODE=1 upgrade_existing' "$T/prefix/lib/linux-for-android/install_linux.sh"
 "$LFA" list > "$T/y1-list.log" 2>&1
 check "Y1 list" 'debian' "$T/y1-list.log"
 "$LFA" status -i debian > "$T/y1-status.log" 2>&1

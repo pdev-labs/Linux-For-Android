@@ -1361,6 +1361,7 @@ Usage: lfa <command> [options]
   switch        change backend and optionally remove old packages
   autostart     set the boot backend
   update        update a distro
+  fix           apply latest fixes to an existing distro
   doctor        repair a distro
   backup        create a backup
   restore       restore a backup
@@ -2829,6 +2830,7 @@ lfa_cli() {
                     -b|--backend|--server) _a+=(--server "${2:-}"); shift 2 ;;
                     --x11) _a+=(--server x11); shift ;;
                     --vnc) _a+=(--server vnc); shift ;;
+                    --restart) _a+=(--restart); shift ;;
                     --desktop) shift ;;
                     --no-notice) shift ;;
                     *) echo "Unknown option: $1" >&2; return 2 ;;
@@ -2884,6 +2886,10 @@ lfa_cli() {
         update)
             while [ $# -gt 0 ]; do case "$1" in -i|--instance) CLI_INSTANCE="${2:-}"; shift 2 ;; *) echo "Unknown option: $1" >&2; return 2 ;; esac; done
             LFA_NONINTERACTIVE=1 LFA_CLI_MODE=1 update_linux ;;
+        fix)
+            while [ $# -gt 0 ]; do case "$1" in -i|--instance) CLI_INSTANCE="${2:-}"; shift 2 ;; *) echo "Unknown option: $1" >&2; return 2 ;; esac; done
+            require_proot_distro || return 1
+            LFA_NONINTERACTIVE=1 LFA_CLI_MODE=1 upgrade_existing ;;
         doctor)
             while [ $# -gt 0 ]; do case "$1" in -i|--instance) CLI_INSTANCE="${2:-}"; shift 2 ;; *) echo "Unknown option: $1" >&2; return 2 ;; esac; done
             LFA_NONINTERACTIVE=1 LFA_CLI_MODE=1 repair_linux ;;
@@ -5087,19 +5093,29 @@ if [ "$SERVER" = "x11" ] || [ "$SERVER" = "both" ]; then
     # The guest desktop is its own proot process. Killing the X server alone
     # leaves xfce4-session behind; the next start then has two session
     # managers on :1, no window manager, and only the root cross cursor.
+    # Match /proc/<pid>/cwd so an orphaned session (its proot wrapper died
+    # with the terminal) is still found and stopped.
     lfa_kill_guest_session() {
-        local _pid _cmd _round
+        local _pid _cmd _cwd _round _dir
         for _round in 1 2 3; do
-            for _pid in $(pgrep -f "/containers/$DISTRO/|/installed-rootfs/$DISTRO/" 2>/dev/null); do
-                _cmd="$(tr '\0' ' ' < "/proc/$_pid/cmdline" 2>/dev/null)" || continue
+            for _dir in /proc/[0-9]*; do
+                _pid=${_dir#/proc/}
+                [ -r "$_dir/cmdline" ] || continue
+                _cmd="$(tr '\0' ' ' < "$_dir/cmdline" 2>/dev/null)" || continue
                 case "$_cmd" in
-                    *startxfce4*|*startlxde*|*mate-session*|*start-gnome-session*)
-                        if [ "$_round" = "1" ]; then
-                            kill "$_pid" 2>/dev/null || true
-                        else
-                            kill -9 "$_pid" 2>/dev/null || true
-                        fi ;;
+                    *xfce4-session*|*xfwm4*|*xfdesktop*|*xfce4-panel*|*xfce4-power-manager*|*xfsettingsd*|*tumblerd*|*light-locker*|*startxfce4*|*startlxde*|*mate-session*|*start-gnome-session*|*gpg-agent*|*gpg-connect-agent*|*gnome-keyring*) ;;
+                    *) continue ;;
                 esac
+                _cwd="$(readlink "$_dir/cwd" 2>/dev/null)"
+                case "$_cwd" in
+                    "$PREFIX/var/lib/proot-distro/containers/$DISTRO"/*|"$PREFIX/var/lib/proot-distro/installed-rootfs/$DISTRO"/*) ;;
+                    *) continue ;;
+                esac
+                if [ "$_round" = "1" ]; then
+                    kill "$_pid" 2>/dev/null || true
+                else
+                    kill -9 "$_pid" 2>/dev/null || true
+                fi
             done
             [ "$_round" = "1" ] && sleep 2
         done

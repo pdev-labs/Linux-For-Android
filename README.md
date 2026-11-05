@@ -133,7 +133,7 @@ hardware, not simulated. Full details, root causes, and evidence are in
 | Alpine 3.18 (Android 5) | Yes | Yes | legacy VNC desktop, panel works; X11 and Both hidden | v1.7.1 |
 | Ubuntu GNOME 46 (experimental) | Yes | Yes | shell and apps run; session services missing | v1.7.0 |
 
-> The test suite runs `591` checks with 0 failures. The same suite runs on the
+> The test suite runs `604` checks with 0 failures. The same suite runs on the
 > devices (`tests/device-matrix.sh`). The table is as of v1.7.1. Ubuntu was
 > re-verified on v1.7.1, and Alpine 3.18 was re-verified on Android 5 on
 > 2026-11-04; the other rows were last verified on v1.7.0. A row is
@@ -326,6 +326,14 @@ as experimental only.
   instance is refused instead of starting a competing session, and
   `linux --restart` replaces a wedged one. This is what prevents the
   "two session managers, no window manager, cross cursor" state.
+  `lfa start --restart` forwards to the same flag.
+- A scoped `gpgconf` guard keeps `xfce4-session` from waiting forever on
+  `gpgconf --kill gpg-agent` under proot. Without it the session never reaches
+  `xfwm4` and the screen stays on the root cross cursor. A cursor-theme helper
+  runs from XDG autostart as a second line of defence.
+- GNOME compatibility and XFCE session restore are off for desktop sessions.
+  A keyring cannot be unlocked without PAM, and restoring the last session
+  kept bringing the locked-keyring prompt back on every login.
 - VNC uses a modern TigerVNC config, an `exec`-style desktop session, and a
   persistent proot keepalive so `--kill-on-exit` cannot kill the server. The
   keepalive is a single `exec sleep`, so `stop-linux` can terminate it.
@@ -442,6 +450,7 @@ is accepted.
 | `lfa switch` | switch `x11`, `vnc`, or `both`; see below |
 | `lfa autostart` | set boot desktop to `x11`, `vnc`, or `none` |
 | `lfa update` | update one distribution |
+| `lfa fix` | apply the latest manager fixes to one distribution, no menus |
 | `lfa doctor` | repair apt/dpkg and the manager files |
 | `lfa backup` | write `~/<instance>-backup.tar.gz` |
 | `lfa restore` | restore a backup file |
@@ -1421,7 +1430,7 @@ plus `script` from util-linux for the pty test, which is skipped if absent:
 
 ```bash
 chmod +x tests/test-all.sh
-./tests/test-all.sh   # expect: PASS=591 FAIL=0
+./tests/test-all.sh   # expect: PASS=604 FAIL=0
 ```
 
 The suite is deliberately stubbed. It cannot prove a desktop actually appears.

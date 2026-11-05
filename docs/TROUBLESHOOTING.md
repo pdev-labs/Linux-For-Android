@@ -546,6 +546,22 @@ starts a fresh one. `stop-linux` now kills the desktop session process, not
 only the X server, so a stale session cannot survive a stop or a backend
 switch.
 
+If the screen is still a lone cross cursor with exactly one session, check
+for a stuck session child:
+
+```bash
+ps -eo pid,ppid,stat,cmd | grep -E 'gpgconf|gpg-connect-agent'
+```
+
+`xfce4-session` runs `gpgconf --kill gpg-agent` and
+`gpgconf --launch gpg-agent` before it starts `xfwm4`. Under proot both can
+block forever, which is why the desktop never gets a window manager. Current
+versions disable GPG/SSH agent startup in the user's `xfce4-session` channel
+(`~/.config/xfce4/xfconf/xfce-perchannel-xml/xfce4-session.xml`) and also
+install `/usr/local/bin/gpgconf`, which stops the agent directly and starts
+nothing inside a GUI session. If you upgraded from an older version, run
+`lfa fix -i NAME` (or menu 12) once.
+
 ### 3.9 How do I switch between Termux:X11 and VNC?
 
 If both backends are installed, `linux` and `start-linux` show a desktop entry

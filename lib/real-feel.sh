@@ -166,6 +166,136 @@ chmod 644 "$R/etc/profile.d/00-lfa-welcome.sh" \
 chmod 644 "$R/root/.profile" "$R/home/$USER_NAME/.profile" \
            "$R/root/.bashrc" "$R/home/$USER_NAME/.bashrc" 2>/dev/null || true
 
+# ---------------- xfce4-session agent startup ----------------------
+# xfce4-session can start and stop gpg-agent/ssh-agent before launching the
+# window manager. Under proot that spawn goes through waitpid()/pipe paths
+# that can fail or block forever, which leaves the desktop with no xfwm4 and
+# only the root cross cursor. XFCE does not need either agent, so turn them
+# off in the user's xfce4-session channel. The gpgconf guard below is a
+# second line of defence for older sessions and other callers.
+SESSION_XML="$R/home/$USER_NAME/.config/xfce4/xfconf/xfce-perchannel-xml/xfce4-session.xml"
+if [ -d "$R/home/$USER_NAME" ]; then
+    if [ ! -f "$SESSION_XML" ]; then
+        mkdir -p "$(dirname "$SESSION_XML")" 2>/dev/null || true
+        cat > "$SESSION_XML" <<'LFA_SESSION_XML'
+<?xml version="1.0" encoding="UTF-8"?>
+
+<channel name="xfce4-session" version="1.0">
+  <property name="startup" type="empty">
+    <property name="gpg-agent" type="empty">
+      <property name="enabled" type="bool" value="false"/>
+    </property>
+    <property name="ssh-agent" type="empty">
+      <property name="enabled" type="bool" value="false"/>
+    </property>
+  </property>
+  <property name="compat" type="empty">
+    <property name="LaunchGNOME" type="bool" value="false"/>
+  </property>
+  <property name="general" type="empty">
+    <property name="SaveOnExit" type="bool" value="false"/>
+    <property name="AutoSave" type="bool" value="false"/>
+  </property>
+</channel>
+LFA_SESSION_XML
+    else
+        _node=""
+        if ! grep -q 'name="gpg-agent"' "$SESSION_XML" 2>/dev/null; then
+            _node="$(cat <<'LFA_SESSION_NODE'
+  <property name="startup" type="empty">
+    <property name="gpg-agent" type="empty">
+      <property name="enabled" type="bool" value="false"/>
+    </property>
+    <property name="ssh-agent" type="empty">
+      <property name="enabled" type="bool" value="false"/>
+    </property>
+  </property>
+LFA_SESSION_NODE
+)"
+        fi
+        if ! grep -q 'name="LaunchGNOME"' "$SESSION_XML" 2>/dev/null; then
+            _node="$_node
+  <property name=\"compat\" type=\"empty\">
+    <property name=\"LaunchGNOME\" type=\"bool\" value=\"false\"/>
+  </property>"
+        fi
+        if ! grep -q 'name="SaveOnExit"' "$SESSION_XML" 2>/dev/null; then
+            _node="$_node
+  <property name=\"general\" type=\"empty\">
+    <property name=\"SaveOnExit\" type=\"bool\" value=\"false\"/>
+    <property name=\"AutoSave\" type=\"bool\" value=\"false\"/>
+  </property>"
+        fi
+        if [ -n "$_node" ]; then
+            _tmp="$SESSION_XML.lfa-tmp"
+            awk -v node="$_node" '/<\/channel>/ && !n { print node; n=1 } { print }' \
+                "$SESSION_XML" > "$_tmp" 2>/dev/null && mv "$_tmp" "$SESSION_XML" 2>/dev/null || rm -f "$_tmp" 2>/dev/null
+        fi
+    fi
+    chmod 644 "$SESSION_XML" 2>/dev/null || true
+fi
+# Session restore would relaunch whatever happened to be running at the last
+# stop (often the keyring prompt or a Remmina applet). LFA sessions are
+# stateless: drop the saved session and turn saving off in the XML above.
+rm -rf "$R/home/$USER_NAME/.cache/sessions"/* 2>/dev/null || true
+
+# ---------------- keyring autostart --------------------------------
+# gnome-keyring has no PAM conversation under proot, so a locked keyring
+# turns into a modal "Unlock Keyring" prompt on every login. With GNOME
+# compatibility off, xfce4-session no longer launches it; hide the stock
+# autostart entries too, along with Evolution's alarm notifier and nm-applet
+# (both ask the secret service for credentials on login and are not useful in
+# a proot container). Apps that really need secrets can still start the
+# daemon on demand.
+if [ -d "$R/home/$USER_NAME" ]; then
+    mkdir -p "$R/home/$USER_NAME/.config/autostart" 2>/dev/null || true
+    for _kr in gnome-keyring-pkcs11 gnome-keyring-secrets gnome-keyring-ssh \
+               org.gnome.Evolution-alarm-notify nm-applet; do
+        [ -f "$R/etc/xdg/autostart/$_kr.desktop" ] || continue
+        cat > "$R/home/$USER_NAME/.config/autostart/$_kr.desktop" <<EOF
+[Desktop Entry]
+Type=Application
+Name=$_kr (disabled by Linux for Android)
+Hidden=true
+EOF
+        chmod 644 "$R/home/$USER_NAME/.config/autostart/$_kr.desktop" 2>/dev/null || true
+    done
+fi
+
+# ---------------- xfce4-session gpg-agent guard --------------------
+# xfce4-session runs `gpgconf --kill gpg-agent` and
+# `gpgconf --launch gpg-agent` on startup. Under proot either one can block
+# forever, and the session manager waits for it before starting xfwm4, so the
+# desktop shows only the root cross cursor. Outside a GUI session the real
+# gpgconf is untouched.
+if [ -x "$R/usr/bin/gpgconf" ] && { [ ! -x "$R/usr/local/bin/gpgconf" ] || ! grep -q 'lfa-gpgconf-v3' "$R/usr/local/bin/gpgconf" 2>/dev/null; }; then
+    cat > "$R/usr/local/bin/gpgconf" <<'LFA_GPGCONF'
+#!/bin/sh
+# Linux for Android: keep gpgconf from wedging the XFCE session.
+# lfa-gpgconf-v3
+real=/usr/bin/gpgconf
+[ -x "$real" ] || exit 0
+case "$*" in
+    *--launch*gpg-agent*)
+        # XFCE does not need a GPG agent, and starting one under proot can
+        # block xfce4-session before it launches xfwm4. Skip it in a session;
+        # gpg starts its own agent on demand when a user actually needs it.
+        [ -n "${DISPLAY:-}" ] && exit 0 ;;
+    *--kill*gpg-agent*|*--kill*all*)
+        if [ -n "${DISPLAY:-}" ]; then
+            if command -v timeout >/dev/null 2>&1; then
+                timeout 3 "$real" "$@" >/dev/null 2>&1 && exit 0
+            fi
+            pkill -TERM -f 'gpg-connect-agent.*KILLAGENT' 2>/dev/null || true
+            pkill -TERM -x gpg-agent 2>/dev/null || true
+            exit 0
+        fi ;;
+esac
+exec "$real" "$@"
+LFA_GPGCONF
+    chmod 755 "$R/usr/local/bin/gpgconf" 2>/dev/null || true
+fi
+
 # ---------------- cursor theme --------------------------------------
 # A session with no usable cursor theme leaves the X root cursor on screen,
 # which is a cross. Ubuntu ships Adwaita; other images may only have DMZ.

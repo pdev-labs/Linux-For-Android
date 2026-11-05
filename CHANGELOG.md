@@ -19,15 +19,18 @@ tag names, define the order. See the table at the bottom.
   extracts an AppImage once into `~/.local/opt/appimages`, writes a launcher
   in `~/.local/bin`, and adds a desktop entry; `list`, `run`, and `remove`
   manage it. `lfa run FILE` runs an AppImage once without installing it.
+- `lfa fix -i NAME` runs "Apply Latest Fixes" without the interactive
+  manager, so upgrades over SSH or from a script are deterministic.
 - Guest sessions now export `APPIMAGE_EXTRACT_AND_RUN=1`, because proot does
   not expose `/dev/fuse` and an AppImage cannot self-mount. A direct
   `./Foo.AppImage`, a file-manager double-click, and a menu entry all work.
   Every distro gets the setting at install time, and `lfa appimage` adds it to
   existing instances on demand.
 - New `lfa` command line: `install`, `list`, `status`, `start`, `shell`,
-  `stop`, `switch`, `autostart`, `update`, `doctor`, `backup`, `restore`,
-  `remove`, `compat`, `android`, `appimage`, `run`, `diagnostics`, `notice`,
-  `version`, and `help`. `-i` is shorthand for `--instance` everywhere the
+  `stop`, `switch`, `autostart`, `update`, `fix`, `doctor`, `backup`,
+  `restore`, `remove`, `compat`, `android`, `appimage`, `run`, `diagnostics`,
+  `notice`, `version`, and `help`. `-i` is shorthand for `--instance`
+  everywhere the
   long form is accepted.
 - New `linux` shortcut starts the desktop directly without the classic
   terminal/desktop menu. It is a script, not an alias, so it works from
@@ -94,6 +97,20 @@ tag names, define the order. See the table at the bottom.
   only the X root cross cursor. `start-linux` now refuses a second session,
   `--restart` replaces one, and `stop-linux` also stops the guest session
   process instead of only the X server.
+- `xfce4-session` waits for `gpgconf` before launching `xfwm4`. Under proot,
+  both `gpgconf --kill gpg-agent` and `gpgconf --launch gpg-agent` can block
+  forever (the second because the daemonized agent keeps the pipe open), so
+  the desktop stayed on the root cross cursor. The manager now disables
+  GPG/SSH agent startup in the user's `xfce4-session` channel and keeps a
+  scoped `gpgconf` guard as a fallback; outside a session the real `gpgconf`
+  is untouched.
+- `stop-linux` now recognises a desktop session by `/proc/<pid>/cwd`, so an
+  orphaned `xfce4-session` whose proot wrapper died is stopped too. This was
+  the remaining way to end up with two sessions and no window manager.
+- Desktop sessions disable GNOME compatibility and XFCE session save/restore.
+  There is no PAM conversation to unlock a keyring under proot, and restoring
+  a stopped session kept relaunching the locked keyring prompt (and Remmina)
+  on every login. The saved session is cleared during install/upgrade.
 - `lfa switch` stopped the running desktop and left the display empty. When a
   desktop was running, the switch now restarts it on the new backend;
   `--no-start` keeps it stopped.
