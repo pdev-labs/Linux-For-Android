@@ -101,11 +101,17 @@ Cost: a second code path in every package decision, and a frozen
 
 Explicitly out of scope, so it does not get proposed again every month:
 
-- running `systemctl` (there is no PID 1)
-- screen locking through logind
+- real `systemctl` and systemd (there is no PID 1)
+- real logind session locking and suspend control
 - auto-mounting USB or SD cards
-- Android hardware sensors, GPS, camera bridging
+- exposing Android sensors, GPS or camera as Linux kernel devices
 - nested virtualisation or Docker inside the guest
+- faking kernel facilities (namespaces, TUN/TAP, netfilter, modules, GPU
+  compute) just to make a program start
+
+The optional `lfa compat` supervisor and `lfa android` bridge were added later
+(D14). They answer userspace expectations and expose Android framework data;
+they do not change this list.
 
 ## D11: one distro can carry both display back ends
 
@@ -150,3 +156,48 @@ The notice about the new layout is printed by `start-linux` to stderr on
 interactive classic runs only. It can be hidden for one run with
 `--no-notice` or `LFA_NO_NOTICE=1`, and permanently with `lfa notice off`.
 The preference is stored outside the guest so it survives distro reinstalls.
+
+## D13: Android 7 is not "legacy", but it still has no X11
+
+Decision: keep two independent Android cutoffs. `IS_LEGACY` means SDK < 24
+(archived Termux repositories). `X11_SUPPORTED` means SDK >= 26 (Termux:X11,
+Both, and GNOME). SDK 24/25 gets modern packages and VNC only.
+
+Why: the old single `IS_LEGACY` flag answered two different questions. Android
+7.0/7.1 has working modern Termux packages, so treating it as legacy would
+force obsolete repos and the proot-distro source path for no reason. But
+Termux:X11 genuinely needs Android 8, so treating it as fully modern offered a
+desktop that could never start. Two flags describe the two realities.
+
+Cost: six call sites had to change (installer defaults, guided server choice,
+configured-setup clamp, `lfa install`, `lfa switch`, `lfa autostart`, menu 14,
+and the generated launcher). The CI includes API 24 and 25 boundary scenarios
+so the two flags cannot drift back together.
+
+## D14: `lfa compat` and `lfa android` are separate commands
+
+Decision: `lfa compat` shims Linux-side expectations; `lfa android` exposes
+real Android framework data through files in `$PREFIX/tmp`. They share a
+status view but not an implementation, and risky shims are opt-in.
+
+Why: the failure modes are different. A compatibility shim may deliberately
+lie about a service, and users need to disable it without losing battery or
+location data. The Android bridge touches privacy-sensitive permissions and
+depends on an app the user may not want. Merging them would make the risky
+part harder to audit and the safe part harder to use.
+
+Cost: two command names and two config files instead of one. The alternative,
+a single "make everything work" switch, would hide which part is real and
+which part is a fallback.
+
+The rules are strict:
+
+- no silent faking of security controls (`sudo`, sandboxing, firewall rules)
+- prefer a real fallback over a success stub
+- report the limit in `lfa compat explain`
+- never claim a kernel facility the app sandbox cannot provide
+- test the actual operation, not `--version`
+
+`lfa android` is not a kernel bridge. Termux:API talks to Android framework
+services under the normal app UID; it cannot create TUN/TAP, GPU devices, or
+`/dev` nodes.

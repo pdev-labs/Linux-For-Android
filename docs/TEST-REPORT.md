@@ -1,6 +1,36 @@
 # Test report for v1.7.1
 
-> Current development suite: `PASS=491 FAIL=0`.
+> Current development suite: `PASS=545 FAIL=0`.
+
+## Android CI, SDK cutoffs, and compatibility layers, 2026-11-05
+
+Host verification only. The emulator workflow is new and has not run on
+GitHub Actions yet; no phone was reachable during this pass, so the
+on-device assertions remain unexecuted.
+
+| Check | Result |
+|---|---|
+| Host suite (`./tests/test-all.sh`) | `PASS=545 FAIL=0` |
+| `bash -n` on the installer, libraries, tests, and CI helpers | clean |
+| Matrix generator (`smoke` / `reduced` / `full`) | 6 / 23 / 674 scenarios, sharding validated |
+| Python helpers | `py_compile` clean |
+| SDK 24/25 boundary | X11 and Both refused; VNC selected; legacy repo path not used |
+| `lfa compat` | list/status/explain/enable/disable; shims written with an explicit `LFA compatibility shim` marker |
+| `lfa android` | status/install/permissions/test/refresh/enable/disable/pump; bridge files under `$PREFIX/tmp` |
+| `lfa install --software` | maps names to the existing software selector |
+
+### Device/emulator verification still required
+
+- The PR smoke matrix on GitHub Actions (6 scenarios).
+- Real VNC RFB handshake and framebuffer probe (`vnc-probe.py`).
+- Real X11 `xdpyinfo` check and desktop process check.
+- Both → VNC/X11 switching with `--remove-old` on a real guest.
+- Android 5/6 and Android 7.0/7.1 refusal paths.
+- Software probe pass/fail entries.
+
+The intended evidence is uploaded by `collect-artifacts.sh`: logcat,
+`getprop`, a screenshot, `lfa-diagnostics.tar.gz`, `termux-logs.tar.gz`, and
+the tail of `start-linux-session.log`.
 
 ## Both backends, 2026-11-04
 

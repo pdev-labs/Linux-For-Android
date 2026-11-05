@@ -1,0 +1,94 @@
+name: Android scenario
+
+on:
+  workflow_call:
+    inputs:
+      name:
+        required: true
+        type: string
+      api:
+        required: true
+        type: string
+      arch:
+        required: true
+        type: string
+      target:
+        required: false
+        type: string
+        default: google_apis
+      distro:
+        required: true
+        type: string
+      desktop:
+        required: true
+        type: string
+      backend:
+        required: true
+        type: string
+      scenario:
+        required: false
+        type: string
+        default: install
+
+permissions:
+  contents: read
+
+jobs:
+  scenario:
+    name: ${{ inputs.name }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          sudo usermod -aG kvm "$USER"
+          ls -l /dev/kvm
+
+      - name: Cache Android APKs
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/termux-apks
+          key: termux-apks-${{ inputs.arch }}-v0.118.3-v0.118.0-x11-1.03.01
+
+      - name: Run scenario
+        uses: reactivecircus/android-emulator-runner@v2
+        env:
+          SCENARIO_API: ${{ inputs.api }}
+          SCENARIO_ARCH: ${{ inputs.arch }}
+          SCENARIO_TARGET: ${{ inputs.target }}
+          SCENARIO_DISTRO: ${{ inputs.distro }}
+          SCENARIO_DESKTOP: ${{ inputs.desktop }}
+          SCENARIO_BACKEND: ${{ inputs.backend }}
+          SCENARIO_KIND: ${{ inputs.scenario }}
+        with:
+          api-level: ${{ inputs.api }}
+          arch: ${{ inputs.arch }}
+          target: ${{ inputs.target }}
+          profile: pixel_5
+          cores: 2
+          ram-size: 4096M
+          disk-size: 12288M
+          emulator-boot-timeout: 900
+          disable-animations: true
+          emulator-options: >-
+            -no-window -no-snapshot -noaudio -no-boot-anim
+            -gpu swiftshader_indirect -camera-back none -camera-front none
+            -netdelay none -netspeed full
+          script: |
+            chmod +x .github/scripts/android/*.sh .github/scripts/android/*.py
+            bash .github/scripts/android/run-scenario.sh
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-${{ inputs.name }}
+          path: ${{ runner.temp }}/lfa-artifacts
+          if-no-files-found: warn
+          retention-days: 7

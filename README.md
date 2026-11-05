@@ -33,7 +33,9 @@
 - [Older devices (Android 5/6)](#older-devices-android-56-eg-oppo-a37fw)
 - [Usage guide](#usage-guide)
 - [Software and app fixes](#software-and-app-fixes)
+- [Software that cannot run](#software-that-cannot-run) and [full compatibility list](docs/INCOMPATIBLE.md)
 - [Troubleshooting index](#troubleshooting-index) and [detailed guide](docs/TROUBLESHOOTING.md)
+- [Android CI](docs/CI-ANDROID.md)
 - [Architecture](docs/ARCHITECTURE.md), [design decisions](docs/DECISIONS.md), and [changelog](CHANGELOG.md)
 - [Known issues](issues.md), [contributing](CONTRIBUTING.md), and [security](SECURITY.md)
 - [Credits](#credits)
@@ -131,7 +133,7 @@ hardware, not simulated. Full details, root causes, and evidence are in
 | Alpine 3.18 (Android 5) | Yes | Yes | legacy VNC desktop, panel works; X11 and Both hidden | v1.7.1 |
 | Ubuntu GNOME 46 (experimental) | Yes | Yes | shell and apps run; session services missing | v1.7.0 |
 
-> The test suite runs `491` checks with 0 failures. The same suite runs on the
+> The test suite runs `545` checks with 0 failures. The same suite runs on the
 > devices (`tests/device-matrix.sh`). The table is as of v1.7.1. Ubuntu was
 > re-verified on v1.7.1, and Alpine 3.18 was re-verified on Android 5 on
 > 2026-11-04; the other rows were last verified on v1.7.0. A row is
@@ -426,7 +428,7 @@ is accepted.
 
 | Command | What it does |
 | --- | --- |
-| `lfa install` | install without menus; accepts `--distro`, `--desktop`, `--backend`, `--autostart`, `--user`, `--hostname`, `--timezone`, and `-i` |
+| `lfa install` | install without menus; accepts `--distro`, `--desktop`, `--backend`, `--autostart`, `--user`, `--hostname`, `--timezone`, `--software`, and `-i` |
 | `lfa list` | list installed distributions (`--json` for scripts) |
 | `lfa status` | show desktop, backend, autostart, and running state (`--json`) |
 | `lfa start` | start the desktop; `--x11` or `--vnc` forces a backend |
@@ -439,6 +441,8 @@ is accepted.
 | `lfa backup` | write `~/<instance>-backup.tar.gz` |
 | `lfa restore` | restore a backup file |
 | `lfa remove` | delete a distribution (`-y` skips the question) |
+| `lfa compat` | list, explain, enable, or disable compatibility shims |
+| `lfa android` | check, install, test, and enable the Termux:API bridge |
 | `lfa diagnostics` | write a redacted support bundle |
 | `lfa notice` | `on`, `off`, or `status` for the `start-linux` change notice |
 | `lfa version` / `lfa help` | version and command list |
@@ -451,12 +455,43 @@ lfa start -i ubuntu --vnc
 lfa shell -i ubuntu --user
 lfa switch x11 -i ubuntu --remove-old
 lfa autostart vnc -i ubuntu
+lfa install --distro debian --desktop xfce4 --software python,git,htop -i dev
+lfa compat list
+lfa android test
 lfa notice off
 ```
 
 When more than one distribution is installed, commands that operate on one
 instance require `-i` instead of guessing. `lfa start`, `lfa shell`, and
 `lfa stop` otherwise reuse the last instance you started.
+
+### Compatibility shims and the Android bridge
+
+Two optional layers make missing components easier to diagnose:
+
+```bash
+lfa compat list                         # what can be shimmed, and how honestly
+lfa compat explain docker               # why an entry is not shimmable
+lfa compat enable systemctl -i ubuntu   # tiny service supervisor in the guest
+lfa compat disable systemctl -i ubuntu
+
+lfa android status                      # Termux:API and bridge state
+lfa android install                     # install the termux-api client package
+lfa android test                        # read-only battery/location/clipboard probes
+lfa android enable battery -i ubuntu    # guest tools read real Android battery data
+```
+
+`lfa compat` is the Linux side: it maps `systemctl`, `loginctl`, `upower`,
+`snap`, and `bwrap` calls to small, visible fallbacks. `lfa android` is the
+Android side: it exposes real framework data through files in `$PREFIX/tmp`
+(the guest sees them as `/tmp`). They are separate on purpose, so a shim can be
+disabled without losing hardware data, and the risky parts are easier to
+audit.
+
+Neither layer pretends to provide a kernel feature. Docker, Podman, Flatpak,
+TUN/TAP, iptables, CUDA, ROCm, KVM, and kernel modules remain unavailable.
+The full list, with reasons, is in
+[docs/INCOMPATIBLE.md](docs/INCOMPATIBLE.md).
 
 ## Older and custom distro versions
 
@@ -566,6 +601,12 @@ rebuilds. A corrupt file falls back to guided setup instead of crashing.
 
 This configuration was tested end-to-end on Android 5.1.1 with kernel 3.10 on
 aarch64.
+
+> **Android 7.0/7.1 (SDK 24/25) is different from Android 5/6.** Termux
+> packages are modern, but Termux:X11 and GNOME still need Android 8 (SDK 26).
+> LFA now tracks the package cutoff and the X11 cutoff separately, selects VNC
+> automatically, and refuses X11/Both with an explanation. Android 5/6 still
+> uses the legacy package path described below.
 
 ### 1. Install the right Termux
 
@@ -1006,6 +1047,25 @@ CLI tools verified in the same session: Python 3.12.3, Git 2.43.0,
 Node 26.13.0, npm 11.20.0, curl 8.5.0, wget 1.21.4, neofetch 7.1.0, and htop
 3.3.0.
 
+## Software that cannot run
+
+Some software needs kernel features, namespaces, device nodes, or a real
+service manager, and no amount of userspace shimming can provide those. The
+short list is:
+
+- `systemd`, `snapd`, Flatpak and bubblewrap sandboxes
+- Docker, Podman, LXC/LXD, libvirt, VirtualBox, QEMU/KVM, Waydroid
+- WireGuard/OpenVPN/TUN/TAP, raw packet capture, iptables/nftables enforcement
+- CUDA, ROCm, vendor GPU compute, hardware video encode/decode
+- kernel modules, real `mount`/`chroot`/`unshare`, real root/SELinux control
+- Bluetooth/BlueZ, NFC, camera as `/dev/video*`, sensors, USB host as device
+  nodes
+- Wayland compositors, simultaneous X11 + VNC, foreign-architecture binaries
+
+Full reasons, the “works with caveats” list, Android 5/6/7 differences, and
+what Termux:API can actually expose are in
+[docs/INCOMPATIBLE.md](docs/INCOMPATIBLE.md).
+
 ## Troubleshooting index
 
 > Detailed guide: [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) covers
@@ -1325,12 +1385,18 @@ plus `script` from util-linux for the pty test, which is skipped if absent:
 
 ```bash
 chmod +x tests/test-all.sh
-./tests/test-all.sh   # expect: PASS=491 FAIL=0
+./tests/test-all.sh   # expect: PASS=545 FAIL=0
 ```
 
 The suite is deliberately stubbed. It cannot prove a desktop actually appears.
 The results on two physical devices are in
 [docs/TEST-REPORT.md](docs/TEST-REPORT.md).
+
+For the real Android layer, CI boots emulators and runs
+`tests/termux-e2e.sh` over SSH. Pull requests run a six-scenario smoke matrix;
+a reduced matrix runs weekly, and the full ~700-scenario matrix is a manual,
+sharded run. See [docs/CI-ANDROID.md](docs/CI-ANDROID.md) for the architecture,
+the pinned APKs, and the emulator-vs-device gaps.
 
 ## Credits
 

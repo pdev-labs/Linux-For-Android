@@ -120,6 +120,47 @@ Preferences that are not tied to one distro live in
 stderr by the classic `start-linux` path only; `linux`, non-interactive runs,
 and Termux:Boot are silent.
 
+## Android version cutoffs
+
+Two cutoffs are tracked separately because they moved at different times:
+
+| Name | Value | Controls |
+|---|---|---|
+| `IS_LEGACY` | SDK < 24 | archived Termux repos, proot-distro v4.2.0 source install, Alpine/Debian bullseye recommendations |
+| `X11_SUPPORTED` | SDK >= 26 (or SDK 0 for non-Android shells) | Termux:X11, Both, GNOME, VirGL expectations |
+
+Android 7.0/7.1 (SDK 24/25) has modern Termux packages but no Termux:X11.
+Installer defaults, `lfa install`, `lfa switch`, `lfa autostart`, menu 14,
+quick setup, and the generated `start-linux` all consult `X11_SUPPORTED`, so
+the two paths cannot disagree.
+
+## Compatibility and Android bridge layers
+
+```
+lfa compat                          lfa android
+  systemctl -> LFA supervisor          termux-battery-status
+  loginctl  -> CLI answers             termux-location
+  upower    -> /tmp battery data       termux-clipboard-get
+  snap      -> apt/tarball mapping     termux-notification
+  bwrap     -> unsandboxed fallback    termux-wifi-connectioninfo
+  vulkan    -> lavapipe (CPU)                 │
+  opencl    -> POCL (CPU)                     ▼
+        │                            $PREFIX/tmp/lfa-android-*
+        ▼                                     │
+  guest /usr/local/bin shims  <───────────────┘
+```
+
+They are separate commands on purpose. `lfa compat` changes Linux-side
+expectations and may lie about a service; `lfa android` exposes real Android
+data and never claims to be a kernel device. The guest sees bridge files as
+`/tmp/...` because proot runs with `--shared-tmp`.
+
+Neither layer may fake a kernel facility. Docker, Podman, Flatpak, TUN/TAP,
+iptables, CUDA, ROCm, KVM, and modules are listed as unsupported by
+`lfa compat list` and explained by `lfa compat explain`.
+
+## CI model
+
 ## Session wrappers
 
 `lib/real-feel.sh` writes `/usr/local/bin/lfa-set-wallpaper` and, for GNOME,
@@ -155,3 +196,10 @@ Everything that needs a real kernel, a real package manager or a real display
 is verified on devices and recorded in `docs/TEST-REPORT.md` and the README
 matrix. The suite checks that the documented `PASS=` count matches the real
 count, so the docs cannot drift silently.
+
+The Android CI layer boots emulators and runs `tests/termux-e2e.sh` over SSH.
+A small PR smoke matrix, a weekly reduced matrix, and a manual sharded full
+matrix share one reusable scenario workflow. The host-side VNC probe performs
+a real RFB handshake and checks the framebuffer pixels; the X11 check runs
+`xdpyinfo` inside the guest. `docs/CI-ANDROID.md` explains the tiers and the
+known emulator gaps.

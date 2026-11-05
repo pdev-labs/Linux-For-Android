@@ -36,16 +36,33 @@ shellcheck -S warning install_linux.sh lib/*.sh tests/*.sh
 bash -n install_linux.sh
 ```
 
-CI runs these commands. Run them before pushing.
+CI runs these commands, plus Android emulator scenarios. Run them before
+pushing.
+
+The emulator layer is documented in `docs/CI-ANDROID.md`. Locally:
+
+```bash
+python3 tests/generate-android-matrix.py --mode smoke --format list
+python3 tests/generate-android-matrix.py --mode reduced --format json
+```
+
+Pull requests run six emulator scenarios. A weekly reduced matrix and a manual
+sharded full matrix cover the rest. If you change installer, launcher or
+backend behavior, add a scenario or a `tests/termux-e2e.sh` check as well.
 
 ## Testing on a device
 
 1. Install Termux from F-Droid, not Google Play.
 2. `pkg install git openssh`, then `git clone` your branch.
 3. Run the suite on the phone as well: `./tests/test-all.sh`.
-4. Install a distribution and start the desktop. Capture
+4. Run the real-device harness:
+   `LFA_E2E_DISTRO=debian LFA_E2E_BACKEND=vnc bash tests/termux-e2e.sh`.
+   It covers CLI, VNC/X11 startup, switching, refusal, and compatibility
+   shims. `./tests/device-matrix.sh --install debian --e2e` does the install
+   and harness in one step.
+5. Install a distribution and start the desktop. Capture
    `~/start-linux-session.log` if it fails.
-5. Report the device, Android version, distro, desktop, and backend in the PR.
+6. Report the device, Android version, distro, desktop, and backend in the PR.
 
 ## Adding a distribution
 

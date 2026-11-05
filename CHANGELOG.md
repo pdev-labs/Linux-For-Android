@@ -45,6 +45,20 @@ tag names, define the order. See the table at the bottom.
 - Termux:Boot can start either backend when both are installed. X11 autostart
   starts the server and desktop in the background; open the Termux:X11 app
   when you want to see it.
+- `lfa compat` lists, explains, enables, and disables optional compatibility
+  shims for `systemctl`, `loginctl`, `upower`, `snap`, `bwrap`, CPU Vulkan, and
+  CPU OpenCL. Unsupported kernel features (Docker, Flatpak, TUN/TAP, CUDA,
+  ROCm, KVM, modules) are reported honestly instead of faked.
+- `lfa android` reports Termux:API state and provides a real bridge for
+  battery, location, clipboard, and notifications. Data is written to
+  `$PREFIX/tmp`, which the guest sees as `/tmp` under `--shared-tmp`.
+- `lfa install --software` accepts a comma-separated app list for unattended
+  installs.
+- Android CI: a reusable emulator scenario plus PR smoke, weekly reduced, and
+  manual sharded full matrices. The on-device harness covers real VNC RFB
+  handshakes, framebuffer pixels, X11 `xdpyinfo`, backend switching, legacy
+  refusal, shims, and software probes.
+- New `docs/INCOMPATIBLE.md` and `docs/CI-ANDROID.md`.
 
 ### Changed
 
@@ -63,6 +77,12 @@ tag names, define the order. See the table at the bottom.
 
 ### Fixed
 
+- Android 7.0/7.1 (SDK 24/25) was treated as fully modern and offered
+  Termux:X11, Both, and GNOME even though all three require Android 8 (SDK 26).
+  The package/repo cutoff (`IS_LEGACY`, SDK < 24) and the X11 cutoff
+  (`X11_SUPPORTED`, SDK >= 26) are now tracked separately. The installer,
+  `lfa install`, `lfa switch`, `lfa autostart`, menu 14, quick setup, and the
+  generated `start-linux` all select or refuse VNC correctly on those devices.
 - Android 5's toybox `df` ignores `-Pk` and prints human units. The disk
   preflight read `3.6G` as zero and refused every legacy install. It now
   falls back to `stat -f` and then to the human value.

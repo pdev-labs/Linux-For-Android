@@ -1,2 +1,4 @@
 .agents/
 .test-tmp/
+__pycache__/
+*.pyc

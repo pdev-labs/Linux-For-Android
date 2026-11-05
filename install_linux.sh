@@ -360,6 +360,13 @@ detect_environment() {
     if [ "$ANDROID_SDK" -gt 0 ] && [ "$ANDROID_SDK" -lt 24 ]; then
         IS_LEGACY=1
     fi
+    # Termux:X11 and GNOME need Android 8 (SDK 26). That is a different
+    # cutoff from the legacy Termux repo cutoff above: Android 7.0/7.1
+    # (SDK 24/25) use modern Termux packages but still cannot run X11.
+    X11_SUPPORTED=0
+    if [ "$ANDROID_SDK" = "0" ] || [ "$ANDROID_SDK" -ge 26 ]; then
+        X11_SUPPORTED=1
+    fi
     # Non-Android shells (PC debugging) report SDK 0 -> treat as modern
     # so script syntax can still be tested, but say so instead of silently
     # behaving differently.
@@ -392,6 +399,13 @@ print_device_info() {
         echo "   3.10 kernel at the first guest command (verified)."
         echo "   32-bit ARM note: Alpine/Ubuntu/Debian/Kali have arm builds;"
         echo "   Fedora / openSUSE / Void / Arch may lack 32-bit images."
+        echo "----------------------------------------------------------------"
+    elif [ "$X11_SUPPORTED" != "1" ]; then
+        echo "----------------------------------------------------------------"
+        echo " X11 UNAVAILABLE: Android 7.0/7.1 detected (SDK $ANDROID_SDK)."
+        echo " - Termux packages are modern, so the normal install path is used."
+        echo " - Termux:X11 and GNOME require Android 8 (SDK 26) or newer."
+        echo "   VNC (software rendering) will be used automatically."
         echo "----------------------------------------------------------------"
     fi
 }
@@ -555,8 +569,8 @@ ensure_dependencies() {
     fi
 
     if [ "$NEED_X11" = "1" ]; then
-        if [ "$IS_LEGACY" = "1" ]; then
-            echo "[!] Termux:X11 requires Android 8+. Cannot install on this device."
+        if ! x11_supported; then
+            echo "[!] Termux:X11 requires Android 8+ (SDK 26). Cannot install on this device."
         else
             echo "[*] Installing Termux:X11 backend..."
             pkg install -y x11-repo 2>/dev/null || true
@@ -650,6 +664,12 @@ ask_display_server() {        # $1 = default index (1=x11, 2=vnc)
         echo "    VNC is more stable for GNOME - Both keeps VNC available too."
     fi
     return 0
+}
+
+# Termux:X11 requires Android 8 (SDK 26). Keep this separate from
+# IS_LEGACY, which describes the Termux package/repo cutoff (SDK 24).
+x11_supported() {
+    [ "${X11_SUPPORTED:-0}" = "1" ]
 }
 
 # Both backends share one config value. These helpers keep the package,
@@ -810,7 +830,7 @@ gnome_distro_supported() {
 }
 
 gnome_available() {
-    [ "${IS_LEGACY:-0}" = "1" ] && return 1
+    x11_supported || return 1
     gnome_distro_supported
 }
 
@@ -922,7 +942,7 @@ setup_quick() {
     echo "[*] Quick setup: taking every default."
     if [ "$IS_LEGACY" = "1" ]; then DISTRO="alpine"; else DISTRO="debian"; fi
     if [ "$IS_LEGACY" = "1" ] || [ "$(setup_ram_mb)" -le 2048 ]; then DE="none"; else DE="xfce4"; fi
-    if [ "$DE" = "none" ]; then SERVER="none"; elif [ "$IS_LEGACY" = "1" ]; then SERVER="vnc"; else SERVER="x11"; fi
+    if [ "$DE" = "none" ]; then SERVER="none"; elif ! x11_supported; then SERVER="vnc"; else SERVER="x11"; fi
     RESOLUTION="1280x720"
     COLOR_MODE="light"
     APP_CHOICES=""
@@ -1345,6 +1365,8 @@ Usage: lfa <command> [options]
   backup        create a backup
   restore       restore a backup
   remove        delete a distro
+  compat        inspect or enable compatibility shims
+  android       inspect or enable the Termux:API bridge
   diagnostics   write a support bundle
   notice        show, hide, or query the start-linux notice
   version       print the version
@@ -1362,11 +1384,19 @@ Install options:
       --user NAME         desktop username
       --hostname NAME     guest hostname
       --timezone AREA/CITY
+      --software LIST     comma-separated apps (python,git,node,curl,wget,
+                          antigravity,firefox,chromium,libreoffice,vlc,gimp,
+                          htop,neofetch,vscode)
 
 Switch options:
       --remove-old        remove the packages of the backend being left
       --keep-packages     keep them (default)
       --force             remove shared Termux:X11 despite another distro
+
+Compatibility options:
+  lfa compat list|status|explain ID|enable ID|disable ID
+  lfa android status|install|permissions|test|refresh|
+              enable CAP|disable CAP|bridge CAP|pump
 
 Examples:
   lfa install --distro ubuntu --desktop xfce4 --backend both -i ubuntu
@@ -1374,6 +1404,9 @@ Examples:
   lfa shell -i ubuntu --user
   lfa switch x11 -i ubuntu --remove-old
   lfa autostart vnc -i ubuntu
+  lfa compat list
+  lfa compat enable upower -i ubuntu
+  lfa android test
   lfa notice off
 HELP
 }
@@ -1387,6 +1420,691 @@ lfa_cli_notice_write() {  # $1 = on|off
     else
         printf 'START_NOTICE="%s"\n' "$_val" >> "$LFA_PREFS"
     fi
+}
+
+# ------------------------------------------------------------
+# Compatibility layer (Linux software that expects missing services)
+# and Android data provider (Termux:API).
+#
+# These are deliberately separate:
+#   lfa compat  shims Linux-side components (systemctl, logind, ...)
+#   lfa android exposes real Android data (battery, location, ...)
+#
+# Neither one can create kernel facilities. Anything that needs the kernel
+# (Docker, KVM, TUN/TAP, CUDA, modules) is reported as unsupported instead
+# of being faked.
+# ------------------------------------------------------------
+LFA_COMPAT_CONF="$HOME/.config/linux-for-android/compat.conf"
+LFA_ANDROID_CONF="$HOME/.config/linux-for-android/android.conf"
+
+lfa_list_manifest() {
+    cat <<'EOF'
+systemctl|systemctl|supervisor|partial|medium|Map units to a tiny LFA supervisor
+logind|loginctl|builtin|partial|Low|CLI session queries; no real D-Bus logind
+upower|upower|android+builtin|real-data when Termux:API is installed|Low|Battery and AC state
+snap|snap|apt/tarball map|partial|medium|Map known snaps to distro packages
+bwrap|bwrap|builtin|partial|medium|Run sandboxed commands unsandboxed
+vulkan|Vulkan|lavapipe|software-only|Low|CPU Vulkan fallback
+opencl|OpenCL|pocl|software-only|Low|CPU OpenCL fallback
+docker|Docker|none|unsupported|high|Needs namespaces, cgroups and a daemon
+podman|Podman|none|unsupported|high|Needs namespaces and cgroups
+flatpak|Flatpak|none|unsupported|high|Needs user namespaces and bubblewrap
+tun|TUN/TAP VPN|none|unsupported|high|Android does not expose /dev/net/tun
+iptables|iptables/nftables|none|unsupported|high|No netfilter control in Termux
+cuda|CUDA|none|unsupported|high|No CUDA runtime or GPU device for proot
+rocm|ROCm|none|unsupported|high|No ROCm runtime on Android
+kvm|KVM/emulators|none|unsupported|high|No /dev/kvm access
+modules|Kernel modules|none|unsupported|high|Termux cannot load modules
+EOF
+}
+
+lfa_manifest_field() {  # $1 = id, $2 = field number (1-based)
+    local _id="$1" _n="$2" _i _a _b _c _d _e _f
+    # Use a read loop, not `manifest | awk`: under `set -o pipefail`,
+    # grep -q or an early awk exit turns a successful lookup into SIGPIPE.
+    while IFS='|' read -r _i _a _b _c _d _e _f; do
+        [ "$_i" = "$_id" ] || continue
+        case "$_n" in
+            1) printf '%s\n' "$_i" ;;
+            2) printf '%s\n' "$_a" ;;
+            3) printf '%s\n' "$_b" ;;
+            4) printf '%s\n' "$_c" ;;
+            5) printf '%s\n' "$_d" ;;
+            6) printf '%s\n' "$_e" ;;
+            7) printf '%s\n' "$_f" ;;
+            *) return 1 ;;
+        esac
+        return 0
+    done < <(lfa_list_manifest)
+    return 1
+}
+
+lfa_compat_is_shimmable() {
+    case "$1" in systemctl|logind|upower|snap|bwrap|vulkan|opencl) return 0 ;; esac
+    return 1
+}
+
+lfa_compat_state_get() {  # $1 = id
+    [ -r "$LFA_COMPAT_CONF" ] || return 1
+    sed -n "s/^$1=\"\\{0,1\\}\\([01]\\)\"\\{0,1\\}$/\\1/p" "$LFA_COMPAT_CONF" 2>/dev/null | tail -n1
+}
+
+lfa_compat_state_set() {  # $1 = id, $2 = 0|1
+    local _id="$1" _v="$2"
+    mkdir -p "$(dirname "$LFA_COMPAT_CONF")" 2>/dev/null || true
+    if grep -q "^$_id=" "$LFA_COMPAT_CONF" 2>/dev/null; then
+        sed -i "s|^$_id=.*|$_id=\"$_v\"|" "$LFA_COMPAT_CONF"
+    else
+        printf '%s="%s"\n' "$_id" "$_v" >> "$LFA_COMPAT_CONF"
+    fi
+}
+
+lfa_android_state_get() {  # $1 = capability
+    [ -r "$LFA_ANDROID_CONF" ] || return 1
+    sed -n "s/^$1=\"\\{0,1\\}\\([01]\\)\"\\{0,1\\}$/\\1/p" "$LFA_ANDROID_CONF" 2>/dev/null | tail -n1
+}
+
+lfa_android_state_set() {  # $1 = capability, $2 = 0|1
+    local _id="$1" _v="$2"
+    mkdir -p "$(dirname "$LFA_ANDROID_CONF")" 2>/dev/null || true
+    if grep -q "^$_id=" "$LFA_ANDROID_CONF" 2>/dev/null; then
+        sed -i "s|^$_id=.*|$_id=\"$_v\"|" "$LFA_ANDROID_CONF"
+    else
+        printf '%s="%s"\n' "$_id" "$_v" >> "$LFA_ANDROID_CONF"
+    fi
+}
+
+# Return the rootfs to apply shims into. An explicit -i wins; otherwise a
+# single installed distro is used. With none or several, only the manager
+# state is written and the user is told how to apply it later.
+lfa_shim_rootfs() {
+    local _inst="${CLI_INSTANCE:-}" _n=0 _one="" _d
+    if [ -z "$_inst" ]; then
+        while IFS= read -r _d; do
+            [ -n "$_d" ] || continue
+            _n=$((_n + 1)); _one="$_d"
+        done < <(pd_instances 2>/dev/null)
+        [ "$_n" = "1" ] && _inst="$_one"
+    fi
+    if [ -n "$_inst" ]; then
+        pd_instance_exists "$_inst" || return 1
+        printf '%s\n' "$(pd_rootfs "$_inst")"
+    fi
+}
+
+lfa_shim_write() {  # $1 = rootfs, $2 = relative path, rest via stdin
+    local _root="$1" _rel="$2" _dest
+    _dest="$_root/$_rel"
+    mkdir -p "$(dirname "$_dest")" 2>/dev/null || return 1
+    cat > "$_dest" || return 1
+    chmod 755 "$_dest" 2>/dev/null || true
+}
+
+lfa_compat_apply_shims() {  # $1 = id
+    local _id="$1" _root="" _inst="${CLI_INSTANCE:-}"
+    _root="$(lfa_shim_rootfs 2>/dev/null)" || _root=""
+    if [ -z "$_root" ]; then
+        echo "[i] Saved the preference. Install or choose a distro, then run:"
+        echo "      lfa compat enable $_id -i NAME"
+        return 0
+    fi
+    case "$_id" in
+        systemctl)
+            lfa_shim_write "$_root" "usr/local/bin/systemctl" <<'SHIM'
+#!/bin/sh
+# LFA compatibility shim: a tiny supervisor, NOT systemd.
+# Units are mapped in /etc/lfa/systemd-map.conf as NAME=/path/to/command.
+MAP=/etc/lfa/systemd-map.conf
+STATE=/run/lfa-systemctl
+case "$1" in
+  daemon-reload|daemon-reexec) exit 0 ;;
+  is-system-running) echo "degraded"; exit 0 ;;
+  list-units|list-unit-files)
+    [ -f "$MAP" ] || { echo "No units are mapped by LFA."; exit 0; }
+    while IFS='=' read -r _u _c; do
+      case "$_u" in ''|\#*) continue ;; esac
+      if [ -f "$STATE/$_u.pid" ] && kill -0 "$(cat "$STATE/$_u.pid" 2>/dev/null)" 2>/dev/null; then
+        echo "$_u.service loaded active running $_c"
+      else
+        echo "$_u.service loaded inactive dead $_c"
+      fi
+    done < "$MAP"
+    exit 0 ;;
+esac
+ACTION="$1"; UNIT="$2"
+case "$UNIT" in *.*) UNIT="${UNIT%.service}" ;; esac
+CMD=""
+[ -f "$MAP" ] && CMD="$(awk -F= -v u="$UNIT" '$1==u {print substr($0, index($0,"=")+1); exit}' "$MAP" 2>/dev/null)"
+have_unit() { [ -n "$CMD" ]; }
+mkdir -p "$STATE" 2>/dev/null || true
+case "$ACTION" in
+  start|restart)
+    have_unit || { echo "Unit $UNIT is not provided by the LFA compatibility layer." >&2; echo "Add it to $MAP first." >&2; exit 5; }
+    [ "$ACTION" = restart ] && 'systemctl' stop "$UNIT" >/dev/null 2>&1 || true
+    if [ -f "$STATE/$UNIT.pid" ] && kill -0 "$(cat "$STATE/$UNIT.pid" 2>/dev/null)" 2>/dev/null; then
+      echo "Unit $UNIT is already running."; exit 0
+    fi
+    setsid sh -c "$CMD" >"/var/log/lfa-$UNIT.log" 2>&1 &
+    echo $! > "$STATE/$UNIT.pid"
+    echo "Started $UNIT (LFA supervisor, pid $(cat "$STATE/$UNIT.pid"))."
+    ;;
+  stop)
+    have_unit || { echo "Unit $UNIT is not provided by the LFA compatibility layer." >&2; exit 5; }
+    if [ -f "$STATE/$UNIT.pid" ]; then kill "$(cat "$STATE/$UNIT.pid" 2>/dev/null)" 2>/dev/null || true; rm -f "$STATE/$UNIT.pid"; fi
+    echo "Stopped $UNIT."
+    ;;
+  is-active)
+    have_unit || { echo "inactive"; exit 3; }
+    if [ -f "$STATE/$UNIT.pid" ] && kill -0 "$(cat "$STATE/$UNIT.pid" 2>/dev/null)" 2>/dev/null; then echo active; exit 0; fi
+    echo inactive; exit 3 ;;
+  status)
+    have_unit || { echo "Unit $UNIT is not provided by the LFA compatibility layer." >&2; exit 4; }
+    if [ -f "$STATE/$UNIT.pid" ] && kill -0 "$(cat "$STATE/$UNIT.pid" 2>/dev/null)" 2>/dev/null; then
+      echo "$UNIT.service - LFA mapped service"; echo "   Active: active (running)"; echo "   Command: $CMD"
+    else
+      echo "$UNIT.service - LFA mapped service"; echo "   Active: inactive (dead)"; echo "   Command: $CMD"
+    fi ;;
+  enable|disable)
+    have_unit || { echo "Unit $UNIT is not provided by the LFA compatibility layer." >&2; exit 5; }
+    echo "$ACTION is recorded by the map; LFA does not create boot symlinks." ;;
+  *)
+    echo "systemctl (LFA shim): unsupported action '$ACTION'." >&2
+    echo "Supported: start stop restart status is-active list-units daemon-reload enable disable" >&2
+    exit 2 ;;
+esac
+SHIM
+            mkdir -p "$_root/etc/lfa"
+            if [ ! -f "$_root/etc/lfa/systemd-map.conf" ]; then
+                cat > "$_root/etc/lfa/systemd-map.conf" <<'MAP'
+# LFA systemctl compatibility map.
+# One NAME=COMMAND per line. Only units listed here exist.
+# Examples:
+# dbus=/usr/bin/dbus-daemon --system --nofork
+# ssh=/usr/sbin/sshd -D
+MAP
+            fi
+            ;;
+        logind)
+            lfa_shim_write "$_root" "usr/local/bin/loginctl" <<'SHIM'
+#!/bin/sh
+# LFA compatibility shim: loginctl CLI only (no D-Bus logind).
+case "$1" in
+  list-sessions) echo " 1 ${USER:-user} seat0 tty1" ;;
+  show-session)
+    echo "Id=1"; echo "User=${USER:-user}"; echo "Name=${USER:-user}"
+    echo "State=active"; echo "Type=x11"; echo "Remote=no"; echo "Seat=seat0" ;;
+  list-seats) echo "seat0" ;;
+  show-seat) echo "Id=seat0"; echo "ActiveSession=1" ;;
+  lock-session|terminate-session|kill-session)
+    echo "loginctl (LFA shim): $1 is not supported without systemd/logind." >&2; exit 1 ;;
+  *) echo "loginctl (LFA shim): unsupported action '$1'." >&2; exit 2 ;;
+esac
+SHIM
+            ;;
+        upower)
+            lfa_shim_write "$_root" "usr/local/bin/upower" <<'SHIM'
+#!/bin/sh
+# LFA compatibility shim. Reads the Termux:API battery bridge when present.
+ENVF=/tmp/lfa-android-battery.env
+_show() {
+  echo "  native-path:          /sys/class/power_supply/battery"
+  echo "  power supply:         yes"
+  echo "  updated:              $(date -u '+%a %d %b %Y %H:%M:%S UTC')"
+  if [ -r "$ENVF" ]; then
+    # shellcheck disable=SC1090
+    . "$ENVF"
+    echo "  present:              yes"
+    echo "  state:                ${BATTERY_STATE:-unknown}"
+    echo "  percentage:           ${BATTERY_PERCENT:-unknown}%"
+    echo "  time to empty:        ${BATTERY_TIME_EMPTY:-unknown}"
+    echo "  time to full:         ${BATTERY_TIME_FULL:-unknown}"
+    echo "  source:               Termux:API"
+  else
+    echo "  present:              unknown"
+    echo "  state:                unknown"
+    echo "  percentage:           unknown"
+    echo "  source:               no Termux:API bridge"
+  fi
+}
+case "$1" in
+  -e|--enumerate) echo "/org/freedesktop/UPower/devices/battery_BAT0" ;;
+  -d|--dump) echo "Device: /org/freedesktop/UPower/devices/battery_BAT0"; _show ;;
+  -i|--show-info) _show ;;
+  -v|--version) echo "UPower client version 1.90.8 (LFA shim)" ;;
+  *) _show ;;
+esac
+SHIM
+            ;;
+        snap)
+            lfa_shim_write "$_root" "usr/local/bin/snap" <<'SHIM'
+#!/bin/sh
+# LFA compatibility shim: map a few known snaps to distro packages.
+# This is not snapd and does not provide confinement.
+PKG=""
+case "$2" in
+  firefox) PKG="firefox" ;;
+  chromium) PKG="chromium" ;;
+  code|code-insiders) PKG="code" ;;
+  vlc) PKG="vlc" ;;
+  gimp) PKG="gimp" ;;
+  libreoffice) PKG="libreoffice" ;;
+esac
+case "$1" in
+  list)
+    echo "Name       Version  Publisher  Notes"
+    echo "firefox    mapped   lfa        apt/tarball fallback"
+    echo "chromium   mapped   lfa        apt/tarball fallback"
+    echo "vlc        mapped   lfa        apt/tarball fallback"
+    echo "gimp       mapped   lfa        apt/tarball fallback"
+    ;;
+  install)
+    [ -n "$PKG" ] || { echo "snap (LFA shim): no fallback mapping for '${2:-}'." >&2; echo "Use your distro package manager instead." >&2; exit 1; }
+    if command -v apt-get >/dev/null 2>&1; then exec apt-get install -y "$PKG"
+    elif command -v dnf >/dev/null 2>&1; then exec dnf install -y "$PKG"
+    elif command -v pacman >/dev/null 2>&1; then exec pacman -S --noconfirm "$PKG"
+    elif command -v zypper >/dev/null 2>&1; then exec zypper install -y "$PKG"
+    elif command -v apk >/dev/null 2>&1; then exec apk add "$PKG"
+    else echo "snap (LFA shim): no supported package manager." >&2; exit 1; fi
+    ;;
+  remove) echo "snap (LFA shim): use your distro package manager to remove $PKG." ;;
+  version) echo "snap 0 (LFA compatibility shim, not snapd)" ;;
+  *) echo "snap (LFA shim): supported: list, install NAME, remove NAME, version" >&2; exit 2 ;;
+esac
+SHIM
+            ;;
+        bwrap)
+            lfa_shim_write "$_root" "usr/local/bin/bwrap" <<'SHIM'
+#!/bin/sh
+# LFA compatibility shim: run the command after the last '--' without a
+# sandbox. Used only where an application has an unsandboxed fallback.
+args=""
+seen=0
+for a in "$@"; do
+  if [ "$seen" = "1" ]; then args="$args $(printf '%s' "$a" | sed "s/'/'\\\\''/g")"; fi
+  [ "$a" = "--" ] && seen=1
+done
+if [ "$seen" != "1" ]; then echo "bwrap (LFA shim): no command after --." >&2; exit 2; fi
+echo "bwrap (LFA shim): running without a sandbox." >&2
+eval "exec $args"
+SHIM
+            ;;
+        vulkan|opencl)
+            lfa_compat_install_pkgs "$_id" || true
+            ;;
+    esac
+    echo "[*] Enabled LFA compatibility shim '$_id' for $(basename "$_root")."
+}
+
+lfa_compat_install_pkgs() {  # $1 = vulkan|opencl
+    local _kind="$1" _conf _distro="" _root _inst="" _n=0 _one="" _d
+    _root="$(lfa_shim_rootfs 2>/dev/null)" || _root=""
+    [ -n "$_root" ] || { echo "[i] No distro selected; install the packages inside it later."; return 0; }
+    if [ -n "${CLI_INSTANCE:-}" ]; then
+        _inst="$CLI_INSTANCE"
+    else
+        while IFS= read -r _d; do
+            [ -n "$_d" ] || continue
+            _n=$((_n + 1)); _one="$_d"
+        done < <(pd_instances 2>/dev/null)
+        [ "$_n" = "1" ] && _inst="$_one"
+    fi
+    [ -n "$_inst" ] || { echo "[i] No distro instance selected; nothing to install into."; return 0; }
+    _conf="$(pd_conf "$_inst" 2>/dev/null)"
+    # shellcheck disable=SC1090
+    [ -f "$_conf" ] && . "$_conf" 2>/dev/null || true
+    INSTANCE_NAME="$_inst"
+    _distro="${DISTRO:-}"
+    case "$_distro" in
+        ubuntu|debian|kali)
+            if [ "$_kind" = "vulkan" ]; then
+                guest_install_pkgs mesa-vulkan-drivers vulkan-tools || true
+            else
+                guest_install_pkgs pocl-opencl-icd clinfo || true
+            fi ;;
+        fedora)
+            if [ "$_kind" = "vulkan" ]; then guest_install_pkgs mesa-vulkan-drivers vulkan-tools || true
+            else guest_install_pkgs pocl clinfo || true; fi ;;
+        archlinux)
+            if [ "$_kind" = "vulkan" ]; then guest_install_pkgs vulkan-swrast vulkan-tools || true
+            else guest_install_pkgs pocl clinfo || true; fi ;;
+        *)
+            echo "[i] Install the software $([ "$_kind" = vulkan ] && echo 'Vulkan (lavapipe)' || echo 'OpenCL (POCL)') packages with your distro package manager."
+            return 0 ;;
+    esac
+}
+
+lfa_compat_remove_shims() {  # $1 = id
+    local _id="$1" _root _f _rel
+    _root="$(lfa_shim_rootfs 2>/dev/null)" || _root=""
+    [ -n "$_root" ] || return 0
+    case "$_id" in
+        systemctl) _rel="usr/local/bin/systemctl" ;;
+        logind) _rel="usr/local/bin/loginctl" ;;
+        upower) _rel="usr/local/bin/upower" ;;
+        snap) _rel="usr/local/bin/snap" ;;
+        bwrap) _rel="usr/local/bin/bwrap" ;;
+        *) return 0 ;;
+    esac
+    _f="$_root/$_rel"
+    if [ -f "$_f" ] && grep -q 'LFA compatibility shim' "$_f" 2>/dev/null; then
+        rm -f "$_f"
+        echo "[*] Removed $_rel from $(basename "$_root")."
+    fi
+}
+
+lfa_cli_compat() {
+    local _sub="${1:-list}"; [ $# -gt 0 ] && shift || true
+    local _inst="" _id="" _v
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            -i|--instance) _inst="${2:-}"; shift 2 ;;
+            -h|--help) _sub="help"; shift ;;
+            *) _id="$1"; shift ;;
+        esac
+    done
+    CLI_INSTANCE="$_inst"
+    case "$_sub" in
+        list|help)
+            echo "LFA compatibility layer"
+            echo ""
+            printf '  %-10s %-18s %-24s %-12s %s\n' "ID" "SOURCE" "QUALITY" "RISK" "DESCRIPTION"
+            lfa_list_manifest | while IFS='|' read -r _i _n _s _q _r _d; do
+                printf '  %-10s %-18s %-24s %-12s %s\n' "$_i" "$_s" "$_q" "$_r" "$_d"
+            done
+            echo ""
+            echo "Enable a shim with: lfa compat enable ID [-i NAME]"
+            echo "Explain one with:   lfa compat explain ID"
+            ;;
+        status)
+            local _root
+            _root="$(lfa_shim_rootfs 2>/dev/null || true)"
+            echo "Compatibility state${_root:+ (target: $(basename "$_root"))}"
+            printf '  %-12s %-8s %s\n' "ID" "STATE" "QUALITY"
+            lfa_list_manifest | while IFS='|' read -r _i _n _s _q _r _d; do
+                [ "$_i" = "systemctl" ] || [ "$_i" = "logind" ] || [ "$_i" = "upower" ] || \
+                [ "$_i" = "snap" ] || [ "$_i" = "bwrap" ] || [ "$_i" = "vulkan" ] || \
+                [ "$_i" = "opencl" ] || continue
+                _v="$(lfa_compat_state_get "$_i" 2>/dev/null || echo 0)"
+                [ "$_v" = "1" ] && _v="enabled" || _v="disabled"
+                printf '  %-12s %-8s %s\n' "$_i" "$_v" "$_q"
+            done
+            echo ""
+            echo "Unsupported by design: docker, podman, flatpak, tun, iptables, cuda, rocm, kvm, modules."
+            echo "These need kernel features Termux cannot provide, so LFA does not fake them."
+            ;;
+        explain)
+            [ -n "$_id" ] || { echo "Usage: lfa compat explain ID" >&2; return 2; }
+            local _name _src _q _r _d
+            _name="$(lfa_manifest_field "$_id" 2)"; _src="$(lfa_manifest_field "$_id" 3)"
+            _q="$(lfa_manifest_field "$_id" 4)"; _r="$(lfa_manifest_field "$_id" 5)"; _d="$(lfa_manifest_field "$_id" 6)"
+            [ -n "$_name" ] || { echo "No compatibility entry named '$_id'." >&2; return 1; }
+            echo "$_id - $_name"
+            echo "  source:  $_src"
+            echo "  quality: $_q"
+            echo "  risk:    $_r"
+            echo "  summary: $_d"
+            case "$_id" in
+                systemctl) echo "  limit:   no PID 1, cgroups, sockets, timers or dependency graph." ;;
+                logind) echo "  limit:   CLI answers only; applications that talk to org.freedesktop.login1 over D-Bus still fail." ;;
+                upower) echo "  limit:   real battery data only when Termux:API is installed and 'lfa android enable battery' has run." ;;
+                snap) echo "  limit:   only the mapped names work; unknown snaps fail clearly. No confinement." ;;
+                bwrap) echo "  limit:   removes the sandbox. Use only for apps with an unsandboxed fallback." ;;
+                vulkan) echo "  limit:   CPU rendering through Mesa lavapipe, not the phone GPU." ;;
+                opencl) echo "  limit:   CPU execution through POCL, not the phone GPU." ;;
+                docker|podman) echo "  limit:   no namespaces, cgroups or daemon; use a proot container instead." ;;
+                flatpak) echo "  limit:   no user namespaces or bubblewrap sandbox." ;;
+                tun) echo "  limit:   /dev/net/tun is not exposed to Termux; userspace proxies only." ;;
+                iptables) echo "  limit:   no CAP_NET_ADMIN/netfilter; rules would be a dangerous no-op." ;;
+                cuda|rocm) echo "  limit:   no runtime or GPU device passthrough; CPU fallbacks only." ;;
+                kvm) echo "  limit:   /dev/kvm is not available to apps." ;;
+                modules) echo "  limit:   loading kernel modules requires root and a matching kernel." ;;
+            esac
+            if lfa_compat_is_shimmable "$_id"; then
+                echo ""
+                echo "Enable with: lfa compat enable $_id"
+            else
+                echo ""
+                echo "This capability is not shimmable. LFA will not pretend it works."
+            fi
+            ;;
+        enable)
+            [ -n "$_id" ] || { echo "Usage: lfa compat enable ID [-i NAME]" >&2; return 2; }
+            lfa_compat_is_shimmable "$_id" || {
+                echo "[!] '$_id' cannot be shimmed safely." >&2
+                echo "    It needs a kernel or security boundary that Termux does not have." >&2
+                return 1
+            }
+            local _entry_name
+            _entry_name="$(lfa_manifest_field "$_id" 2)"
+            [ -n "$_entry_name" ] || { echo "No compatibility entry named '$_id'." >&2; return 1; }
+            lfa_compat_state_set "$_id" 1
+            if [ "$_id" = "vulkan" ] || [ "$_id" = "opencl" ]; then
+                lfa_compat_install_pkgs "$_id"
+            else
+                lfa_compat_apply_shims "$_id"
+            fi
+            ;;
+        disable)
+            [ -n "$_id" ] || { echo "Usage: lfa compat disable ID [-i NAME]" >&2; return 2; }
+            lfa_compat_state_set "$_id" 0
+            lfa_compat_remove_shims "$_id"
+            echo "[*] Disabled LFA compatibility shim '$_id'."
+            ;;
+        *) echo "Unknown compat command: $_sub" >&2; echo "Usage: lfa compat list|status|explain ID|enable ID|disable ID" >&2; return 2 ;;
+    esac
+}
+
+lfa_android_cmd() {
+    local _sub="${1:-status}" _what="" _inst=""
+    [ $# -gt 0 ] && shift || true
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            -i|--instance) _inst="${2:-}"; shift 2 ;;
+            -h|--help) _sub="help"; shift ;;
+            *) _what="$1"; shift ;;
+        esac
+    done
+    CLI_INSTANCE="$_inst"
+    local _bridge="$PREFIX/tmp"
+    case "$_sub" in
+        help)
+            cat <<'HELP'
+Usage: lfa android COMMAND
+
+  status                 show Termux:API and bridge state
+  install                install the termux-api client package
+  permissions            list the Android permissions to grant
+  test                   run read-only probes (battery, location, clipboard)
+  refresh                write fresh bridge files into $PREFIX/tmp
+  enable CAP             enable battery, location, clipboard or notifications
+  disable CAP            disable a capability
+  bridge CAP             enable CAP and refresh its data now
+  pump                   deliver queued guest notifications
+
+The guest sees bridge files under /tmp because proot uses --shared-tmp.
+HELP
+            ;;
+        status)
+            local _pkg=0 _app=0 _cap _v
+            command -v termux-battery-status >/dev/null 2>&1 && _pkg=1
+            if command -v pm >/dev/null 2>&1 && pm list packages 2>/dev/null | grep -q 'com.termux.api'; then _app=1; fi
+            echo "Android bridge"
+            echo "  termux-api package: $([ "$_pkg" = 1 ] && echo installed || echo missing)"
+            echo "  Termux:API app:     $([ "$_app" = 1 ] && echo installed || echo not detected)"
+            echo "  bridge directory:   $_bridge"
+            echo ""
+            printf '  %-16s %-8s %s\n' "CAPABILITY" "STATE" "SOURCE"
+            for _cap in battery location clipboard notifications; do
+                _v="$(lfa_android_state_get "$_cap" 2>/dev/null || echo 0)"
+                [ "$_v" = "1" ] && _v="enabled" || _v="disabled"
+                printf '  %-16s %-8s %s\n' "$_cap" "$_v" "Termux:API"
+            done
+            echo ""
+            echo "Kernel/device passthrough (Docker, TUN/TAP, CUDA, /dev nodes) is not"
+            echo "provided by Termux:API. See docs/INCOMPATIBLE.md."
+            ;;
+        install)
+            if ! command -v pkg >/dev/null 2>&1; then
+                echo "[!] pkg not found; run this inside Termux." >&2
+                return 1
+            fi
+            pkg install -y termux-api || return 1
+            echo ""
+            echo "Now install the Termux:API app from F-Droid, then run:"
+            echo "  lfa android permissions"
+            ;;
+        permissions)
+            cat <<'HELP'
+Grant these in Android Settings > Apps > Termux:API > Permissions:
+  - Location (for lfa android enable location)
+  - Notifications (for lfa android enable notifications)
+  - Camera / Microphone only if you use those bridges
+Termux itself also needs the matching Android permissions.
+HELP
+            ;;
+        refresh)
+            command -v termux-battery-status >/dev/null 2>&1 || {
+                echo "[!] termux-api is not installed. Run: lfa android install" >&2
+                return 1
+            }
+            mkdir -p "$_bridge" 2>/dev/null || true
+            local _json _pct _state
+            _json="$(termux-battery-status 2>/dev/null || true)"
+            if [ -n "$_json" ]; then
+                printf '%s\n' "$_json" > "$_bridge/lfa-android-battery.json"
+                _pct="$(printf '%s' "$_json" | sed -n 's/.*"percentage"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' | head -n1)"
+                _state="$(printf '%s' "$_json" | sed -n 's/.*"status"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1)"
+                {
+                    printf 'BATTERY_PERCENT=%s\n' "${_pct:-unknown}"
+                    printf 'BATTERY_STATE=%s\n' "${_state:-unknown}"
+                    printf 'BATTERY_TIME_EMPTY=unknown\nBATTERY_TIME_FULL=unknown\n'
+                } > "$_bridge/lfa-android-battery.env"
+                echo "[*] battery: ${_pct:-unknown}% ${_state:-unknown}"
+            else
+                echo "[!] Battery probe returned nothing (permission or app missing)." >&2
+            fi
+            if command -v termux-location >/dev/null 2>&1; then
+                termux-location -p network > "$_bridge/lfa-android-location.json" 2>/dev/null || true
+            fi
+            if command -v termux-clipboard-get >/dev/null 2>&1; then
+                termux-clipboard-get > "$_bridge/lfa-android-clipboard.txt" 2>/dev/null || true
+            fi
+            if command -v termux-wifi-connectioninfo >/dev/null 2>&1; then
+                termux-wifi-connectioninfo > "$_bridge/lfa-android-wifi.json" 2>/dev/null || true
+            fi
+            lfa_android_pump
+            ;;
+        test)
+            local _rc=0
+            echo "Running read-only Android probes..."
+            if ! command -v termux-battery-status >/dev/null 2>&1; then
+                echo "FAIL: termux-api is not installed (run: lfa android install)." >&2
+                return 1
+            fi
+            local _b
+            _b="$(termux-battery-status 2>/dev/null || true)"
+            if printf '%s' "$_b" | grep -q '"percentage"'; then
+                echo "PASS: battery -> $(printf '%s' "$_b" | tr -d '\n' | cut -c1-120)"
+            else
+                echo "FAIL: battery probe returned no data." >&2; _rc=1
+            fi
+            for _probe in termux-location termux-clipboard-get termux-wifi-connectioninfo; do
+                if command -v "$_probe" >/dev/null 2>&1; then
+                    echo "PASS: $_probe is present"
+                else
+                    echo "SKIP: $_probe is not available"
+                fi
+            done
+            return $_rc ;;
+        enable|disable)
+            case "$_what" in battery|location|clipboard|notifications) ;; *)
+                echo "Usage: lfa android $_sub battery|location|clipboard|notifications" >&2; return 2 ;; esac
+            local _val=1; [ "$_sub" = "disable" ] && _val=0
+            lfa_android_state_set "$_what" "$_val"
+            if [ "$_val" = "1" ]; then
+                lfa_android_apply_wrappers "$_what"
+                [ "$_what" = "battery" ] && lfa_android_cmd refresh || true
+                echo "[*] Android $_what bridge enabled."
+            else
+                lfa_android_remove_wrapper "$_what"
+                echo "[*] Android $_what bridge disabled."
+            fi ;;
+        bridge)
+            [ -n "$_what" ] || { echo "Usage: lfa android bridge battery|location|clipboard|notifications" >&2; return 2; }
+            if [ -n "$_inst" ]; then
+                lfa_android_cmd enable "$_what" -i "$_inst"
+            else
+                lfa_android_cmd enable "$_what"
+            fi
+            lfa_android_cmd refresh
+            ;;
+        pump)
+            lfa_android_pump ;;
+        *) echo "Unknown android command: $_sub" >&2; lfa_android_cmd help >&2; return 2 ;;
+    esac
+}
+
+lfa_android_apply_wrappers() {  # $1 = capability
+    local _root _rel
+    _root="$(lfa_shim_rootfs 2>/dev/null)" || _root=""
+    [ -n "$_root" ] || { echo "[i] No distro selected; wrappers will be installed on the next enable -i NAME."; return 0; }
+    case "$1" in
+        battery) _rel="usr/local/bin/lfa-android-battery" ;;
+        location) _rel="usr/local/bin/lfa-android-location" ;;
+        clipboard) _rel="usr/local/bin/lfa-android-clipboard" ;;
+        notifications) _rel="usr/local/bin/lfa-android-notify" ;;
+        *) return 0 ;;
+    esac
+    if [ "$1" = "notifications" ]; then
+        lfa_shim_write "$_root" "$_rel" <<'SHIM'
+#!/bin/sh
+# LFA Android notification bridge. Queues a request for `lfa android pump`.
+mkdir -p /tmp/lfa-android-outbox 2>/dev/null || true
+_id="$(date +%s)-$$"
+printf '%s\n' "$*" > "/tmp/lfa-android-outbox/$_id.title"
+cat > "/tmp/lfa-android-outbox/$_id.body" 2>/dev/null || true
+echo "lfa-android-notify: queued (run 'lfa android pump' on the Termux side)." >&2
+SHIM
+        return 0
+    fi
+    lfa_shim_write "$_root" "$_rel" <<'SHIM'
+#!/bin/sh
+# LFA Android bridge (reads the shared /tmp file written by Termux:API).
+case "$1" in
+  battery) cat /tmp/lfa-android-battery.env 2>/dev/null || { echo "battery bridge has no data; run 'lfa android refresh'." >&2; exit 1; } ;;
+  location) cat /tmp/lfa-android-location.json 2>/dev/null || { echo "location bridge has no data; run 'lfa android refresh'." >&2; exit 1; } ;;
+  clipboard) cat /tmp/lfa-android-clipboard.txt 2>/dev/null || { echo "clipboard bridge has no data; run 'lfa android refresh'." >&2; exit 1; } ;;
+esac
+SHIM
+}
+
+lfa_android_remove_wrapper() {  # $1 = capability
+    local _root _f
+    _root="$(lfa_shim_rootfs 2>/dev/null)" || _root=""
+    [ -n "$_root" ] || return 0
+    case "$1" in
+        battery) _f="$_root/usr/local/bin/lfa-android-battery" ;;
+        location) _f="$_root/usr/local/bin/lfa-android-location" ;;
+        clipboard) _f="$_root/usr/local/bin/lfa-android-clipboard" ;;
+        notifications) _f="$_root/usr/local/bin/lfa-android-notify" ;;
+        *) return 0 ;;
+    esac
+    [ -f "$_f" ] && grep -q 'LFA Android' "$_f" 2>/dev/null && rm -f "$_f"
+    return 0
+}
+
+lfa_android_pump() {
+    local _dir="$PREFIX/tmp/lfa-android-outbox" _f
+    [ -d "$_dir" ] || return 0
+    command -v termux-notification >/dev/null 2>&1 || return 0
+    for _f in "$_dir"/*.title; do
+        [ -f "$_f" ] || continue
+        local _base="${_f%.title}" _title _body
+        _title="$(cat "$_f" 2>/dev/null || true)"
+        _body="$(cat "$_base.body" 2>/dev/null || true)"
+        termux-notification --title "$_title" --content "$_body" >/dev/null 2>&1 || true
+        rm -f "$_f" "$_base.body"
+    done
 }
 
 lfa_cli_status_one() {  # $1 = instance, $2 = json
@@ -1418,8 +2136,35 @@ lfa_cli_status_one() {  # $1 = instance, $2 = json
     fi
 }
 
+lfa_software_choices() {  # $1 = comma-separated names -> space-separated menu numbers
+    local _list="$1" _name _out="" _n
+    local IFS=','
+    for _name in $_list; do
+        case "$_name" in
+            ''|none) continue ;;
+            python|python3) _n=1 ;;
+            git) _n=2 ;;
+            node|nodejs|npm) _n=3 ;;
+            curl) _n=4 ;;
+            wget) _n=5 ;;
+            antigravity|ide) _n=6 ;;
+            firefox) _n=7 ;;
+            chromium) _n=8 ;;
+            libreoffice|office) _n=9 ;;
+            vlc) _n=10 ;;
+            gimp) _n=11 ;;
+            htop) _n=12 ;;
+            neofetch|fastfetch) _n=13 ;;
+            vscode|vs-code|code) _n=14 ;;
+            *) echo "Unknown software choice: $_name" >&2; return 2 ;;
+        esac
+        _out="$_out $_n"
+    done
+    printf '%s' "${_out# }"
+}
+
 lfa_cli_install() {
-    local _distro="" _de="" _backend="" _inst="" _auto="" _user="user" _tz="" _host="localhost"
+    local _distro="" _de="" _backend="" _inst="" _auto="" _user="user" _tz="" _host="localhost" _software=""
     while [ $# -gt 0 ]; do
         case "$1" in
             --distro|-d) _distro="${2:-}"; shift 2 ;;
@@ -1430,10 +2175,15 @@ lfa_cli_install() {
             --user) _user="${2:-}"; shift 2 ;;
             --timezone) _tz="${2:-}"; shift 2 ;;
             --hostname) _host="${2:-}"; shift 2 ;;
+            --software) _software="${2:-}"; shift 2 ;;
             -h|--help) lfa_cli_usage; return 0 ;;
             *) echo "Unknown option: $1" >&2; return 2 ;;
         esac
     done
+    local _software_choices=""
+    if [ -n "$_software" ]; then
+        _software_choices="$(lfa_software_choices "$_software")" || return 2
+    fi
     if [ -n "$_inst" ] && ! printf '%s' "$_inst" | grep -Eq '^[A-Za-z0-9_.-]+$'; then
         echo "Invalid instance name '$_inst': use letters, digits, dot, underscore or dash." >&2
         return 2
@@ -1465,12 +2215,13 @@ lfa_cli_install() {
     if [ "$_de" = "none" ]; then _backend="none"; fi
     if [ -z "$_backend" ]; then
         if [ "$_de" = "none" ]; then _backend="none"
-        elif [ "$IS_LEGACY" = "1" ]; then _backend="vnc"
+        elif ! x11_supported; then _backend="vnc"
         else _backend="x11"; fi
     fi
     case "$_backend" in x11|vnc|both|none) ;; *) echo "Unknown backend: $_backend" >&2; return 2 ;; esac
-    if [ "$IS_LEGACY" = "1" ] && { [ "$_backend" = "x11" ] || [ "$_backend" = "both" ]; }; then
-        echo "[!] Termux:X11 requires Android 8 or newer; use --backend vnc." >&2
+    if ! x11_supported && { [ "$_backend" = "x11" ] || [ "$_backend" = "both" ]; }; then
+        echo "[!] Termux:X11 requires Android 8 (SDK 26) or newer; this device reports SDK ${ANDROID_SDK:-unknown}." >&2
+        echo "    Use --backend vnc." >&2
         return 1
     fi
     if [ "$_backend" = "none" ] && [ "$_de" != "none" ]; then
@@ -1489,7 +2240,7 @@ lfa_cli_install() {
     SETUP_ROOT_B64="$(b64enc "${LFA_ROOT_PASSWORD:-root}")"
     TIMEZONE="$_tz"; HOSTNAME="$_host"; PSTYLE="minimal"; COLOR_MODE="light"
     RESOLUTION="${LFA_RESOLUTION:-1280x720}"
-    APP_CHOICES=""
+    APP_CHOICES="$_software_choices"
     NEED_VIRGL=1; [ "$IS_LEGACY" = "1" ] && NEED_VIRGL=0
     DO_AUTOSTART=0; AUTOSTART_SERVER="none"
     if [ -n "$_auto" ] && [ "$_auto" != "none" ]; then
@@ -1610,12 +2361,15 @@ lfa_cli() {
                 on) lfa_cli_notice_write on; echo "start-linux notice enabled." ;;
                 status)
                     _v=1
+                    # shellcheck disable=SC1090
                     [ -r "$LFA_PREFS" ] && . "$LFA_PREFS" 2>/dev/null || true
                     [ "${START_NOTICE:-1}" = "0" ] && _v=0
                     [ "$_v" = "1" ] && echo "start-linux notice: on" || echo "start-linux notice: off" ;;
                 *) echo "Usage: lfa notice on|off|status" >&2; return 2 ;;
             esac ;;
         install) lfa_cli_install "$@" ;;
+        compat) lfa_cli_compat "$@" ;;
+        android) lfa_android_cmd "$@" ;;
         update)
             while [ $# -gt 0 ]; do case "$1" in -i|--instance) CLI_INSTANCE="${2:-}"; shift 2 ;; *) echo "Unknown option: $1" >&2; return 2 ;; esac; done
             LFA_NONINTERACTIVE=1 LFA_CLI_MODE=1 update_linux ;;
@@ -2240,6 +2994,7 @@ x11_used_by_another_instance() {  # $1 = instance to exclude
         [ "$_inst" = "$_skip" ] && continue
         _conf="$(pd_conf "$_inst" 2>/dev/null)"
         [ -f "$_conf" ] || continue
+        # shellcheck disable=SC1090
         if ( . "$_conf" 2>/dev/null; [ "${SERVER:-none}" = "x11" ] || [ "${SERVER:-none}" = "both" ] ); then
             return 0
         fi
@@ -2333,8 +3088,8 @@ change_backend() {  # change_backend TARGET [flags]
         echo "      lfa install --distro ${DISTRO:-debian} --desktop xfce4 --backend $_target -i $INSTANCE_NAME" >&2
         return 1
     fi
-    if [ "$IS_LEGACY" = "1" ] && { [ "$_target" = "x11" ] || [ "$_target" = "both" ]; }; then
-        echo "[!] Termux:X11 requires Android 8 or newer." >&2
+    if ! x11_supported && { [ "$_target" = "x11" ] || [ "$_target" = "both" ]; }; then
+        echo "[!] Termux:X11 requires Android 8 (SDK 26) or newer." >&2
         echo "    This device (Android SDK ${ANDROID_SDK:-unknown}) can only use VNC." >&2
         echo "    Nothing was changed; the current VNC desktop keeps working." >&2
         echo "    Stay on VNC with: lfa switch vnc -i $INSTANCE_NAME" >&2
@@ -2452,10 +3207,10 @@ menu_change_backend() {
         show_menu
         return
     fi
-    if [ "$IS_LEGACY" = "1" ]; then
+    if ! x11_supported; then
         echo ""
-        echo "Android 5/6 supports VNC only. Termux:X11 needs Android 8 or newer,"
-        echo "so X11 and Both are not offered on this device."
+        echo "This device supports VNC only. Termux:X11 needs Android 8 (SDK 26)"
+        echo "or newer, so X11 and Both are not offered here."
         echo "Current backend: $_cur (VNC)."
         ui_pause
         show_menu
@@ -2502,8 +3257,8 @@ set_autostart() {  # set_autostart x11|vnc|none [flags]
         echo "    Autostart needs a desktop; re-install with one first." >&2
         return 1
     fi
-    if [ "$_srv" = "x11" ] && [ "$IS_LEGACY" = "1" ]; then
-        echo "[!] Termux:X11 requires Android 8 or newer; use VNC." >&2
+    if [ "$_srv" = "x11" ] && ! x11_supported; then
+        echo "[!] Termux:X11 requires Android 8 (SDK 26) or newer; use VNC." >&2
         return 1
     fi
     if [ "$_srv" = "vnc" ] && [ "${SERVER:-none}" != "vnc" ] && [ "${SERVER:-none}" != "both" ]; then
@@ -3420,6 +4175,16 @@ else
 fi
 
 if [ "$SERVER" == "x11" ]; then
+    # Termux:X11 needs Android 8 (SDK 26). Configs copied from another
+    # device can still say x11 on Android 7.0/7.1; fail with a clear
+    # instruction instead of trying to install an unusable package.
+    _lfa_sdk="$(getprop ro.build.version.sdk 2>/dev/null | tr -cd '0-9')"
+    if [ -n "$_lfa_sdk" ] && [ "$_lfa_sdk" -gt 0 ] && [ "$_lfa_sdk" -lt 26 ]; then
+        echo "ERROR: Termux:X11 requires Android 8 (SDK 26) or newer." >&2
+        echo "This device reports SDK $_lfa_sdk. Start with VNC instead:" >&2
+        echo "  linux --vnc" >&2
+        exit 1
+    fi
     # An install that chose VNC never pulled the X11 packages. Switching the
     # distro to X11 later (re-install / menu 12) used to dead-end here.
     if ! command -v termux-x11 >/dev/null 2>&1; then
@@ -3774,7 +4539,7 @@ EOF
         cp -f "$LFA_DIR/install_linux.sh" "$LFA_RUNTIME/install_linux.sh" 2>/dev/null || true
         for _d in lib plugins assets; do
             if [ -d "$LFA_DIR/$_d" ]; then
-                rm -rf "$LFA_RUNTIME/$_d"
+                rm -rf "${LFA_RUNTIME:?}/$_d"
                 cp -R "$LFA_DIR/$_d" "$LFA_RUNTIME/$_d" 2>/dev/null || true
             fi
         done
@@ -3975,11 +4740,11 @@ install_linux() {
     fi
 
     if [ "$DE" != "none" ] && [ "$SETUP_ANSWERED" != "1" ]; then
-        # Legacy Android (5/6, SDK < 24): Termux:X11 needs Android 8+.
-        # Force VNC so install never dead-ends on Oppo A37fw-class devices.
-        if [ "$IS_LEGACY" = "1" ]; then
+        # Termux:X11 needs Android 8+ (SDK 26). This covers both legacy
+        # Android 5/6 and the SDK 24/25 gap where Termux is modern but X11 is not.
+        if ! x11_supported; then
             echo ""
-            echo "[*] Legacy Android detected: Termux:X11 unavailable -> using VNC."
+            echo "[*] Android SDK ${ANDROID_SDK:-unknown}: Termux:X11 unavailable -> using VNC."
             SERVER="vnc"
         else
             local _srvdef=1
@@ -4005,10 +4770,10 @@ install_linux() {
             esac
         fi
     fi
-    # Safety clamp for answered setups replayed on legacy hardware (e.g. a
-    # config saved elsewhere): X11 can never work there.
-    if [ "$IS_LEGACY" = "1" ] && [ "$DE" != "none" ] && { [ "$SERVER" = "x11" ] || [ "$SERVER" = "both" ]; }; then
-        echo "[*] Legacy Android: clamping display server to VNC."
+    # Safety clamp for answered setups replayed on hardware that cannot run
+    # Termux:X11 (Android 5/6 and the SDK 24/25 gap).
+    if ! x11_supported && [ "$DE" != "none" ] && { [ "$SERVER" = "x11" ] || [ "$SERVER" = "both" ]; }; then
+        echo "[*] Android SDK ${ANDROID_SDK:-unknown}: clamping display server to VNC."
         SERVER="vnc"
         AUTOSTART_SERVER="vnc"
         [ -z "$RESOLUTION" ] && RESOLUTION="1280x720"

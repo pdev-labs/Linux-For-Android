@@ -381,3 +381,32 @@ bounds that put the window at `y=627` on a 726-pixel-tall Termux:X11 screen,
 leaving only a strip visible. Deleting `~/.config/Code` or using
 `--user-data-dir` restores the default bounds. The new `--no-sandbox` wrapper
 and the troubleshooting entry make the normal case reliable.
+
+## Android CI and compatibility findings (2026-11-05)
+
+### 58. Android 7 was offered X11 it cannot run (fixed)
+
+The installer used one `IS_LEGACY` flag (SDK < 24) for both the archived
+Termux repository path and Termux:X11 availability. Android 7.0/7.1 (SDK
+24/25) therefore got modern packages and was offered X11, Both, and GNOME,
+although all three need Android 8 (SDK 26). The install would only fail when
+the desktop was started. Fixed by adding `X11_SUPPORTED` and using it in the
+installer, CLI, switch/autostart paths, menu 14, quick setup, and the
+generated launcher. API 24/25 boundary scenarios are now in the CI matrix.
+
+### 59. No honest compatibility layer for missing services (addressed)
+
+Users saw `systemctl`, `snap`, `upower`, and sandbox errors with no way to
+tell which failures were fixable and which were kernel limits. `lfa compat`
+now lists, explains, and optionally enables small, visible fallbacks, and
+refuses to fake Docker, Flatpak, TUN/TAP, netfilter, CUDA, ROCm, KVM, or kernel
+modules. `docs/INCOMPATIBLE.md` records the reasons.
+
+### 60. Manual phone testing was the only real-device gate (ongoing)
+
+The host suite is stubbed and every real display check depended on a person
+with a phone. Android emulator workflows and `tests/termux-e2e.sh` now cover
+CLI, VNC, X11, switching, refusal, shims, software probes, and a real VNC
+framebuffer. ARM64-only vendor builds, real Android 5/6 Termux repos, OEM
+process killers, and real hardware remain device checks; the CI has not run on
+GitHub Actions yet.

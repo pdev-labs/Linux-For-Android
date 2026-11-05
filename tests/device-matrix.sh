@@ -3,6 +3,7 @@
 #
 #   ./tests/device-matrix.sh                 # info + suite + existing sessions
 #   ./tests/device-matrix.sh --install alpine --desktop xfce4 --backend vnc
+#   ./tests/device-matrix.sh --install debian --e2e
 #
 # What it does that CI cannot: it runs the real suite with the real Termux
 # userland, reports the device profile that the verified matrix depends on,
@@ -17,12 +18,14 @@ INSTALL_DISTRO=""
 DESKTOP="xfce4"
 BACKEND="vnc"
 KEEP=0
+E2E=0
 
 while [ $# -gt 0 ]; do
     case "$1" in
         --install) INSTALL_DISTRO="${2:-}"; shift 2 ;;
         --desktop) DESKTOP="${2:-xfce4}"; shift 2 ;;
         --backend) BACKEND="${2:-vnc}"; shift 2 ;;
+        --e2e)     E2E=1; shift ;;
         --keep)    KEEP=1; shift ;;
         -h|--help)
             sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'
@@ -62,14 +65,23 @@ SUITE_RC=$?
 echo "suite exit: $SUITE_RC"
 
 if [ -n "$INSTALL_DISTRO" ]; then
-    say "Installing with quick setup (all defaults)"
-    echo "NOTE: quick setup ignores --desktop/--backend; it installs the"
-    echo "      recommended combination for this device. For a specific"
-    echo "      combination, run ./install_linux.sh and answer the wizard."
-    ./install_linux.sh --yes || {
-        echo "Quick setup failed; run ./install_linux.sh manually." >&2
+    say "Installing $INSTALL_DISTRO ($DESKTOP, $BACKEND) through lfa"
+    INSTANCE="device-$INSTALL_DISTRO"
+    ./install_linux.sh --cli install --distro "$INSTALL_DISTRO" \
+        --desktop "$DESKTOP" --backend "$BACKEND" -i "$INSTANCE" || {
+        echo "lfa install failed; run ./install_linux.sh manually." >&2
         exit 1
     }
+    if [ "$E2E" = "1" ]; then
+        say "Running the on-device E2E harness"
+        LFA_E2E_DISTRO="$INSTALL_DISTRO" LFA_E2E_DESKTOP="$DESKTOP" \
+        LFA_E2E_BACKEND="$BACKEND" LFA_E2E_INSTANCE="$INSTANCE" \
+        LFA_E2E_SKIP_INSTALL=1 LFA_E2E_DIAGNOSTICS=1 \
+            bash tests/termux-e2e.sh
+        E2E_RC=$?
+        echo "e2e exit: $E2E_RC"
+        [ "$E2E_RC" = "0" ] || SUITE_RC=1
+    fi
 fi
 
 say "Existing desktop sessions"

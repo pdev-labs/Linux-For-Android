@@ -1,0 +1,86 @@
+name: Android E2E
+
+# PR smoke runs a small representative matrix. Dispatch can run the reduced
+# or full matrix without waiting for the weekly schedule.
+on:
+  pull_request:
+    paths:
+      - 'install_linux.sh'
+      - 'lib/**'
+      - 'tests/**'
+      - '.github/workflows/android-*.yml'
+      - '.github/workflows/_android-scenario.yml'
+      - '.github/scripts/android/**'
+  push:
+    branches: [main]
+    paths:
+      - 'install_linux.sh'
+      - 'lib/**'
+      - 'tests/**'
+      - '.github/workflows/android-*.yml'
+      - '.github/workflows/_android-scenario.yml'
+      - '.github/scripts/android/**'
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'Matrix size'
+        required: true
+        default: smoke
+        type: choice
+        options: [smoke, reduced, full]
+      shard:
+        description: 'Shard index (0-based)'
+        required: false
+        default: '0'
+        type: string
+      total_shards:
+        description: 'Total shards'
+        required: false
+        default: '1'
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-e2e-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: true
+
+jobs:
+  matrix:
+    name: Build matrix
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.gen.outputs.matrix }}
+      count: ${{ steps.gen.outputs.count }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: gen
+        env:
+          MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.mode || 'smoke' }}
+          SHARD: ${{ github.event_name == 'workflow_dispatch' && inputs.shard || '0' }}
+          TOTAL: ${{ github.event_name == 'workflow_dispatch' && inputs.total_shards || '1' }}
+        run: |
+          MATRIX="$(python3 tests/generate-android-matrix.py \
+            --mode "$MODE" --shard "$SHARD" --total-shards "$TOTAL" --format json)"
+          echo "matrix=$MATRIX" >> "$GITHUB_OUTPUT"
+          echo "count=$(python3 -c 'import json,sys; print(len(json.load(sys.stdin)["include"]))' <<<"$MATRIX")" >> "$GITHUB_OUTPUT"
+
+  e2e:
+    name: ${{ matrix.name }}
+    needs: matrix
+    if: needs.matrix.outputs.count != '0'
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix: ${{ fromJSON(needs.matrix.outputs.matrix) }}
+    uses: ./.github/workflows/_android-scenario.yml
+    with:
+      name: ${{ matrix.name }}
+      api: ${{ matrix.api }}
+      arch: ${{ matrix.arch }}
+      target: ${{ matrix.target }}
+      distro: ${{ matrix.distro }}
+      desktop: ${{ matrix.desktop }}
+      backend: ${{ matrix.backend }}
+      scenario: ${{ matrix.scenario }}

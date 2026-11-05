@@ -100,6 +100,12 @@ cat > "$T/fakebin/sshd" <<'EOF'
 echo "STUB-SSHD started"
 exit 0
 EOF
+cat > "$T/fakebin/termux-battery-status" <<'EOF'
+#!/bin/bash
+printf '{"health":"GOOD","percentage":77,"plugged":"PLUGGED_AC","status":"CHARGING","temperature":30.0}\n'
+exit 0
+EOF
+chmod +x "$T/fakebin/termux-battery-status"
 cat > "$T/fakebin/pulseaudio" <<'EOF'
 #!/bin/bash
 echo "STUB-PULSE: $*"
@@ -169,7 +175,7 @@ check_absent() {
 # sleep is not enough on a loaded phone: bash may still be loading.
 wait_cmdline() { # $1 pid, $2 substring
     local _i=0
-    while [ "$_i" -lt 40 ]; do
+    while [ "$_i" -lt 100 ]; do
         if tr '\0' ' ' < "/proc/$1/cmdline" 2>/dev/null | grep -qF -- "$2"; then
             return 0
         fi
@@ -665,8 +671,9 @@ check "M5 list empty message" 'No distributions installed.' "$T/cli4.log"
 
 echo "===== M6: pidfile verification refuses unrelated processes ====="
 ( . "$T/prefix/bin/lfa-lib.sh" 2>/dev/null || true
-  bash -c 'exec -a "Xvnc :1" "$BASH" -c "sleep 5; :"' &
+  bash -c 'exec -a "Xvnc :1" "$BASH" -c "sleep 30; :"' &
   FAKE_X=$!
+  trap 'kill "$FAKE_X" 2>/dev/null || true' EXIT
   wait_cmdline "$FAKE_X" "Xvnc"
   if ( type lfa_pid_matches >/dev/null 2>&1 ) \
      && lfa_pid_matches "$FAKE_X" "Xvnc" 2>/dev/null \
@@ -1140,14 +1147,109 @@ LEGROOT="$T/prefix/var/lib/proot-distro/installed-rootfs/legacygui"
 mkdir -p "$LEGROOT/etc" "$LEGROOT/usr" "$LEGROOT/home/user"
 printf 'DISTRO="alpine"\nDE="xfce4"\nSERVER="vnc"\nAUTOSTART_SERVER="vnc"\nUSER_NAME="user"\n' > "$LEGROOT/etc/termux-linux-manager.conf"
 "$LFA" switch x11 -i legacygui --remove-old > "$T/y6-switch.log" 2>&1; rc=$?; [ "$rc" = "1" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y6 legacy switch exit $rc"; }
-check "Y6 legacy refusal" 'Termux:X11 requires Android 8 or newer' "$T/y6-switch.log"
+check "Y6 legacy refusal" 'Termux:X11 requires Android 8 (SDK 26) or newer' "$T/y6-switch.log"
 check "Y6 legacy keeps vnc" 'Nothing was changed' "$T/y6-switch.log"
 check "Y6 legacy removal warning" '--remove-old was ignored on purpose' "$T/y6-switch.log"
 check "Y6 legacy restore command" 'lfa switch vnc -i legacygui' "$T/y6-switch.log"
 check "Y6 legacy conf kept" 'SERVER="vnc"' "$LEGROOT/etc/termux-linux-manager.conf"
 "$LFA" install --distro alpine --desktop xfce4 --backend both -i legacynew > "$T/y6-install.log" 2>&1; rc=$?; [ "$rc" = "1" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y6 legacy install exit $rc"; }
-check "Y6 legacy install refusal" 'use --backend vnc' "$T/y6-install.log"
+check "Y6 legacy install refusal" 'Use --backend vnc' "$T/y6-install.log"
 unset GETPROP_SDK
+
+echo "===== Y7: Android 7.0/7.1 (SDK 24/25) is not modern for X11 ====="
+fresh_env
+export GETPROP_SDK=24
+printf '%s\n' 1 '' 13 | bash "$REPO/install_linux.sh" > "$T/y7-quick.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y7 quick exit $rc"; }
+check "Y7 quick setup selects VNC" 'SERVER="vnc"' "$T/home/.config/linux-for-android/setup.conf"
+check "Y7 banner names X11" 'X11 UNAVAILABLE: Android 7.0/7.1' "$T/y7-quick.log"
+"$LFA" install --distro ubuntu --desktop xfce4 --backend x11 -i api24x > "$T/y7-x11.log" 2>&1; rc=$?; [ "$rc" = "1" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y7 install x11 exit $rc"; }
+check "Y7 install x11 refusal" 'Termux:X11 requires Android 8 (SDK 26) or newer' "$T/y7-x11.log"
+check "Y7 install x11 reports sdk" 'this device reports SDK 24' "$T/y7-x11.log"
+"$LFA" install --distro ubuntu --desktop xfce4 --backend vnc -i api24v > "$T/y7-vnc.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y7 install vnc exit $rc"; }
+Y7ROOT="$T/prefix/var/lib/proot-distro/installed-rootfs/api24v"
+check "Y7 vnc install backend" 'SERVER="vnc"' "$Y7ROOT/etc/termux-linux-manager.conf"
+"$LFA" switch x11 -i api24v > "$T/y7-switch.log" 2>&1; rc=$?; [ "$rc" = "1" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y7 switch x11 exit $rc"; }
+check "Y7 switch refusal" 'Termux:X11 requires Android 8 (SDK 26) or newer' "$T/y7-switch.log"
+check "Y7 switch keeps vnc" 'Nothing was changed' "$T/y7-switch.log"
+"$LFA" switch both -i api24v > "$T/y7-both.log" 2>&1; rc=$?; [ "$rc" = "1" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y7 switch both exit $rc"; }
+check "Y7 both refusal" 'Termux:X11 requires Android 8 (SDK 26) or newer' "$T/y7-both.log"
+export GETPROP_SDK=25
+"$LFA" autostart x11 -i api24v > "$T/y7-auto.log" 2>&1; rc=$?; [ "$rc" = "1" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y7 autostart x11 exit $rc"; }
+check "Y7 autostart refusal" 'Termux:X11 requires Android 8 (SDK 26) or newer' "$T/y7-auto.log"
+export GETPROP_SDK=26
+"$LFA" switch x11 -i api24v > "$T/y7-ok.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y7 SDK 26 switch exit $rc"; }
+check "Y7 SDK 26 accepts x11" 'SERVER="x11"' "$Y7ROOT/etc/termux-linux-manager.conf"
+check_absent "Y7 no legacy repo mode at 24/25" 'LEGACY MODE' "$T/y7-quick.log"
+unset GETPROP_SDK
+
+echo "===== Y8: lfa compat and lfa android ====="
+fresh_env
+printf '%s\n' 1 '' 13 | bash "$REPO/install_linux.sh" > "$T/y8-base.log" 2>&1
+"$LFA" compat list > "$T/y8-list.log" 2>&1
+check "Y8 compat lists systemctl" 'systemctl' "$T/y8-list.log"
+check "Y8 compat lists docker" 'docker' "$T/y8-list.log"
+check "Y8 compat lists cuda" 'cuda' "$T/y8-list.log"
+"$LFA" compat status > "$T/y8-status0.log" 2>&1
+check "Y8 compat default disabled" 'systemctl    disabled' "$T/y8-status0.log"
+"$LFA" compat explain systemctl > "$T/y8-explain.log" 2>&1
+check "Y8 compat explains systemctl" 'tiny LFA supervisor' "$T/y8-explain.log"
+check "Y8 compat explains the limit" 'no PID 1' "$T/y8-explain.log"
+"$LFA" compat explain docker > "$T/y8-docker.log" 2>&1
+check "Y8 docker is not shimmable" 'not shimmable' "$T/y8-docker.log"
+"$LFA" compat enable docker > "$T/y8-docker-enable.log" 2>&1; rc=$?; [ "$rc" = "1" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y8 docker enable exit $rc"; }
+check "Y8 docker refusal" 'cannot be shimmed safely' "$T/y8-docker-enable.log"
+"$LFA" compat enable systemctl -i debian > "$T/y8-enable.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y8 compat enable exit $rc"; }
+Y8ROOT="$T/prefix/var/lib/proot-distro/installed-rootfs/debian"
+[ -x "$Y8ROOT/usr/local/bin/systemctl" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y8 systemctl shim missing"; }
+check "Y8 shim has a marker" 'LFA compatibility shim' "$Y8ROOT/usr/local/bin/systemctl"
+check "Y8 shim refuses unmapped units" 'not provided by the LFA compatibility layer' "$Y8ROOT/usr/local/bin/systemctl"
+[ -f "$Y8ROOT/etc/lfa/systemd-map.conf" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y8 systemd map missing"; }
+"$LFA" compat status > "$T/y8-status1.log" 2>&1
+check "Y8 compat now enabled" 'systemctl    enabled' "$T/y8-status1.log"
+"$LFA" compat disable systemctl -i debian > "$T/y8-disable.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y8 compat disable exit $rc"; }
+[ ! -e "$Y8ROOT/usr/local/bin/systemctl" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y8 shim survived disable"; }
+"$LFA" android status > "$T/y8-android.log" 2>&1
+check "Y8 android status" 'termux-api package: installed' "$T/y8-android.log"
+check "Y8 android bridge dir" "$T/prefix/tmp" "$T/y8-android.log"
+"$LFA" android install > "$T/y8-android-install.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y8 android install exit $rc"; }
+check "Y8 android install uses pkg" 'STUB-PKG: install -y termux-api' "$T/y8-android-install.log"
+"$LFA" android test > "$T/y8-android-test.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y8 android test exit $rc"; }
+check "Y8 android test reads battery" 'battery -> {' "$T/y8-android-test.log"
+"$LFA" android enable battery -i debian > "$T/y8-battery.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y8 android battery exit $rc"; }
+[ -x "$Y8ROOT/usr/local/bin/lfa-android-battery" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y8 battery wrapper missing"; }
+check "Y8 battery env written" 'BATTERY_PERCENT=77' "$T/prefix/tmp/lfa-android-battery.env"
+"$LFA" android disable battery -i debian > "$T/y8-battery-off.log" 2>&1
+[ ! -e "$Y8ROOT/usr/local/bin/lfa-android-battery" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y8 battery wrapper survived disable"; }
+"$LFA" android enable notifications -i debian > "$T/y8-notify.log" 2>&1
+check "Y8 notification wrapper" 'lfa-android-outbox' "$Y8ROOT/usr/local/bin/lfa-android-notify"
+"$LFA" install --distro debian --desktop xfce4 --backend vnc --software python,git,htop -i softcli > "$T/y8-soft.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y8 --software exit $rc"; }
+YS=$(setup_sh_of)
+check "Y8 software python" 'python3 python3-pip' "$YS"
+check "Y8 software git" 'git' "$YS"
+check "Y8 software htop" 'htop' "$YS"
+"$LFA" install --distro debian --desktop xfce4 --backend vnc --software definitely-not-real -i badsoft > "$T/y8-soft-bad.log" 2>&1; rc=$?; [ "$rc" = "2" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y8 bad --software exit $rc"; }
+check "Y8 bad software message" 'Unknown software choice: definitely-not-real' "$T/y8-soft-bad.log"
+
+echo "===== Y9: Android matrix generator ====="
+python3 "$REPO/tests/generate-android-matrix.py" --mode smoke --format json > "$T/y9-smoke.json" 2>&1
+python3 "$REPO/tests/generate-android-matrix.py" --mode reduced --format json > "$T/y9-reduced.json" 2>&1
+python3 "$REPO/tests/generate-android-matrix.py" --mode full --shard 0 --total-shards 8 --format json > "$T/y9-full0.json" 2>&1
+python3 - "$T/y9-smoke.json" "$T/y9-reduced.json" "$T/y9-full0.json" <<'PY'
+import json, sys
+smoke, reduced, full = (json.load(open(p))["include"] for p in sys.argv[1:])
+assert len(smoke) == 6, len(smoke)
+assert len(reduced) >= 20, len(reduced)
+assert full, "empty full shard"
+allnames = {x["name"] for x in reduced + full}
+assert any("api24" in n and "vnc" in n for n in allnames), "missing API 24 boundary"
+assert any("api25" in n and "legacy" in n for n in allnames), "missing API 25 boundary"
+assert not any("api24" in n and ("-x11-" in n or "-both-" in n) for n in allnames), "X11 generated for API 24"
+assert any("api26" in n and "both" in n for n in allnames), "missing Both at API 26"
+assert all(set(x) == {"name", "api", "arch", "target", "distro", "desktop", "backend", "scenario"} for x in full)
+print("matrix assertions passed")
+PY
+[ "$?" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y9 matrix assertions"; }
+python3 "$REPO/tests/generate-android-matrix.py" --mode smoke --shard 2 --total-shards 1 >/dev/null 2>&1; rc=$?; [ "$rc" = "2" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y9 invalid shard exit $rc"; }
 
 echo ""
 echo "===== Z: documentation links ====="

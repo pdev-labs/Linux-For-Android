@@ -1,0 +1,71 @@
+name: Android full matrix
+
+# Manual, sharded, expensive. A full pass is ~700 scenarios; run it in
+# parallel shards, for example:
+#   gh workflow run android-full.yml -f shard=0 -f total_shards=8
+#   ... repeat for shard=1..7
+on:
+  workflow_dispatch:
+    inputs:
+      shard:
+        description: 'Shard index (0-based)'
+        required: true
+        default: '0'
+        type: string
+      total_shards:
+        description: 'Total shards'
+        required: true
+        default: '8'
+        type: string
+      include_best_effort:
+        description: 'Include API 21/22 (best effort)'
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-full-${{ inputs.shard }}-${{ inputs.total_shards }}
+  cancel-in-progress: false
+
+jobs:
+  matrix:
+    name: Build full matrix shard ${{ inputs.shard }}/${{ inputs.total_shards }}
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.gen.outputs.matrix }}
+      count: ${{ steps.gen.outputs.count }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: gen
+        env:
+          SHARD: ${{ inputs.shard }}
+          TOTAL: ${{ inputs.total_shards }}
+          BEST_EFFORT: ${{ inputs.include_best_effort }}
+        run: |
+          FLAGS=(--mode full --shard "$SHARD" --total-shards "$TOTAL" --format json)
+          [ "$BEST_EFFORT" = "true" ] && FLAGS+=(--include-best-effort)
+          MATRIX="$(python3 tests/generate-android-matrix.py "${FLAGS[@]}")"
+          echo "matrix=$MATRIX" >> "$GITHUB_OUTPUT"
+          echo "count=$(python3 -c 'import json,sys; print(len(json.load(sys.stdin)["include"]))' <<<"$MATRIX")" >> "$GITHUB_OUTPUT"
+
+  e2e:
+    name: ${{ matrix.name }}
+    needs: matrix
+    if: needs.matrix.outputs.count != '0'
+    strategy:
+      fail-fast: false
+      max-parallel: 8
+      matrix: ${{ fromJSON(needs.matrix.outputs.matrix) }}
+    uses: ./.github/workflows/_android-scenario.yml
+    with:
+      name: ${{ matrix.name }}
+      api: ${{ matrix.api }}
+      arch: ${{ matrix.arch }}
+      target: ${{ matrix.target }}
+      distro: ${{ matrix.distro }}
+      desktop: ${{ matrix.desktop }}
+      backend: ${{ matrix.backend }}
+      scenario: ${{ matrix.scenario }}

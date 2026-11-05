@@ -7,7 +7,7 @@ Status values:
 
 | Status | Meaning |
 |---|---|
-| `done` | code changed, suite green (`PASS=491 FAIL=0`), lint clean |
+| `done` | code changed, suite green (`PASS=545 FAIL=0`), lint clean |
 | `partial` | the main risk is addressed; a documented remainder is listed |
 | `deferred` | deliberately not fixed in this pass, with the reason recorded |
 | `device` | also exercised on the Vivo V2437 |
@@ -52,8 +52,24 @@ Lint: `shellcheck -S warning` clean, `bash -n` clean, CI workflow added.
 | Android 5/6 refusal | `done` | explicit explanation, `--remove-old` warning, VNC restore command |
 | `start-linux` notice | `done` | stderr, interactive classic runs only; `lfa notice`, `--no-notice`, `LFA_NO_NOTICE` |
 | Boot script ownership | `done` | switching a non-autostart instance no longer hijacks another instance's boot script |
-| Host suite | `done` | `PASS=491 FAIL=0`; new Y1-Y6 sections cover CLI, switch, removal, guard, `-i`, legacy |
+| Host suite | `done` | `PASS=545 FAIL=0`; Y1-Y9 cover CLI, switch, removal, guard, `-i`, legacy, SDK 24/25, compat/android, matrix |
 | Device verification | `partial` | host suite only for the new surfaces; repeat switch/refusal matrix on Vivo and Oppo next device pass |
+
+## Android CI and compatibility layers (2026-11-05)
+
+| Item | Status | Notes |
+|---|---|---|
+| SDK 24/25 cutoff | `done` | `IS_LEGACY` (SDK < 24) separated from `X11_SUPPORTED` (SDK >= 26); install, switch, autostart, menu 14, quick setup, and `start-linux` agree |
+| `lfa compat` | `done` | list/status/explain/enable/disable; systemctl, loginctl, upower, snap, bwrap, CPU Vulkan/OpenCL; kernel features reported unsupported |
+| `lfa android` | `done` | status/install/permissions/test/refresh/enable/disable/pump; battery/location/clipboard/notification bridge |
+| `lfa install --software` | `done` | comma-separated app list mapped to the existing selector |
+| Matrix generator | `done` | smoke 6, reduced 23, full 674; sharding and best-effort API 21/22 |
+| CI workflows | `done` | reusable scenario, PR smoke, weekly reduced, manual sharded full |
+| On-device harness | `done` | `tests/termux-e2e.sh`, `tests/software-probe.sh`, `vnc-probe.py` |
+| CI docs | `done` | `docs/CI-ANDROID.md`, `docs/INCOMPATIBLE.md` |
+| Host suite | `done` | new Y7-Y9 cases for SDK 24/25, compat/android, matrix generator |
+| Emulator run | `pending` | workflow has not run on GitHub Actions yet |
+| Device run | `pending` | no phone reachable; repeat on Vivo/Oppo when available |
 
 ## Security
 

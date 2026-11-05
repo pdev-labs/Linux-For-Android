@@ -599,6 +599,32 @@ is stored in `~/.config/linux-for-android/preferences.conf`.
 
 ## 4. Display and input
 
+### 4.0 X11 is refused on Android 7.0/7.1
+
+Symptom: on a device reporting Android SDK 24 or 25, `lfa install --backend
+x11`, `lfa switch x11`, `lfa autostart x11`, or menu 14 says:
+
+```text
+Termux:X11 requires Android 8 (SDK 26) or newer.
+```
+
+Why: Termux packages work on Android 7, but Termux:X11 and GNOME do not. LFA
+tracks the package cutoff (SDK < 24 is legacy) separately from the X11 cutoff
+(SDK >= 26). This is not a bug and there is no setting that makes X11 work on
+Android 7.
+
+Fix: use VNC. The installer already selects it automatically on these
+devices:
+
+```bash
+lfa switch vnc -i <instance>
+lfa start -i <instance> --vnc
+```
+
+If a config was copied from another device and says `SERVER="x11"`,
+`start-linux` refuses with the same message instead of trying to install an
+unusable package. Edit the config or run `lfa switch vnc -i <instance>`.
+
 ### 4.1 Termux:X11 says display :1 not found
 
 Symptom: `xdpyinfo` fails with `unable to open display ":1"`, or
@@ -696,6 +722,57 @@ Then point the viewer at `localhost:5901`. Do not expose 5901 to the network;
 VNC's password is not a substitute for SSH.
 
 ## 5. Applications
+
+### 5.0 `systemctl`, `snap`, Docker, or CUDA still fail
+
+Symptom: `systemctl` says the system was not booted with systemd; `snap`
+says snapd is unavailable; Docker or CUDA fails even after a compatibility
+shim was enabled.
+
+Why: the compatibility layer replaces **userspace expectations**, not kernel
+facilities. `lfa compat` can map units to a small supervisor, answer
+`loginctl`, read battery data, map a few snaps to distro packages, and provide
+CPU Vulkan/OpenCL. It cannot create PID 1, namespaces, cgroups, TUN/TAP,
+netfilter, GPU compute runtimes, or kernel modules.
+
+Check what is real:
+
+```bash
+lfa compat list
+lfa compat explain systemctl
+lfa compat explain docker
+lfa compat status
+```
+
+Use the specific command, not a version flag, to test it. `docker --version`
+prints a string even when the daemon cannot run; `docker info` is the honest
+test.
+
+If a program needs a missing service, enable the matching shim and read the
+`limit:` line in `explain`. If the entry says `unsupported`, nobody can shim
+it safely. Use a native Android app, a userspace proxy, or CPU rendering
+instead. The full list is in [INCOMPATIBLE.md](INCOMPATIBLE.md).
+
+### 5.0a Battery or location data is missing in the guest
+
+Symptom: `upower -d` shows `unknown`, or the guest bridge file is empty.
+
+Fix:
+
+```bash
+lfa android status
+lfa android install          # termux-api client package
+# install the Termux:API app from F-Droid and grant permissions
+lfa android permissions
+lfa android test
+lfa android enable battery -i <instance>
+lfa android refresh
+```
+
+The bridge writes `$PREFIX/tmp/lfa-android-battery.env` (and JSON files for
+location/clipboard). The guest sees `/tmp/...` because LFA uses `--shared-tmp`.
+Termux:API exposes Android framework data; it does not create
+`/dev/video*`, `/dev/iio`, TUN/TAP, or GPU devices.
 
 ### 5.1 Electron apps do nothing at all
 
