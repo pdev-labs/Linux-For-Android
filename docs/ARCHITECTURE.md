@@ -159,6 +159,26 @@ Neither layer may fake a kernel facility. Docker, Podman, Flatpak, TUN/TAP,
 iptables, CUDA, ROCm, KVM, and modules are listed as unsupported by
 `lfa compat list` and explained by `lfa compat explain`.
 
+## Storage model
+
+Android shared storage is at `/storage/emulated/0`. proot binds it at the
+same path and also exposes `/sdcard`, so the guest and Termux see one tree.
+Android mounts it as `1023:1023` with mode `2770` and `noexec`. LFA gives the
+desktop user gid 1023 as its primary group, which makes the mode check pass.
+Without it Thunar draws `emblem-unreadable` on every folder even though the
+files are readable.
+
+`chmod` does not work there. The FUSE mount fixes the mode, so `chmod +x` is
+ignored even as root. `lfa storage exec` and the guest-side `lfa-run-file`
+copy a file to `/tmp`, set the mode on the copy, and run it.
+
+`/storage/emulated/0/Android/data` and `Android/obb` are a separate case.
+Android 11 and later deny both folders to every app, including Termux, and
+"All files access" does not change that. adb runs as the shell user and is
+allowed in, so `lfa storage data` copies an app's folders into
+`/storage/emulated/0/Android-backup/<package>`. The copy is a snapshot, not a
+mount.
+
 ## CI model
 
 ## Session wrappers

@@ -1,6 +1,28 @@
 # Test report for v1.7.1
 
-> Current development suite: `PASS=550 FAIL=0`.
+> Current development suite: `PASS=627 FAIL=0`.
+
+## Android storage, 2026-11-06
+
+Verified on the Vivo V2437 (Android 16, SDK 36, aarch64) with the unreleased
+storage changes.
+
+| Check | Result |
+|---|---|
+| Host suite | `PASS=627 FAIL=0` |
+| Thunar false X | gid 1023; folder icons normal; screenshot checked |
+| `lfa storage exec` | shell and Python scripts from `/storage/emulated/0` ran from a `/tmp` copy |
+| `lfa storage data` | adb at `127.0.0.1:5555`; `list` and `pull` worked for `Android/data` and `Android/obb`; guest read the copy |
+
+The X was `emblem-unreadable`, not an access error. Android mounts the tree
+as `1023:1023` with mode `2770`, and the desktop user was outside group 1023.
+The fix makes gid 1023 the primary group. `chmod` stayed impossible because
+the FUSE mount fixes the mode and is `noexec`.
+
+Android 11 and later also deny `Android/data` and `Android/obb` to every app.
+"All files access" did not help. adb runs as the shell user, so
+`lfa storage data pull` copies the folders into shared storage. The copy is a
+snapshot, not a mount.
 
 ## Android CI, SDK cutoffs, and compatibility layers, 2026-11-05
 
@@ -11,7 +33,7 @@ the network during this pass, so the legacy-device rows remain pending.
 
 | Check | Result |
 |---|---|
-| Host suite (`./tests/test-all.sh`) | `PASS=550 FAIL=0` |
+| Host suite (`./tests/test-all.sh`) | `PASS=627 FAIL=0` |
 | On-device VNC scenario (`termux-e2e.sh`) | `PASS=14 FAIL=0` |
 | On-device Both → VNC/X11 switch | `PASS=22 FAIL=0` |
 | On-device X11 scenario | `PASS=14 FAIL=0` |

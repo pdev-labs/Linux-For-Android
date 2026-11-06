@@ -182,6 +182,14 @@ These failures were found on a device, diagnosed, and fixed. The notes are in
 - TigerVNC 1.15 and later killed the session when the xstartup returned. The
   fix uses a foreground `exec` session plus a proot keepalive, because
   `proot --kill-on-exit` reaps the server otherwise.
+- Thunar drew a gray X on every folder in Android shared storage. Android
+  mounts the tree as `1023:1023` with mode `2770`, and the desktop user was
+  outside group 1023. Reads and writes worked, so the X was false. The fix
+  makes gid 1023 the user's primary group.
+- `/storage/emulated/0/Android/data` and `Android/obb` stayed closed even
+  after "All files access". Android 11 and later deny both folders to every
+  app, including Termux, so the guest cannot open them. `lfa storage data`
+  copies an app's folders through adb, which runs as the shell user.
 
 ## GNOME (experimental)
 
@@ -387,6 +395,9 @@ as experimental only.
 - The browser menu can force hardware-accelerated video decoding with
   `--enable-gpu-rasterization` and `--use-gl=egl`.
 - Start a native SSH server on port 8022 from the menu.
+- `lfa storage` repairs the shared-storage links and the false Thunar X, runs
+  scripts from shared storage without `chmod`, and copies `Android/data` and
+  `Android/obb` through adb.
 
 ### Portability and convenience
 
