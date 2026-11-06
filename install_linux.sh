@@ -2646,6 +2646,10 @@ Usage: lfa storage <command> [options]
   fix                      repair links, bookmarks, and the storage group
   exec FILE [args...]      run a file from shared storage without chmod
   open                     show where shared storage is and how to open it
+  data status              check adb access to Android/data and Android/obb
+  data list                list packages under Android/data and Android/obb
+  data pull PKG [data|obb|both] [--dest DIR]
+                           copy an app's folders into shared storage
   help                     show this help
 
 Options:
@@ -2655,6 +2659,9 @@ Options:
 Android shared storage is mounted with fixed permissions.
 chmod does not work on /storage/emulated/0. `lfa storage exec` copies the
 file to a Linux filesystem, sets the mode there, runs it, and removes the copy.
+
+Android/data and Android/obb are blocked for apps, including Termux. The
+data commands use adb, which runs as the shell user and can read them.
 STOHELP
 }
 
@@ -2807,6 +2814,158 @@ lfa_storage_open() {
     echo "Open it from the file manager, or run: thunar /storage/emulated/0"
 }
 
+lfa_storage_data_help() {
+    cat <<'DATAHELP'
+Usage: lfa storage data <command> [options]
+
+  status                   check adb and Android/data, Android/obb access
+  list                     list packages under Android/data and Android/obb
+  pull PKG [data|obb|both] copy an app's folders into shared storage
+  help                     show this help
+
+Options:
+  --dest DIR               destination (default: ~/storage/shared/Android-backup/PKG)
+
+Android blocks /sdcard/Android/data and /sdcard/Android/obb for apps,
+including Termux. adb runs as the shell user and can read them. LFA copies
+the files into shared storage so the Linux guest can open them.
+
+The copy lands in shared storage, which other apps can read. Delete it when
+you are done.
+
+One-time setup from a PC with USB debugging enabled:
+
+  adb tcpip 5555
+
+After a reboot, run that command again, or enable Wireless debugging and
+pair Termux's adb once.
+DATAHELP
+}
+
+lfa_storage_adb_serial() {
+    local _d
+    command -v adb >/dev/null 2>&1 || return 1
+    if adb -s 127.0.0.1:5555 get-state >/dev/null 2>&1; then
+        printf '%s\n' "127.0.0.1:5555"
+        return 0
+    fi
+    adb connect 127.0.0.1:5555 >/dev/null 2>&1 || true
+    sleep 1
+    if adb -s 127.0.0.1:5555 get-state >/dev/null 2>&1; then
+        printf '%s\n' "127.0.0.1:5555"
+        return 0
+    fi
+    _d="$(adb devices 2>/dev/null | awk '$2=="device" && $1 !~ /^emulator-/ {print $1; exit}')"
+    [ -n "$_d" ] || return 1
+    printf '%s\n' "$_d"
+}
+
+lfa_storage_data_no_device() {
+    if ! command -v adb >/dev/null 2>&1; then
+        echo "adb is not installed. Run: pkg install android-tools" >&2
+        return 1
+    fi
+    echo "No adb device is connected." >&2
+    echo "From a PC with USB debugging enabled, run:" >&2
+    echo "  adb tcpip 5555" >&2
+    echo "Then run this command again. The connection lasts until the phone reboots." >&2
+    echo "For a no-PC restart, enable Wireless debugging and pair Termux's adb once." >&2
+    return 1
+}
+
+lfa_storage_data_status() {
+    if ! command -v adb >/dev/null 2>&1; then
+        echo "adb:       missing (run: pkg install android-tools)"
+        return 0
+    fi
+    echo "adb:       installed"
+    local _s
+    if ! _s="$(lfa_storage_adb_serial)"; then
+        lfa_storage_data_no_device
+        return 0
+    fi
+    echo "device:    $_s"
+    if adb -s "$_s" shell ls /sdcard/Android/data >/dev/null 2>&1; then
+        echo "data:      readable"
+    else
+        echo "data:      not readable"
+    fi
+    if adb -s "$_s" shell ls /sdcard/Android/obb >/dev/null 2>&1; then
+        echo "obb:       readable"
+    else
+        echo "obb:       not readable"
+    fi
+}
+
+lfa_storage_data_list() {
+    local _s
+    if ! _s="$(lfa_storage_adb_serial)"; then
+        lfa_storage_data_no_device
+        return 1
+    fi
+    echo "Android/data:"
+    adb -s "$_s" shell ls /sdcard/Android/data 2>/dev/null | sed 's/^/  /'
+    echo "Android/obb:"
+    adb -s "$_s" shell ls /sdcard/Android/obb 2>/dev/null | sed 's/^/  /'
+}
+
+lfa_storage_data_pull() {
+    local _pkg="" _what="both" _dest=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --dest) _dest="${2:-}"; shift 2 ;;
+            data|obb|both) _what="$1"; shift ;;
+            -*) echo "Unknown option: $1" >&2; return 2 ;;
+            *) _pkg="$1"; shift ;;
+        esac
+    done
+    [ -n "$_pkg" ] || { lfa_storage_data_help >&2; return 2; }
+    local _s
+    if ! _s="$(lfa_storage_adb_serial)"; then
+        lfa_storage_data_no_device
+        return 1
+    fi
+    [ -n "$_dest" ] || _dest="$HOME/storage/shared/Android-backup/$_pkg"
+    mkdir -p "$_dest" || return 1
+    local _rc=0
+    case "$_what" in
+        data|both)
+            if adb -s "$_s" shell test -d "/sdcard/Android/data/$_pkg" 2>/dev/null; then
+                adb -s "$_s" pull "/sdcard/Android/data/$_pkg" "$_dest/data" || _rc=1
+            else
+                echo "No Android/data folder for $_pkg" >&2
+                [ "$_what" = "data" ] && _rc=1
+            fi ;;
+    esac
+    case "$_what" in
+        obb|both)
+            if adb -s "$_s" shell test -d "/sdcard/Android/obb/$_pkg" 2>/dev/null; then
+                adb -s "$_s" pull "/sdcard/Android/obb/$_pkg" "$_dest/obb" || _rc=1
+            else
+                echo "No Android/obb folder for $_pkg" >&2
+                [ "$_what" = "obb" ] && _rc=1
+            fi ;;
+    esac
+    echo "Saved to $_dest"
+    case "$_dest" in
+        "$HOME/storage/shared"/*)
+            echo "Guest path: /storage/emulated/0/${_dest#"$HOME/storage/shared/"}" ;;
+    esac
+    return $_rc
+}
+
+lfa_storage_data() {
+    local _sub="${1:-status}"
+    [ $# -gt 0 ] && shift || true
+    case "$_sub" in
+        status) lfa_storage_data_status ;;
+        list|ls) lfa_storage_data_list ;;
+        pull|copy) lfa_storage_data_pull "$@" ;;
+        help|-h|--help) lfa_storage_data_help ;;
+        *) echo "Unknown data command: $_sub" >&2; lfa_storage_data_help >&2; return 2 ;;
+    esac
+}
+
 lfa_cli_storage() {
     local _sub="${1:-status}"
     [ $# -gt 0 ] && shift || true
@@ -2815,6 +2974,7 @@ lfa_cli_storage() {
         fix) lfa_storage_fix "$@" ;;
         exec) lfa_storage_exec "$@" ;;
         open) lfa_storage_open "$@" ;;
+        data) lfa_storage_data "$@" ;;
         help|-h|--help) lfa_storage_usage ;;
         *) echo "Unknown storage command: $_sub" >&2; lfa_storage_usage >&2; return 2 ;;
     esac

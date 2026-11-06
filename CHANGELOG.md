@@ -26,6 +26,10 @@ tag names, define the order. See the table at the bottom.
   Thunar bookmark, a desktop shortcut, and a **Run in Linux** right-click
   action. `exec` runs a script from shared storage without needing `chmod`.
   `status` shows the permission, group, write access, and the chmod result.
+- `lfa storage data status|list|pull` copies an app's `Android/data` and
+  `Android/obb` folders through adb into shared storage. Android blocks both
+  folders for apps, including Termux, so direct access is not possible without
+  shell access.
 - Guest sessions now export `APPIMAGE_EXTRACT_AND_RUN=1`, because proot does
   not expose `/dev/fuse` and an AppImage cannot self-mount. A direct
   `./Foo.AppImage`, a file-manager double-click, and a menu entry all work.

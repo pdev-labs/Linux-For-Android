@@ -133,7 +133,7 @@ hardware, not simulated. Full details, root causes, and evidence are in
 | Alpine 3.18 (Android 5) | Yes | Yes | legacy VNC desktop, panel works; X11 and Both hidden | v1.7.1 |
 | Ubuntu GNOME 46 (experimental) | Yes | Yes | shell and apps run; session services missing | v1.7.0 |
 
-> The test suite runs `618` checks with 0 failures. The same suite runs on the
+> The test suite runs `627` checks with 0 failures. The same suite runs on the
 > devices (`tests/device-matrix.sh`). The table is as of v1.7.1. Ubuntu was
 > re-verified on v1.7.1, and Alpine 3.18 was re-verified on Android 5 on
 > 2026-11-04; the other rows were last verified on v1.7.0. A row is
@@ -460,7 +460,7 @@ is accepted.
 | `lfa android` | check, install, test, and enable the Termux:API bridge |
 | `lfa appimage` / `lfa app` | extract an AppImage once and add a menu entry |
 | `lfa run` | run an AppImage once without installing it |
-| `lfa storage` | Android storage status, repair, and run helpers |
+| `lfa storage` | Android storage status, repair, run, and protected data helpers |
 | `lfa diagnostics` | write a redacted support bundle |
 | `lfa notice` | `on`, `off`, or `status` for the `start-linux` change notice |
 | `lfa version` / `lfa help` | version and command list |
@@ -569,6 +569,43 @@ and removes the copy. `lfa storage status` shows the Termux permission, the
 guest group, write access, and the chmod result. The same helper is installed
 in the guest as `lfa-run-file`, and Thunar gets a **Run in Linux** entry in the
 right-click menu for files under shared storage.
+
+### Android/data and Android/obb
+
+Android 11 and later block `/storage/emulated/0/Android/data` and
+`/storage/emulated/0/Android/obb` for every app, including Termux. The guest
+runs as Termux, so it cannot open them, and `chmod`, a bind mount, or "All
+files access" does not change that. adb runs as the shell user and is allowed
+in, so LFA copies the folders on demand:
+
+```bash
+lfa storage data status
+lfa storage data list
+lfa storage data pull com.example.app both
+```
+
+The default destination is `~/storage/shared/Android-backup/<package>`, which
+the guest sees at `/storage/emulated/0/Android-backup/<package>`. Pass
+`--dest DIR` to put it elsewhere. The copy is a snapshot; changes go back to
+the live folder only through adb. The copy is in shared storage, so other apps
+can read it. Delete it when you are done.
+
+The data commands need the adb client in Termux and a connection to the
+phone's own adbd. Install the client once:
+
+```bash
+pkg install android-tools
+```
+
+From a PC with USB debugging enabled, run:
+
+```bash
+adb tcpip 5555
+```
+
+Then `lfa storage data status` connects to `127.0.0.1:5555`. The connection
+lasts until the phone reboots. After a reboot, run `adb tcpip 5555` again, or
+enable Wireless debugging and pair Termux's adb once.
 
 ## Older and custom distro versions
 
@@ -1462,7 +1499,7 @@ plus `script` from util-linux for the pty test, which is skipped if absent:
 
 ```bash
 chmod +x tests/test-all.sh
-./tests/test-all.sh   # expect: PASS=618 FAIL=0
+./tests/test-all.sh   # expect: PASS=627 FAIL=0
 ```
 
 The suite is deliberately stubbed. It cannot prove a desktop actually appears.

@@ -256,3 +256,20 @@ private group. The private group still exists, and the change is applied by
 install/upgrade and by `lfa storage fix`. `chmod` on shared storage remains
 impossible because the FUSE mount fixes the mode and is `noexec`;
 `lfa storage exec` is the working alternative.
+
+## D18: Android/data and Android/obb are copied through adb
+
+Decision: leave the two protected folders out of the guest and copy an app's
+folders on demand with `lfa storage data pull`. The command uses adb, which
+runs as the shell user.
+
+Why: Android 11 and later deny `/storage/emulated/0/Android/data` and
+`Android/obb` to every app, including Termux. The guest runs as Termux, so a
+bind mount, a group change, or `chmod` cannot pass the check. Granting "All
+files access" did not help on the Vivo. adb is the only unrooted path, and the
+shell user is allowed in.
+
+Cost: the copy is not live, and it needs the adb client in Termux plus one
+`adb tcpip 5555` from a PC after each reboot. Wireless debugging removes the
+PC requirement but needs a one-time pairing. Root or Shizuku would allow live
+access; neither is present on the test device.

@@ -1094,6 +1094,47 @@ check "Y1 help fix" 'apply latest fixes' "$T/y1-help.log"
 check "Y1 help storage" 'Android shared storage' "$T/y1-help.log"
 "$LFA" storage help > "$T/y1-storage-help.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y1 storage help exit $rc"; }
 check "Y1 storage help chmod" 'chmod does not work' "$T/y1-storage-help.log"
+check "Y1 storage help data" 'data pull PKG' "$T/y1-storage-help.log"
+cat > "$T/fakebin/adb" <<'FAKEADB'
+#!/bin/sh
+if [ "$1" = "-s" ]; then shift 2; fi
+case "$1" in
+    get-state) echo device ;;
+    connect) echo "connected to $2" ;;
+    devices) printf 'List of devices attached\n127.0.0.1:5555\tdevice\n' ;;
+    shell)
+        shift
+        case "$1" in
+            ls)
+                case "$2" in
+                    */Android/data) echo com.example.app ;;
+                    */Android/obb) echo com.example.game ;;
+                    *) echo "" ;;
+                esac ;;
+            test) exit 0 ;;
+            *) exit 0 ;;
+        esac ;;
+    pull)
+        src="$2"; dest="$3"
+        mkdir -p "$dest/files" 2>/dev/null || true
+        printf 'fake\n' > "$dest/files/test.txt" 2>/dev/null || true
+        echo "$src/: 1 file pulled, 0 skipped." ;;
+    *) exit 0 ;;
+esac
+FAKEADB
+chmod +x "$T/fakebin/adb"
+"$LFA" storage data help > "$T/y1-data-help.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y1 data help exit $rc"; }
+check "Y1 data help adb" 'adb tcpip 5555' "$T/y1-data-help.log"
+"$LFA" storage data status > "$T/y1-data-status.log" 2>&1
+check "Y1 data status device" 'device:    127.0.0.1:5555' "$T/y1-data-status.log"
+check "Y1 data status readable" 'data:      readable' "$T/y1-data-status.log"
+"$LFA" storage data list > "$T/y1-data-list.log" 2>&1
+check "Y1 data list" 'com.example.app' "$T/y1-data-list.log"
+check "Y1 data list obb" 'com.example.game' "$T/y1-data-list.log"
+"$LFA" storage data pull com.example.app data --dest "$T/adbpull" > "$T/y1-data-pull.log" 2>&1
+check "Y1 data pull saved" 'Saved to' "$T/y1-data-pull.log"
+[ -f "$T/adbpull/data/files/test.txt" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y1 data pull file missing"; }
+rm -f "$T/fakebin/adb"
 check "Y1 fix dispatch" 'LFA_NONINTERACTIVE=1 LFA_CLI_MODE=1 upgrade_existing' "$T/prefix/lib/linux-for-android/install_linux.sh"
 "$LFA" list > "$T/y1-list.log" 2>&1
 check "Y1 list" 'debian' "$T/y1-list.log"

@@ -634,6 +634,28 @@ a **Run in Linux** entry in the right-click menu for files under shared
 storage; it opens a terminal, runs the file from a copy in `/tmp`, and keeps
 the output on screen.
 
+### 3.9b Android/data and Android/obb print Permission denied
+
+Symptom: `ls /storage/emulated/0/Android/data` prints `Permission denied`,
+and the folders do not open in Thunar.
+
+Android 11 and later block those two folders for every app, including Termux.
+The guest inherits Termux's identity, so LFA cannot open them directly.
+`chmod`, a bind mount, and "All files access" do not change this. adb runs as
+the shell user, which is allowed in:
+
+```bash
+lfa storage data status
+lfa storage data list
+lfa storage data pull com.example.app both
+```
+
+The command copies the folders into
+`/storage/emulated/0/Android-backup/<package>`, where the guest can read them.
+From a PC, run `adb tcpip 5555` once to let Termux's adb connect to the phone.
+The connection lasts until the phone reboots; after that, run the command
+again or pair Termux's adb with Wireless debugging.
+
 ### 3.10 `lfa` needs an instance name
 
 Symptom: `lfa switch vnc` prints `Multiple distributions found. Choose one

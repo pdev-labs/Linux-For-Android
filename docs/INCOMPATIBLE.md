@@ -56,6 +56,7 @@ These may start, or may work on some distros, but LFA does not promise them.
 | Hardware-accelerated video in browsers | VirGL accelerates **rendering**, not the video decode block. Some sites still decode in software. |
 | AppImage **self-mounting** (FUSE) | proot does not expose `/dev/fuse`, so the type-2 mount fails with `fuse: failed to open /dev/fuse`. The application itself can still run: LFA extracts it (`lfa appimage`, or `APPIMAGE_EXTRACT_AND_RUN=1` for a direct run). Extraction does not change architecture or licensing. |
 | Changing permissions on `/storage/emulated/0` | Android's FUSE shared storage fixes ownership and mode and mounts the tree `noexec`. `chmod` is ignored even as root. Keep files that need a mode in the guest, or run them with `lfa storage exec`. |
+| Reading `/storage/emulated/0/Android/data` and `Android/obb` | Android 11 and later block both folders for apps, including Termux and anything inside proot. `chmod`, a bind mount, and "All files access" do not help. `lfa storage data` copies them through adb, which runs as the shell user. |
 
 ## Android 5/6 and Android 7 limitations
 
