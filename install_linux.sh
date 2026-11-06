@@ -1368,6 +1368,7 @@ Usage: lfa <command> [options]
   remove        delete a distro
   compat        inspect or enable compatibility shims
   android       inspect or enable the Termux:API bridge
+  storage       Android shared storage: status, repair, run helpers
   appimage      extract and run an AppImage (alias: app)
   run           run an AppImage once without installing it
   diagnostics   write a support bundle
@@ -2637,6 +2638,188 @@ lfa_appimage_run() {
         bash -lc 'export DISPLAY="${DISPLAY:-:1}"; exec "$1"' _ "$_dest/AppRun" || return $?
 }
 
+lfa_storage_usage() {
+    cat <<'STOHELP'
+Usage: lfa storage <command> [options]
+
+  status                   check Termux permission, guest access, and chmod
+  fix                      repair links, bookmarks, and the storage group
+  exec FILE [args...]      run a file from shared storage without chmod
+  open                     show where shared storage is and how to open it
+  help                     show this help
+
+Options:
+  -i, --instance NAME      distribution to use
+  --interpreter CMD        run with CMD (for example: bash, python3)
+
+Android shared storage is mounted with fixed permissions.
+chmod does not work on /storage/emulated/0. `lfa storage exec` copies the
+file to a Linux filesystem, sets the mode there, runs it, and removes the copy.
+STOHELP
+}
+
+lfa_storage_fix() {
+    local _inst=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            -i|--instance) _inst="${2:-}"; shift 2 ;;
+            *) echo "Unknown option: $1" >&2; return 2 ;;
+        esac
+    done
+    require_proot_distro || return 1
+    [ -n "$_inst" ] && CLI_INSTANCE="$_inst"
+    select_installed_instance || return 1
+    local _id="$INSTANCE_NAME" _rf _user _conf _de="" _host="" _pstyle=""
+    _rf="$(pd_rootfs "$_id")"
+    _user="$(lfa_appimage_user "$_id")"
+    _conf="$(pd_conf "$_id")"
+    if [ -f "$_conf" ]; then
+        # shellcheck disable=SC1090  # instance config path is computed at runtime
+        _de="$( . "$_conf" 2>/dev/null; printf '%s' "${DE:-}" )"
+        # shellcheck disable=SC1090
+        _host="$( . "$_conf" 2>/dev/null; printf '%s' "${HOSTNAME:-}" )"
+        # shellcheck disable=SC1090
+        _pstyle="$( . "$_conf" 2>/dev/null; printf '%s' "${PSTYLE:-}" )"
+    fi
+    if [ ! -d "$HOME/storage" ]; then
+        echo "[*] Requesting Android storage access..."
+        termux-setup-storage || true
+    fi
+    if [ -f "$LFA_DIR/lib/real-feel.sh" ]; then
+        LFA_ROOT="$_rf" LFA_USER="$_user" LFA_DE="${_de:-xfce4}" \
+            LFA_HOSTNAME="${_host:-localhost}" LFA_PSTYLE="${_pstyle:-minimal}" \
+            LFA_TERMUX_HOME="$HOME" sh "$LFA_DIR/lib/real-feel.sh" || true
+    else
+        echo "lfa: real-feel.sh is missing; run menu 12 or lfa fix first." >&2
+        return 1
+    fi
+    echo "[*] Storage links, bookmarks, and the desktop shortcut are updated."
+    echo "    The desktop user now uses gid 1023 (Android media_rw)."
+    echo "    Restart the desktop to apply it: lfa start -i $_id --restart"
+    echo "    chmod is not supported on /storage/emulated/0; use: lfa storage exec FILE"
+}
+
+lfa_storage_status() {
+    local _inst=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            -i|--instance) _inst="${2:-}"; shift 2 ;;
+            *) echo "Unknown option: $1" >&2; return 2 ;;
+        esac
+    done
+    require_proot_distro || return 1
+    [ -n "$_inst" ] && CLI_INSTANCE="$_inst"
+    select_installed_instance || return 1
+    local _id="$INSTANCE_NAME" _user _out
+    _user="$(lfa_appimage_user "$_id")"
+    echo "instance: $_id"
+    if [ -d "$HOME/storage" ]; then
+        echo "termux storage: present"
+        echo "shared target:  $(readlink -f "$HOME/storage/shared" 2>/dev/null || echo unknown)"
+    else
+        echo "termux storage: missing (run: lfa storage fix -i $_id)"
+    fi
+    # shellcheck disable=SC2046  # flag list, not one argument
+    _out="$(proot-distro login $(pd_login_flags) "$_id" --user "$_user" --shared-tmp -- bash -c '
+        printf "guest gid: %s\n" "$(id -g)"
+        printf "storage:   "
+        ls -ld /storage/emulated/0 2>&1
+        if touch /storage/emulated/0/.lfa-status-$$ 2>/dev/null; then
+            printf "write:     ok\n"
+            rm -f /storage/emulated/0/.lfa-status-$$
+        else
+            printf "write:     no\n"
+        fi
+        echo x > /storage/emulated/0/.lfa-mode-$$ 2>/dev/null || exit 0
+        _b="$(stat -c %a /storage/emulated/0/.lfa-mode-$$ 2>/dev/null)"
+        chmod 755 /storage/emulated/0/.lfa-mode-$$ 2>/dev/null
+        _a="$(stat -c %a /storage/emulated/0/.lfa-mode-$$ 2>/dev/null)"
+        printf "chmod:     %s -> %s (unchanged is normal)\n" "$_b" "$_a"
+        rm -f /storage/emulated/0/.lfa-mode-$$
+    ' 2>&1)" || true
+    printf '%s\n' "$_out"
+    case "$_out" in
+        *"guest gid: 1023"*) ;;
+        *) echo "fix:       run: lfa storage fix -i $_id (removes the false X in Thunar)" ;;
+    esac
+}
+
+lfa_storage_exec() {
+    local _inst="" _interp="" _file=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            -i|--instance) _inst="${2:-}"; shift 2 ;;
+            --interpreter) _interp="${2:-}"; shift 2 ;;
+            --) shift; _file="${1:-}"; [ $# -gt 0 ] && shift || true; break ;;
+            -*) echo "Unknown option: $1" >&2; return 2 ;;
+            *) _file="$1"; shift; break ;;
+        esac
+    done
+    [ -n "$_file" ] || { lfa_storage_usage >&2; return 2; }
+    require_proot_distro || return 1
+    [ -n "$_inst" ] && CLI_INSTANCE="$_inst"
+    select_installed_instance || return 1
+    local _id="$INSTANCE_NAME" _rf _user _file_guest="" _stage="" _rc=0
+    _rf="$(pd_rootfs "$_id")"
+    _user="$(lfa_appimage_user "$_id")"
+    if [ -f "$_file" ]; then
+        case "$_file" in
+            "$HOME"/*|/storage/*|/sdcard/*|/mnt/sdcard/*)
+                _file_guest="$_file" ;;
+            *)
+                _stage="$PREFIX/tmp/lfa-exec-$$-$(basename "$_file")"
+                cp -f "$_file" "$_stage" 2>/dev/null || {
+                    echo "Could not stage $_file" >&2
+                    return 1
+                }
+                _file_guest="/tmp/$(basename "$_stage")" ;;
+        esac
+    elif [ -f "$_rf$_file" ]; then
+        _file_guest="$_file"
+    else
+        echo "No such file: $_file" >&2
+        return 1
+    fi
+    # shellcheck disable=SC2046  # flag list, not one argument
+    proot-distro login $(pd_login_flags) "$_id" --user "$_user" --shared-tmp -- \
+        lfa-run-file --interpreter "$_interp" -- "$_file_guest" "$@" || _rc=$?
+    [ -n "$_stage" ] && rm -f "$_stage" 2>/dev/null || true
+    if [ "$_rc" = "127" ]; then
+        echo "lfa: lfa-run-file is missing in $_id; run: lfa fix -i $_id" >&2
+    fi
+    return $_rc
+}
+
+lfa_storage_open() {
+    local _inst=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            -i|--instance) _inst="${2:-}"; shift 2 ;;
+            *) echo "Unknown option: $1" >&2; return 2 ;;
+        esac
+    done
+    require_proot_distro || return 1
+    [ -n "$_inst" ] && CLI_INSTANCE="$_inst"
+    select_installed_instance || return 1
+    local _id="$INSTANCE_NAME"
+    echo "Android storage is at /storage/emulated/0 in $_id."
+    echo "It is also bookmarked in Thunar as Android, and on the desktop."
+    echo "Open it from the file manager, or run: thunar /storage/emulated/0"
+}
+
+lfa_cli_storage() {
+    local _sub="${1:-status}"
+    [ $# -gt 0 ] && shift || true
+    case "$_sub" in
+        status) lfa_storage_status "$@" ;;
+        fix) lfa_storage_fix "$@" ;;
+        exec) lfa_storage_exec "$@" ;;
+        open) lfa_storage_open "$@" ;;
+        help|-h|--help) lfa_storage_usage ;;
+        *) echo "Unknown storage command: $_sub" >&2; lfa_storage_usage >&2; return 2 ;;
+    esac
+}
+
 lfa_cli_appimage() {
     local _sub="${1:-help}"
     [ $# -gt 0 ] && shift || true
@@ -2886,6 +3069,7 @@ lfa_cli() {
         compat) lfa_cli_compat "$@" ;;
         android) lfa_android_cmd "$@" ;;
         appimage|app) lfa_cli_appimage "$@" ;;
+        storage) lfa_cli_storage "$@" ;;
         run) lfa_appimage_run "$@" ;;
         update)
             while [ $# -gt 0 ]; do case "$1" in -i|--instance) CLI_INSTANCE="${2:-}"; shift 2 ;; *) echo "Unknown option: $1" >&2; return 2 ;; esac; done

@@ -55,6 +55,7 @@ These may start, or may work on some distros, but LFA does not promise them.
 | GNOME Software, Ubuntu App Center, snap/Flatpak stores | depend on snapd or Flatpak. |
 | Hardware-accelerated video in browsers | VirGL accelerates **rendering**, not the video decode block. Some sites still decode in software. |
 | AppImage **self-mounting** (FUSE) | proot does not expose `/dev/fuse`, so the type-2 mount fails with `fuse: failed to open /dev/fuse`. The application itself can still run: LFA extracts it (`lfa appimage`, or `APPIMAGE_EXTRACT_AND_RUN=1` for a direct run). Extraction does not change architecture or licensing. |
+| Changing permissions on `/storage/emulated/0` | Android's FUSE shared storage fixes ownership and mode and mounts the tree `noexec`. `chmod` is ignored even as root. Keep files that need a mode in the guest, or run them with `lfa storage exec`. |
 
 ## Android 5/6 and Android 7 limitations
 

@@ -21,6 +21,11 @@ tag names, define the order. See the table at the bottom.
   manage it. `lfa run FILE` runs an AppImage once without installing it.
 - `lfa fix -i NAME` runs "Apply Latest Fixes" without the interactive
   manager, so upgrades over SSH or from a script are deterministic.
+- `lfa storage status|fix|exec|open` handles Android shared storage. `fix`
+  gives the desktop user gid 1023, recreates the Termux links, and adds a
+  Thunar bookmark, a desktop shortcut, and a **Run in Linux** right-click
+  action. `exec` runs a script from shared storage without needing `chmod`.
+  `status` shows the permission, group, write access, and the chmod result.
 - Guest sessions now export `APPIMAGE_EXTRACT_AND_RUN=1`, because proot does
   not expose `/dev/fuse` and an AppImage cannot self-mount. A direct
   `./Foo.AppImage`, a file-manager double-click, and a menu entry all work.
@@ -111,6 +116,13 @@ tag names, define the order. See the table at the bottom.
   There is no PAM conversation to unlock a keyring under proot, and restoring
   a stopped session kept relaunching the locked keyring prompt (and Remmina)
   on every login. The saved session is cleared during install/upgrade.
+- Thunar marked every folder on Android shared storage with a false
+  "unreadable" X. Android mounts the tree as `1023:1023` with mode `2770`,
+  and the desktop user was outside group 1023. The user's primary group is
+  now gid 1023, so the mode check passes. Reads and writes worked all along.
+- `chmod` on `/storage/emulated/0` is documented as impossible. The FUSE
+  mount fixes the mode and is `noexec`; `lfa storage exec` provides the
+  working alternative.
 - `lfa switch` stopped the running desktop and left the display empty. When a
   desktop was running, the switch now restarts it on the new backend;
   `--no-start` keeps it stopped.

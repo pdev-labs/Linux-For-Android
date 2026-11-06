@@ -14,6 +14,7 @@ HOST="${LFA_HOSTNAME:-}"
 [ -n "$HOST" ] || HOST="localhost"
 USER_NAME="${LFA_USER:-user}"
 PSTYLE="${LFA_PSTYLE:-minimal}"
+TERMUX_HOME="${LFA_TERMUX_HOME:-/data/data/com.termux/files/home}"
 
 mkdir -p "$R/etc/profile.d" "$R/usr/local/bin" "$R/etc/skel" \
          "$R/root" "$R/home/$USER_NAME" 2>/dev/null || true
@@ -295,6 +296,142 @@ exec "$real" "$@"
 LFA_GPGCONF
     chmod 755 "$R/usr/local/bin/gpgconf" 2>/dev/null || true
 fi
+
+# ---------------- Android shared storage ---------------------------
+# Android exposes /storage/emulated/0 with gid 1023 (media_rw) and mode
+# 2770. A desktop user outside that group makes Thunar draw a false
+# "unreadable" X on every folder, even though proot lets reads and writes
+# through. Use gid 1023 as the primary group; the group name is cosmetic.
+STORAGE_GID=1023
+if [ "${LFA_DE:-none}" != "none" ] && [ -f "$R/etc/passwd" ] && [ -f "$R/etc/group" ]; then
+    _sgrp="$(awk -F: -v g="$STORAGE_GID" '$3==g {print $1; exit}' "$R/etc/group" 2>/dev/null)"
+    if [ -z "$_sgrp" ]; then
+        _sgrp="lfa_storage"
+        printf '%s:x:%s:\n' "$_sgrp" "$STORAGE_GID" >> "$R/etc/group" 2>/dev/null || true
+    fi
+    _sgid="$(awk -F: -v u="$USER_NAME" '$1==u {print $4; exit}' "$R/etc/passwd" 2>/dev/null)"
+    if [ -n "$_sgid" ] && [ "$_sgid" != "$STORAGE_GID" ]; then
+        cp -f "$R/etc/passwd" "$R/etc/passwd.lfa-bak" 2>/dev/null || true
+        awk -F: -v u="$USER_NAME" -v g="$STORAGE_GID" 'BEGIN{OFS=":"} $1==u {$4=g} {print}' \
+            "$R/etc/passwd.lfa-bak" > "$R/etc/passwd.lfa-new" 2>/dev/null && \
+            mv -f "$R/etc/passwd.lfa-new" "$R/etc/passwd" 2>/dev/null || \
+            rm -f "$R/etc/passwd.lfa-new" 2>/dev/null
+        chmod 644 "$R/etc/passwd" 2>/dev/null || true
+    fi
+fi
+
+# Mirror the Termux storage tree and add a file-manager entry.
+if [ -d "$R/home/$USER_NAME" ]; then
+    mkdir -p "$R/home/$USER_NAME/storage" 2>/dev/null || true
+    for _s in shared downloads dcim movies music pictures; do
+        [ -e "$TERMUX_HOME/storage/$_s" ] || continue
+        ln -sfn "$TERMUX_HOME/storage/$_s" "$R/home/$USER_NAME/storage/$_s" 2>/dev/null || true
+    done
+    ln -sfn /storage/emulated/0 "$R/home/$USER_NAME/Android" 2>/dev/null || true
+    _bm="$R/home/$USER_NAME/.config/gtk-3.0/bookmarks"
+    mkdir -p "$(dirname "$_bm")" 2>/dev/null || true
+    grep -q '^file:///storage/emulated/0 ' "$_bm" 2>/dev/null || \
+        printf 'file:///storage/emulated/0 Android\n' >> "$_bm" 2>/dev/null || true
+    grep -q '^file:///storage/emulated/0/Download ' "$_bm" 2>/dev/null || \
+        printf 'file:///storage/emulated/0/Download Downloads\n' >> "$_bm" 2>/dev/null || true
+    chmod 644 "$_bm" 2>/dev/null || true
+    _desk="$R/home/$USER_NAME/Desktop"
+    mkdir -p "$_desk" 2>/dev/null || true
+    cat > "$_desk/Android Storage.desktop" <<'LFA_STORAGE_DESKTOP'
+[Desktop Entry]
+Type=Application
+Name=Android Storage
+Comment=Open Android shared storage
+Exec=thunar /storage/emulated/0
+Icon=folder
+Terminal=false
+LFA_STORAGE_DESKTOP
+    chmod 755 "$_desk/Android Storage.desktop" 2>/dev/null || true
+
+    # Thunar action: run a file from shared storage in Linux. Thunar only
+    # reads uca.xml at startup, so the action appears after the next login.
+    _uca="$R/home/$USER_NAME/.config/Thunar/uca.xml"
+    if [ ! -f "$_uca" ]; then
+        mkdir -p "$(dirname "$_uca")" 2>/dev/null || true
+        if [ -f "$R/etc/xdg/Thunar/uca.xml" ]; then
+            cp -f "$R/etc/xdg/Thunar/uca.xml" "$_uca" 2>/dev/null || true
+        else
+            printf '<?xml version="1.0" encoding="UTF-8"?>\n<actions>\n</actions>\n' > "$_uca" 2>/dev/null || true
+        fi
+    fi
+    if [ -f "$_uca" ] && ! grep -q 'lfa-run-file' "$_uca" 2>/dev/null; then
+        _run_cmd="lfa-run-file %f"
+        if [ -x "$R/usr/bin/xfce4-terminal" ]; then
+            _run_cmd="xfce4-terminal --hold -x lfa-run-file %f"
+        fi
+        awk -v cmd="$_run_cmd" '
+            /<\/actions>/ {
+                print "<action>"
+                print "\t<icon>system-run</icon>"
+                print "\t<name>Run in Linux</name>"
+                print "\t<submenu></submenu>"
+                print "\t<unique-id>lfa-run-file-1</unique-id>"
+                print "\t<command>" cmd "</command>"
+                print "\t<description>Copy the file to Linux storage, run it, and keep the output</description>"
+                print "\t<range></range>"
+                print "\t<patterns>*</patterns>"
+                print "\t<startup-notify/>"
+                print "</action>"
+            }
+            { print }
+        ' "$_uca" > "$_uca.lfa-new" 2>/dev/null && \
+            mv -f "$_uca.lfa-new" "$_uca" 2>/dev/null || \
+            rm -f "$_uca.lfa-new" 2>/dev/null
+    fi
+fi
+
+# Run a file from shared storage: copy it to a Linux filesystem first.
+# /storage/emulated/0 is noexec and ignores chmod, so the copy is the only
+# way to execute a script or binary that lives there.
+cat > "$R/usr/local/bin/lfa-run-file" <<'LFA_RUN_FILE'
+#!/bin/sh
+# Linux for Android: run a file that lives on Android shared storage.
+interp=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --interpreter) interp="${2:-}"; shift 2 ;;
+        --) shift; break ;;
+        -*) echo "lfa-run-file: unknown option: $1" >&2; exit 2 ;;
+        *) break ;;
+    esac
+done
+if [ $# -lt 1 ]; then
+    echo "Usage: lfa-run-file [--interpreter CMD] FILE [args...]" >&2
+    exit 2
+fi
+src="$1"; shift
+if [ ! -e "$src" ]; then
+    echo "lfa-run-file: no such file: $src" >&2
+    exit 1
+fi
+if [ -d "$src" ]; then
+    echo "lfa-run-file: is a directory: $src" >&2
+    exit 1
+fi
+tmp="$(mktemp /tmp/lfa-run.XXXXXX)" || exit 1
+if ! cp -- "$src" "$tmp"; then
+    rm -f "$tmp"
+    exit 1
+fi
+chmod 700 "$tmp"
+if [ -n "$interp" ]; then
+    "$interp" "$tmp" "$@"; rc=$?
+elif head -c 2 "$tmp" | grep -q '#!'; then
+    "$tmp" "$@"; rc=$?
+elif [ "$(head -c 4 "$tmp" | od -An -tx1 | tr -d ' \n')" = "7f454c46" ]; then
+    "$tmp" "$@"; rc=$?
+else
+    bash "$tmp" "$@"; rc=$?
+fi
+rm -f "$tmp"
+exit $rc
+LFA_RUN_FILE
+chmod 755 "$R/usr/local/bin/lfa-run-file" 2>/dev/null || true
 
 # ---------------- cursor theme --------------------------------------
 # A session with no usable cursor theme leaves the X root cursor on screen,

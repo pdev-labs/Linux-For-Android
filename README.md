@@ -133,7 +133,7 @@ hardware, not simulated. Full details, root causes, and evidence are in
 | Alpine 3.18 (Android 5) | Yes | Yes | legacy VNC desktop, panel works; X11 and Both hidden | v1.7.1 |
 | Ubuntu GNOME 46 (experimental) | Yes | Yes | shell and apps run; session services missing | v1.7.0 |
 
-> The test suite runs `604` checks with 0 failures. The same suite runs on the
+> The test suite runs `618` checks with 0 failures. The same suite runs on the
 > devices (`tests/device-matrix.sh`). The table is as of v1.7.1. Ubuntu was
 > re-verified on v1.7.1, and Alpine 3.18 was re-verified on Android 5 on
 > 2026-11-04; the other rows were last verified on v1.7.0. A row is
@@ -460,6 +460,7 @@ is accepted.
 | `lfa android` | check, install, test, and enable the Termux:API bridge |
 | `lfa appimage` / `lfa app` | extract an AppImage once and add a menu entry |
 | `lfa run` | run an AppImage once without installing it |
+| `lfa storage` | Android storage status, repair, and run helpers |
 | `lfa diagnostics` | write a redacted support bundle |
 | `lfa notice` | `on`, `off`, or `status` for the `start-linux` change notice |
 | `lfa version` / `lfa help` | version and command list |
@@ -477,6 +478,7 @@ lfa compat list
 lfa android test
 lfa appimage add ~/Foo.AppImage
 lfa appimage run Foo
+lfa storage status
 lfa notice off
 ```
 
@@ -538,6 +540,35 @@ Extraction uses `/tmp` (the Termux tmp directory, shared with the guest), so
 make sure the phone has free space for the unpacked app. An AppImage that
 bundles glibc programs still needs a glibc guest; that part is unchanged by
 the extraction method.
+
+### Android storage
+
+Android shared storage appears at `/storage/emulated/0`. LFA also links the
+Termux folders under `~/storage`, adds `~/Android`, and puts a Thunar bookmark
+and a desktop shortcut in place. `lfa storage fix` recreates the links and
+sets the desktop user's primary group to gid 1023.
+
+Android mounts the tree as `1023:1023` with mode `2770`, so a user outside
+group 1023 makes Thunar draw a false "unreadable" X on every folder, even
+though reads and writes work. The group change removes the X. Restart the
+desktop after running the fix.
+
+`chmod` does not work on shared storage. Android generates the permission bits
+and mounts the tree `noexec`, so `chmod +x` is ignored even as root. Keep
+scripts and binaries in the guest filesystem, or run them through the helper:
+
+```bash
+lfa storage status
+lfa storage fix -i ubuntu
+lfa storage exec /storage/emulated/0/script.sh
+lfa storage exec --interpreter python3 /storage/emulated/0/tool.py
+```
+
+`lfa storage exec` copies the file to `/tmp`, sets the mode there, runs it,
+and removes the copy. `lfa storage status` shows the Termux permission, the
+guest group, write access, and the chmod result. The same helper is installed
+in the guest as `lfa-run-file`, and Thunar gets a **Run in Linux** entry in the
+right-click menu for files under shared storage.
 
 ## Older and custom distro versions
 
@@ -1431,7 +1462,7 @@ plus `script` from util-linux for the pty test, which is skipped if absent:
 
 ```bash
 chmod +x tests/test-all.sh
-./tests/test-all.sh   # expect: PASS=604 FAIL=0
+./tests/test-all.sh   # expect: PASS=618 FAIL=0
 ```
 
 The suite is deliberately stubbed. It cannot prove a desktop actually appears.

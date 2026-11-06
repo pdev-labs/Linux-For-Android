@@ -193,6 +193,7 @@ Lint: `shellcheck -S warning` clean, `bash -n` clean, CI workflow added.
 | 2026-11-05 | Cursor theme fix | `XCURSOR_THEME=Adwaita` in X11/VNC launches plus `lfa-set-cursor` autostart |
 | 2026-11-05 | Cross cursor root cause | `xfce4-session` blocks on `gpgconf --kill`/`--launch gpg-agent` under proot before starting `xfwm4`; a scoped, versioned `gpgconf` guard removes the hang |
 | 2026-11-05 | Non-interactive fixes | Added `lfa fix -i NAME` (runs the menu 12 upgrade path headless); `lfa start --restart` now forwards the flag |
+| 2026-11-06 | Android storage | `lfa storage` with status, fix, exec, and open; gid 1023 as the desktop user's primary group removes Thunar's false unreadable X; exec works around the impossible chmod on `/storage/emulated/0` |
 
 ### Findings that only appeared on hardware
 

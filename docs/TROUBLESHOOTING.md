@@ -599,6 +599,41 @@ If only one backend was installed by an old version, menu 12 can add the other
 one without touching packages. On Android 5/6, X11 and Both are refused with
 an explanation; stay on VNC.
 
+### 3.9a Android storage shows an X, and chmod fails
+
+Symptom: Thunar shows a gray X on every folder under `/storage/emulated/0`
+or `~/storage`, but the folders open and files read normally. `chmod +x`
+does nothing.
+
+The X is Thunar's `emblem-unreadable`. Android mounts shared storage as
+`1023:1023` with mode `2770`, and the desktop user was outside group 1023.
+The access itself works through proot, so the warning is false. Run:
+
+```bash
+lfa storage fix -i <instance>
+lfa start -i <instance> --restart
+```
+
+The fix gives the desktop user gid 1023 as its primary group, recreates the
+storage links, and adds a Thunar bookmark and desktop shortcut.
+
+`chmod` cannot work on `/storage/emulated/0`. Android generates the permission
+bits and mounts the tree `noexec`, so the mode is ignored even as root. Keep
+scripts and binaries in the guest, or run them with:
+
+```bash
+lfa storage exec /storage/emulated/0/script.sh
+lfa storage exec --interpreter python3 /storage/emulated/0/tool.py
+```
+
+`lfa storage status -i <instance>` shows the Termux permission, guest group,
+write access, and the chmod result.
+
+The same helper is installed in the guest as `lfa-run-file`. Thunar also gets
+a **Run in Linux** entry in the right-click menu for files under shared
+storage; it opens a terminal, runs the file from a copy in `/tmp`, and keeps
+the output on screen.
+
 ### 3.10 `lfa` needs an instance name
 
 Symptom: `lfa switch vnc` prints `Multiple distributions found. Choose one

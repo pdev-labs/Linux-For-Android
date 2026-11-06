@@ -773,6 +773,8 @@ NROOT="$T/prefix/var/lib/proot-distro/installed-rootfs/oldinst"
 mkdir -p "$NROOT/etc" "$NROOT/var/lib/dpkg" "$NROOT/home/user/.vnc" "$NROOT/root" "$NROOT/usr/bin"
 mkdir -p "$NROOT/home/user/.cache/sessions"
 printf 'stale session\n' > "$NROOT/home/user/.cache/sessions/stale-session"
+printf 'root:x:0:0:root:/root:/bin/bash\nuser:x:1000:1000:User:/home/user:/bin/bash\n' > "$NROOT/etc/passwd"
+printf 'root:x:0:\nuser:x:1000:\n' > "$NROOT/etc/group"
 mkdir -p "$NROOT/etc/xdg/autostart"
 for _k in gnome-keyring-pkcs11 gnome-keyring-secrets gnome-keyring-ssh; do
     printf '[Desktop Entry]\nType=Application\nName=%s\n' "$_k" > "$NROOT/etc/xdg/autostart/$_k.desktop"
@@ -810,6 +812,21 @@ check "N stop finds orphaned session" 'readlink "$_dir/cwd"' "$T/prefix/bin/stop
 check "N keyring autostart hidden" 'Hidden=true' "$NROOT/home/user/.config/autostart/gnome-keyring-secrets.desktop"
 check "N GNOME compat disabled" 'name="LaunchGNOME"' "$NX"
 check "N session save disabled" 'name="SaveOnExit"' "$NX"
+check "N storage group" 'lfa_storage:x:1023:' "$NROOT/etc/group"
+_nsgid="$(awk -F: '$1=="user"{print $4}' "$NROOT/etc/passwd" 2>/dev/null)"
+[ "$_nsgid" = "1023" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: N storage gid is $_nsgid"; }
+check "N storage bookmark" 'file:///storage/emulated/0' "$NROOT/home/user/.config/gtk-3.0/bookmarks"
+check "N storage shortcut" 'thunar /storage/emulated/0' "$NROOT/home/user/Desktop/Android Storage.desktop"
+[ "$(readlink "$NROOT/home/user/Android" 2>/dev/null)" = "/storage/emulated/0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: N Android link missing"; }
+[ -x "$NROOT/usr/local/bin/lfa-run-file" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: N storage runner missing"; }
+check "N storage runner usage" 'lfa-run-file' "$NROOT/usr/local/bin/lfa-run-file"
+check "N storage runner copies" 'mktemp /tmp/lfa-run' "$NROOT/usr/local/bin/lfa-run-file"
+check "N Thunar run action" 'Run in Linux' "$NROOT/home/user/.config/Thunar/uca.xml"
+check "N Thunar action command" 'lfa-run-file %f' "$NROOT/home/user/.config/Thunar/uca.xml"
+mkdir -p "$T/th/storage"
+: > "$T/th/storage/shared"
+LFA_ROOT="$NROOT" LFA_USER=user LFA_TERMUX_HOME="$T/th" sh "$REPO/lib/real-feel.sh" >/dev/null 2>&1
+[ -L "$NROOT/home/user/storage/shared" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: N storage symlink missing"; }
 [ ! -e "$NROOT/home/user/.cache/sessions/stale-session" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: N stale session not cleared"; }
 [ -f "$NROOT/etc/xdg/autostart/lfa-cursor.desktop" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: N cursor autostart missing"; }
 check "N launcher updated" 'command -v dbus-launch' "$T/prefix/bin/start-linux"
@@ -1074,6 +1091,9 @@ check "Y1 help switch" 'switch' "$T/y1-help.log"
 "$LFA" switch --help > "$T/y1-switch-help.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y1 switch help exit $rc"; }
 check "Y1 help notice" 'notice' "$T/y1-help.log"
 check "Y1 help fix" 'apply latest fixes' "$T/y1-help.log"
+check "Y1 help storage" 'Android shared storage' "$T/y1-help.log"
+"$LFA" storage help > "$T/y1-storage-help.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y1 storage help exit $rc"; }
+check "Y1 storage help chmod" 'chmod does not work' "$T/y1-storage-help.log"
 check "Y1 fix dispatch" 'LFA_NONINTERACTIVE=1 LFA_CLI_MODE=1 upgrade_existing' "$T/prefix/lib/linux-for-android/install_linux.sh"
 "$LFA" list > "$T/y1-list.log" 2>&1
 check "Y1 list" 'debian' "$T/y1-list.log"

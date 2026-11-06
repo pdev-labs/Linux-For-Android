@@ -238,3 +238,21 @@ tools and slow for a 100 MB app. `lfa appimage add` pays that cost once and
 keeps the menu entry working. Extraction also needs temporary space in `/tmp`
 (the shared Termux tmp). Licensing and architecture do not change: the AppImage
 content still has to be legitimate and built for the phone's CPU.
+
+## D17: Android storage uses gid 1023 as the desktop user's primary group
+
+Decision: give the desktop user gid 1023 (the group Android uses for
+`/storage/emulated/0`) as its primary group. The group name is cosmetic: use
+the name already assigned to 1023, or create `lfa_storage`.
+
+Why: Android mounts shared storage as `1023:1023` with mode `2770`. proot
+lets reads and writes through because the real process is the Termux uid, but
+Thunar checks the Unix mode and draws `emblem-unreadable` on every folder.
+Adding the user as a secondary group did not work because proot only maps the
+primary gid. Reads and writes were never broken; the X was false.
+
+Cost: new files in the guest home are group `media_rw` instead of the user's
+private group. The private group still exists, and the change is applied by
+install/upgrade and by `lfa storage fix`. `chmod` on shared storage remains
+impossible because the FUSE mount fixes the mode and is `noexec`;
+`lfa storage exec` is the working alternative.
