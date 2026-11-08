@@ -1461,9 +1461,11 @@ check "Y11 pref written" 'COMPOSITOR="sway"' "$T/home/.config/linux-for-android/
 check "Y11 bad compositor" 'Unknown compositor: bogus' "$T/y11-bad.log"
 "$LFA" wayland session auto >/dev/null 2>&1
 
-mkdir -p "$T/y11-cfg/kitty" "$T/y11-cfg/waybar"
+mkdir -p "$T/y11-cfg/kitty" "$T/y11-cfg/waybar" "$T/y11-cfg/fastfetch"
 printf 'font_family JetBrainsMono\n' > "$T/y11-cfg/kitty/kitty.conf"
 printf '{"layer":"top"}\n' > "$T/y11-cfg/waybar/config.jsonc"
+printf '{"fastfetch":true}\n' > "$T/y11-cfg/fastfetch/config.jsonc"
+printf '[character]\n' > "$T/y11-cfg/starship.toml"
 "$LFA" wayland install -i debian --config "$T/y11-cfg" --resolution 2408x1080 > "$T/y11-install.log" 2>&1; rc=$?
 [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y11 install exit $rc"; }
 check "Y11 install done" 'Wayland stack installed.' "$T/y11-install.log"
@@ -1477,6 +1479,8 @@ check "Y11 waybar profile" 'sway/workspaces' "$Y11ROOT/home/user/.config/lfa-way
 check "Y11 resolution" 'output X11-1 resolution 2408x1080 position 0 0' "$Y11ROOT/home/user/.config/lfa-wayland/sway/config"
 check "Y11 imported kitty" 'font_family JetBrainsMono' "$Y11ROOT/home/user/.config/kitty/kitty.conf"
 check "Y11 imported waybar" '"layer":"top"' "$Y11ROOT/home/user/.config/waybar/config.jsonc"
+check "Y11 imported fastfetch" '"fastfetch":true' "$Y11ROOT/home/user/.config/fastfetch/config.jsonc"
+check "Y11 imported starship" '[character]' "$Y11ROOT/home/user/.config/starship.toml"
 
 "$LFA" wayland install -i debian --resolution 2408x1080 >/dev/null 2>&1
 _y11_lines="$(grep -c '^output X11-1 resolution' "$Y11ROOT/home/user/.config/lfa-wayland/sway/config" 2>/dev/null || true)"

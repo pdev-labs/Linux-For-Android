@@ -1629,11 +1629,15 @@ lfa_wayland_install() {
             return 1
         fi
         echo "[*] Importing desktop configs from $_config..."
-        for _d in hypr waybar kitty wofi swaync; do
+        for _d in hypr waybar kitty wofi swaync fastfetch; do
             [ -d "$_stage/$_d" ] || continue
             mkdir -p "$_rf/home/$_user/.config/$_d" 2>/dev/null || true
             cp -a "$_stage/$_d/." "$_rf/home/$_user/.config/$_d/" 2>/dev/null || true
         done
+        if [ -f "$_stage/starship.toml" ]; then
+            install -m 644 "$_stage/starship.toml" \
+                "$_rf/home/$_user/.config/starship.toml" 2>/dev/null || true
+        fi
         [ "$_stage" != "$_config" ] && rm -rf "$_stage" 2>/dev/null || true
     fi
 
@@ -1662,6 +1666,16 @@ lfa_wayland_install() {
         install -m 644 "$LFA_DIR/assets/wallpapers/archlinux-dark.jpg" "$_rf/usr/share/backgrounds/lfa-wayland.jpg" 2>/dev/null || true
     elif [ -f "$_rf/usr/share/backgrounds/lfa-default.jpg" ]; then
         cp -f "$_rf/usr/share/backgrounds/lfa-default.jpg" "$_rf/usr/share/backgrounds/lfa-wayland.jpg" 2>/dev/null || true
+    fi
+
+    _bashrc="$_rf/home/$_user/.bashrc"
+    if [ -f "$_bashrc" ] && ! grep -q 'starship init bash' "$_bashrc" 2>/dev/null; then
+        {
+            printf '\n# Linux for Android: starship prompt\n'
+            printf 'if command -v starship >/dev/null 2>&1; then\n'
+            printf '    eval "$(starship init bash)"\n'
+            printf 'fi\n'
+        } >> "$_bashrc" 2>/dev/null || true
     fi
 
     if [ -n "$_comp" ]; then
