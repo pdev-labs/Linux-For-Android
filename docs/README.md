@@ -8,7 +8,8 @@ Start here to understand the project rather than install it.
 | [AUTHORS.md](../AUTHORS.md) | Project authorship and credits |
 | [TROUBLESHOOTING.md](TROUBLESHOOTING.md) | Diagnosis: evidence, root causes, verification, recovery |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | How the installer, launchers, and display back ends fit together |
-| [DECISIONS.md](DECISIONS.md) | Why proot, why no Wayland, why the sudo shim is a ritual |
+| [WAYLAND.md](WAYLAND.md) | Nested Wayland sessions, the Sway profile, and why Hyprland needs a DRM node |
+| [DECISIONS.md](DECISIONS.md) | Why proot, why Wayland runs nested, why the sudo shim is a ritual |
 | [TEST-REPORT.md](TEST-REPORT.md) | What was verified, on which device, with which version |
 | [CI-ANDROID.md](CI-ANDROID.md) | Android emulator workflows, matrix tiers, pinned APKs, and gaps |
 | [INCOMPATIBLE.md](INCOMPATIBLE.md) | Software that cannot run, and why shims cannot fix kernel limits |
@@ -23,7 +24,7 @@ Start here to understand the project rather than install it.
 
 1. `README.md` quick start. You should be able to run the suite.
 2. `ARCHITECTURE.md`. The mental model in ten minutes.
-3. `DECISIONS.md`. Read this before proposing Wayland or systemd.
+3. `DECISIONS.md`. Read this before proposing a real Wayland session or systemd.
 4. `TROUBLESHOOTING.md`. The failures users hit.
 5. `issues.md`. Pick an item marked partial or deferred.
 6. `CONTRIBUTING.md`. The lint and device-test gate before a pull request.

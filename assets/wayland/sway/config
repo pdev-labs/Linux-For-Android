@@ -1,0 +1,85 @@
+# Linux for Android: Wayland session.
+# This profile mirrors the Hyprland desktop: same gaps, borders, keybinds,
+# wallpaper and bar palette. It runs inside Termux:X11 through Sway's X11
+# backend, because a phone without DRM cannot run Hyprland itself.
+
+set $mod Mod4
+set $term kitty
+set $menu wofi --show drun
+set $file thunar
+
+font pango:Adwaita Sans 10
+
+gaps inner 3
+gaps outer 6
+default_border pixel 2
+smart_gaps off
+smart_borders on
+
+client.focused          #7ad6e0 #7ad6e0 #17181d #7aa2f7 #7ad6e0
+client.focused_inactive #232d31 #232d31 #d7dae1 #232d31 #232d31
+client.unfocused        #232d31 #232d31 #8a909c #232d31 #232d31
+client.urgent           #ff7b86 #ff7b86 #17181d #ff7b86 #ff7b86
+
+output * bg /usr/share/backgrounds/lfa-wayland.jpg fill
+
+exec waybar -c $HOME/.config/lfa-wayland/waybar/config.jsonc -s $HOME/.config/lfa-wayland/waybar/style.css
+exec swaync
+exec dbus-update-activation-environment --systemd WAYLAND_DISPLAY XDG_CURRENT_DESKTOP=sway
+
+# Launcher and windows
+bindsym $mod+Return exec $term
+bindsym $mod+Q kill
+bindsym $mod+F exec $file
+bindsym $mod+V floating toggle
+bindsym $mod+Space exec $menu
+bindsym $mod+D split toggle
+bindsym $mod+Shift+Return fullscreen toggle
+bindsym $mod+Escape exec swaylock
+bindsym $mod+Shift+E exit
+
+# Focus and movement
+bindsym $mod+H focus left
+bindsym $mod+L focus right
+bindsym $mod+K focus up
+bindsym $mod+J focus down
+bindsym $mod+Shift+H move left
+bindsym $mod+Shift+L move right
+bindsym $mod+Shift+K move up
+bindsym $mod+Shift+J move down
+
+# Resize
+bindsym $mod+Ctrl+H resize shrink width 10 px
+bindsym $mod+Ctrl+L resize grow width 10 px
+bindsym $mod+Ctrl+K resize shrink height 10 px
+bindsym $mod+Ctrl+J resize grow height 10 px
+
+# Workspaces
+bindsym $mod+1 workspace number 1
+bindsym $mod+2 workspace number 2
+bindsym $mod+3 workspace number 3
+bindsym $mod+4 workspace number 4
+bindsym $mod+5 workspace number 5
+bindsym $mod+6 workspace number 6
+bindsym $mod+7 workspace number 7
+bindsym $mod+8 workspace number 8
+bindsym $mod+9 workspace number 9
+bindsym $mod+0 workspace number 10
+bindsym $mod+Shift+1 move container to workspace number 1
+bindsym $mod+Shift+2 move container to workspace number 2
+bindsym $mod+Shift+3 move container to workspace number 3
+bindsym $mod+Shift+4 move container to workspace number 4
+bindsym $mod+Shift+5 move container to workspace number 5
+bindsym $mod+Shift+6 move container to workspace number 6
+bindsym $mod+Shift+7 move container to workspace number 7
+bindsym $mod+Shift+8 move container to workspace number 8
+bindsym $mod+Shift+9 move container to workspace number 9
+bindsym $mod+Shift+0 move container to workspace number 10
+
+# Audio
+bindsym XF86AudioRaiseVolume exec pamixer -i 5
+bindsym XF86AudioLowerVolume exec pamixer -d 5
+bindsym XF86AudioMute exec pamixer -t
+
+# Screenshot
+bindsym Print exec grim -g "$(slurp)" - | wl-copy

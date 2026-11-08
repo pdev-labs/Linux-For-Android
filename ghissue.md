@@ -59,7 +59,7 @@ maintained by hand; see `tracker.md` for code work.
 | # | Item | Impact | Effort | Status |
 |---|---|---|---|---|
 | G29 | Add `docs/ARCHITECTURE.md`: the generator-inside-generator design, session model, and why proot and X11 are used. | 4 | 1 h | done |
-| G30 | Add `docs/DECISIONS.md`: why proot, why no Wayland, why ritual sudo, why GNOME is beta. | 4 | 45 min | done |
+| G30 | Add `docs/DECISIONS.md`: why proot, why nested Wayland, why ritual sudo, why GNOME is beta. | 4 | 45 min | done |
 | G31 | Add a `docs/` index and link `docs/TEST-REPORT.md` from the first screen. | 3 | 15 min | done: `docs/README.md` index |
 | G32 | Link `issues.md` from the README with severities. | 4 | 10 min | done |
 | G33 | Add badges for release version, CI status, downloads, and license. Replace the three static ones. | 4 | 15 min | done: CI, release, Android range, distros |

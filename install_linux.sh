@@ -1346,6 +1346,488 @@ lfa_diagnostics() {
     return 1
 }
 
+# ============================================================
+# Wayland session manager.
+#
+# The phone's X server is Termux:X11, which is an X11 display. A Wayland
+# compositor therefore has to run nested inside it. Sway can do that with
+# its X11 backend. Hyprland can only do it when Aquamarine can open a DRM
+# render node, which an unrooted Android app cannot do. The manager starts
+# Hyprland when that node is usable and falls back to Sway with the
+# Hyprland-style profile otherwise.
+# ============================================================
+LFA_WAYLAND_ASSET_SUBDIR="assets/wayland"
+
+lfa_wayland_usage() {
+    cat <<'WLHELP'
+Usage: lfa wayland <command> [options]
+
+  status                   show compositor availability and session state
+  install                  install the Wayland stack in a distro
+  start                    start the Wayland session
+  stop                     stop the Wayland session
+  doctor                   diagnose packages, DRM, configs, and logs
+  session [NAME]           choose auto, hyprland, sway, or xfce
+  help                     show this help
+
+Options:
+  -i, --instance NAME      distribution to use
+  --compositor NAME        start this session with auto, hyprland, sway, xfce
+  --restart                stop a running session first
+  --config DIR             import a config bundle (hypr, waybar, kitty, ...)
+  --resolution WxH         set the X11 output size (for example 2408x1080)
+  --wallpaper FILE         copy FILE to the session wallpaper
+
+Hyprland needs a DRM render node that the app can open. On an unrooted
+Android device there is usually no usable /dev/dri/renderD*, so LFA starts
+Sway with the same keybinds, gaps, borders, wallpaper, and bar instead.
+The Hyprland profile is installed and used automatically when the device
+can provide that node.
+WLHELP
+}
+
+lfa_wayland_asset_dir() {
+    local _d="$LFA_DIR/$LFA_WAYLAND_ASSET_SUBDIR"
+    [ -d "$_d" ] || _d="$PREFIX/lib/linux-for-android/$LFA_WAYLAND_ASSET_SUBDIR"
+    [ -d "$_d" ] || return 1
+    printf '%s' "$_d"
+}
+
+lfa_wayland_pref_file() {
+    printf '%s' "$HOME/.config/linux-for-android/wayland.conf"
+}
+
+lfa_wayland_pref() {
+    local _f _v="auto"
+    _f="$(lfa_wayland_pref_file)"
+    if [ -r "$_f" ]; then
+        # shellcheck disable=SC1090
+        _v="$( . "$_f" 2>/dev/null; printf '%s' "${COMPOSITOR:-auto}" )"
+    fi
+    printf '%s' "$_v"
+}
+
+lfa_wayland_set_pref() {  # $1 = auto|hyprland|sway|xfce
+    local _v="${1:-auto}" _f
+    case "$_v" in auto|hyprland|sway|xfce) ;; *) echo "Unknown compositor: $_v" >&2; return 2 ;; esac
+    _f="$(lfa_wayland_pref_file)"
+    mkdir -p "$(dirname "$_f")" 2>/dev/null || true
+    printf 'COMPOSITOR="%s"\n' "$_v" > "$_f"
+}
+
+lfa_wayland_pidfile() {
+    printf '%s' "$PREFIX/tmp/lfa-wayland-$1.pid"
+}
+
+lfa_wayland_running() {  # $1 = instance
+    local _p _f
+    _f="$(lfa_wayland_pidfile "$1")"
+    if [ -f "$_f" ]; then
+        _p="$(tr -dc '0-9' < "$_f" 2>/dev/null)"
+        if [ -n "$_p" ] && lfa_pid_matches "$_p" "start-lfa-wayland" "sway" "Hyprland"; then
+            return 0
+        fi
+    fi
+    # A killed proot parent can leave the compositor behind; the config path
+    # is unique to this manager.
+    pgrep -f 'lfa-wayland/sway/config' >/dev/null 2>&1 && return 0
+    return 1
+}
+
+lfa_wayland_active() {
+    if pgrep -x Hyprland >/dev/null 2>&1; then
+        printf 'Hyprland'
+    elif pgrep -f 'lfa-wayland/sway/config' >/dev/null 2>&1; then
+        printf 'Sway'
+    else
+        printf 'none'
+    fi
+}
+
+lfa_wayland_guest() {  # $1 = instance, $2 = user, $3 = shell command
+    # shellcheck disable=SC2046  # flag list, not one argument
+    proot-distro login $(pd_login_flags) "$1" --user "$2" --shared-tmp -- bash -c "$3"
+}
+
+lfa_wayland_guest_root() {  # $1 = instance, $2 = shell command
+    # shellcheck disable=SC2046  # flag list, not one argument
+    proot-distro login $(pd_login_flags) "$1" --shared-tmp -- bash -c "$2"
+}
+
+lfa_wayland_status() {
+    local _inst=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            -i|--instance) _inst="${2:-}"; shift 2 ;;
+            *) echo "Unknown option: $1" >&2; return 2 ;;
+        esac
+    done
+    require_proot_distro || return 1
+    [ -n "$_inst" ] && CLI_INSTANCE="$_inst"
+    select_installed_instance || return 1
+    local _id="$INSTANCE_NAME" _user _conf _distro="" _out _drm
+    _user="$(lfa_appimage_user "$_id")"
+    _conf="$(pd_conf "$_id")"
+    if [ -f "$_conf" ]; then
+        # shellcheck disable=SC1090
+        _distro="$( . "$_conf" 2>/dev/null; printf '%s' "${DISTRO:-}" )"
+    fi
+    echo "instance:    $_id"
+    echo "distro:      ${_distro:-unknown}"
+    echo "user:        $_user"
+    echo "compositor:  $(lfa_wayland_pref)"
+    if lfa_wayland_running "$_id"; then
+        echo "session:     running ($(lfa_wayland_active))"
+    else
+        echo "session:     stopped"
+    fi
+
+    _out="$(lfa_wayland_guest "$_id" "$_user" '
+        for p in Hyprland sway waybar wofi kitty; do
+            if command -v "$p" >/dev/null 2>&1; then printf "%s=yes\n" "$p"; else printf "%s=no\n" "$p"; fi
+        done
+        if [ -x /usr/local/bin/start-lfa-wayland ]; then echo helper=yes; else echo helper=no; fi
+        if [ -d "$HOME/.config/lfa-wayland" ]; then echo config=yes; else echo config=no; fi
+    ' 2>/dev/null)" || true
+    printf '%s\n' "$_out" | sed 's/^/package:     /'
+    _drm="$(lfa_wayland_guest "$_id" "$_user" '
+        found=no
+        for n in /dev/dri/renderD*; do
+            [ -r "$n" ] && [ -w "$n" ] && { printf "render=%s\n" "$n"; found=yes; }
+        done
+        [ "$found" = no ] && echo render=none
+        for n in /dev/dri/card*; do [ -e "$n" ] && ls -l "$n"; done
+    ' 2>/dev/null)" || true
+    printf '%s\n' "$_drm" | sed 's/^/drm:         /'
+    case "$_out" in
+        *"Hyprland=yes"*)
+            case "$_drm" in
+                *"render=none"*) echo "note:        Hyprland is installed but cannot start without a writable DRM render node." ;;
+                *) echo "note:        Hyprland can start on this device." ;;
+            esac ;;
+    esac
+}
+
+lfa_wayland_install() {
+    local _inst="" _config="" _comp="" _res="" _wall=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            -i|--instance) _inst="${2:-}"; shift 2 ;;
+            --config) _config="${2:-}"; shift 2 ;;
+            --compositor) _comp="${2:-}"; shift 2 ;;
+            --resolution) _res="${2:-}"; shift 2 ;;
+            --wallpaper) _wall="${2:-}"; shift 2 ;;
+            *) echo "Unknown option: $1" >&2; return 2 ;;
+        esac
+    done
+    if [ -n "$_comp" ]; then
+        case "$_comp" in
+            auto|hyprland|sway|xfce) ;;
+            *) echo "Unknown compositor: $_comp" >&2; return 2 ;;
+        esac
+    fi
+    if [ -n "$_res" ] && ! printf '%s' "$_res" | grep -qE '^[0-9]+x[0-9]+$'; then
+        echo "Resolution must look like 2408x1080." >&2
+        return 2
+    fi
+    require_proot_distro || return 1
+    [ -n "$_inst" ] && CLI_INSTANCE="$_inst"
+    select_installed_instance || return 1
+    local _id="$INSTANCE_NAME" _user _conf _distro="" _rf _assets _stage=""
+    _user="$(lfa_appimage_user "$_id")"
+    _conf="$(pd_conf "$_id")"
+    _rf="$(pd_rootfs "$_id")"
+    if [ -f "$_conf" ]; then
+        # shellcheck disable=SC1090
+        _distro="$( . "$_conf" 2>/dev/null; printf '%s' "${DISTRO:-}" )"
+    fi
+    _assets="$(lfa_wayland_asset_dir)" || {
+        echo "Wayland assets are missing from this LFA build." >&2
+        return 1
+    }
+
+    echo "[*] Installing the Wayland stack in $_id..."
+    case "$_distro" in
+        archlinux)
+            lfa_wayland_guest_root "$_id" '
+                pacman -S --noconfirm --needed \
+                    sway swaybg swaylock waybar swaync kitty wofi thunar \
+                    ttf-jetbrains-mono-nerd adwaita-fonts gnome-themes-extra \
+                    adwaita-icon-theme starship lsd bat playerctl pamixer \
+                    grim slurp wl-clipboard xorg-xwayland
+                pacman -S --noconfirm --needed hyprland hyprpaper hyprlock hypridle || \
+                    echo "[!] Hyprland packages are not available; Sway will be used."
+            ' || { echo "Package installation failed." >&2; return 1; } ;;
+        ubuntu|debian)
+            lfa_wayland_guest_root "$_id" '
+                apt-get update
+                DEBIAN_FRONTEND=noninteractive apt-get install -y \
+                    sway swaybg swaylock waybar wofi sway-notification-center \
+                    kitty thunar fonts-jetbrains-mono grim slurp wl-clipboard \
+                    playerctl pamixer || true
+                echo "[i] Hyprland is not packaged for this distro; Sway will be used."
+            ' || { echo "Package installation failed." >&2; return 1; } ;;
+        *)
+            echo "Wayland install is not implemented for $_distro yet." >&2
+            echo "Supported: archlinux, ubuntu, debian." >&2
+            return 1 ;;
+    esac
+
+    if [ -n "$_config" ]; then
+        if [ -d "$_config" ]; then
+            _stage="$_config"
+        elif [ -f "$_config" ]; then
+            _stage="$PREFIX/tmp/lfa-wayland-config-$$"
+            mkdir -p "$_stage" 2>/dev/null || true
+            tar -xzf "$_config" -C "$_stage" 2>/dev/null || {
+                echo "Could not extract $_config" >&2
+                rm -rf "$_stage" 2>/dev/null || true
+                return 1
+            }
+        else
+            echo "No such config path: $_config" >&2
+            return 1
+        fi
+        echo "[*] Importing desktop configs from $_config..."
+        for _d in hypr waybar kitty wofi swaync; do
+            [ -d "$_stage/$_d" ] || continue
+            mkdir -p "$_rf/home/$_user/.config/$_d" 2>/dev/null || true
+            cp -a "$_stage/$_d/." "$_rf/home/$_user/.config/$_d/" 2>/dev/null || true
+        done
+        [ "$_stage" != "$_config" ] && rm -rf "$_stage" 2>/dev/null || true
+    fi
+
+    echo "[*] Installing the session profile..."
+    install -d "$_rf/home/$_user/.config/lfa-wayland/sway" \
+        "$_rf/home/$_user/.config/lfa-wayland/sway-nest" \
+        "$_rf/home/$_user/.config/lfa-wayland/waybar/scripts" 2>/dev/null || true
+    install -m 644 "$_assets/sway/config" "$_rf/home/$_user/.config/lfa-wayland/sway/config" 2>/dev/null || true
+    install -m 644 "$_assets/sway-nest/config" "$_rf/home/$_user/.config/lfa-wayland/sway-nest/config" 2>/dev/null || true
+    install -m 644 "$_assets/waybar/config.jsonc" "$_rf/home/$_user/.config/lfa-wayland/waybar/config.jsonc" 2>/dev/null || true
+    install -m 644 "$_assets/waybar/style.css" "$_rf/home/$_user/.config/lfa-wayland/waybar/style.css" 2>/dev/null || true
+    install -m 755 "$_assets/waybar/scripts/battery.sh" "$_rf/home/$_user/.config/lfa-wayland/waybar/scripts/battery.sh" 2>/dev/null || true
+    install -m 755 "$_assets/start-lfa-wayland" "$_rf/usr/local/bin/start-lfa-wayland" 2>/dev/null || true
+
+    if [ -n "$_res" ]; then
+        _swaycfg="$_rf/home/$_user/.config/lfa-wayland/sway/config"
+        sed -i '/^output X11-1 resolution /d' "$_swaycfg" 2>/dev/null || true
+        printf '\noutput X11-1 resolution %s position 0 0\n' "$_res" \
+            >> "$_swaycfg" 2>/dev/null || true
+    fi
+    if [ -n "$_wall" ] && [ -f "$_wall" ]; then
+        install -d "$_rf/usr/share/backgrounds" 2>/dev/null || true
+        install -m 644 "$_wall" "$_rf/usr/share/backgrounds/lfa-wayland.jpg" 2>/dev/null || true
+    elif [ -f "$LFA_DIR/assets/wallpapers/archlinux-dark.jpg" ]; then
+        install -d "$_rf/usr/share/backgrounds" 2>/dev/null || true
+        install -m 644 "$LFA_DIR/assets/wallpapers/archlinux-dark.jpg" "$_rf/usr/share/backgrounds/lfa-wayland.jpg" 2>/dev/null || true
+    elif [ -f "$_rf/usr/share/backgrounds/lfa-default.jpg" ]; then
+        cp -f "$_rf/usr/share/backgrounds/lfa-default.jpg" "$_rf/usr/share/backgrounds/lfa-wayland.jpg" 2>/dev/null || true
+    fi
+
+    if [ -n "$_comp" ]; then
+        lfa_wayland_set_pref "$_comp" || true
+    fi
+
+    cat > "$PREFIX/bin/linux-wayland" <<'LWL'
+#!/bin/bash
+exec "$PREFIX/bin/lfa" wayland start "$@"
+LWL
+    chmod +x "$PREFIX/bin/linux-wayland" 2>/dev/null || true
+
+    echo "[*] Wayland stack installed."
+    echo "    start:  lfa wayland start -i $_id"
+    echo "    stop:   lfa wayland stop -i $_id"
+    echo "    status: lfa wayland status -i $_id"
+    echo "    Hyprland is used when a writable /dev/dri/renderD* exists;"
+    echo "    otherwise the Sway profile mirrors the Hyprland keybinds and look."
+}
+
+lfa_wayland_start() {
+    local _inst="" _comp="" _restart=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            -i|--instance) _inst="${2:-}"; shift 2 ;;
+            --compositor) _comp="${2:-}"; shift 2 ;;
+            --restart) _restart=1; shift ;;
+            *) echo "Unknown option: $1" >&2; return 2 ;;
+        esac
+    done
+    require_proot_distro || return 1
+    [ -n "$_inst" ] && CLI_INSTANCE="$_inst"
+    select_installed_instance || return 1
+    local _id="$INSTANCE_NAME" _user _conf _runtime _need_virgl=1
+    _user="$(lfa_appimage_user "$_id")"
+    _conf="$(pd_conf "$_id")"
+    if [ -f "$_conf" ]; then
+        # shellcheck disable=SC1090
+        _need_virgl="$( . "$_conf" 2>/dev/null; printf '%s' "${NEED_VIRGL:-1}" )"
+    fi
+    if [ -n "$_comp" ]; then
+        lfa_wayland_set_pref "$_comp" || return 2
+    fi
+    _comp="$(lfa_wayland_pref)"
+
+    if lfa_wayland_running "$_id"; then
+        if [ "$_restart" = "1" ]; then
+            lfa_wayland_stop -i "$_id" >/dev/null 2>&1 || true
+        else
+            echo "A Wayland session for $_id is already running."
+            echo "  restart: lfa wayland start -i $_id --restart"
+            return 0
+        fi
+    fi
+
+    if lfa_instance_session_running "$_id"; then
+        if [ "$_restart" = "1" ]; then
+            "$PREFIX/bin/stop-linux" -i "$_id" >/dev/null 2>&1 || true
+        else
+            echo "A desktop is already running for $_id."
+            echo "  stop it first: lfa stop -i $_id"
+            return 1
+        fi
+    fi
+
+    if ! command -v termux-x11 >/dev/null 2>&1; then
+        echo "[*] Installing Termux:X11..."
+        pkg install -y x11-repo termux-x11-nightly > "$PREFIX/tmp/lfa-wayland-x11-install.log" 2>&1 || true
+    fi
+    if ! command -v termux-x11 >/dev/null 2>&1; then
+        echo "Termux:X11 is not installed. Run: pkg install x11-repo termux-x11-nightly" >&2
+        return 1
+    fi
+    if ! pgrep -f '^termux-x11 .* :1( |$)' >/dev/null 2>&1; then
+        echo "[*] Starting Termux:X11 on :1..."
+        nohup termux-x11 :1 > "$PREFIX/tmp/lfa-wayland-x11.log" 2>&1 &
+        sleep 2
+    fi
+    if command -v pulseaudio >/dev/null 2>&1; then
+        pulseaudio --start --load="module-native-protocol-tcp auth-ip-acl=127.0.0.1 auth-anonymous=1" --exit-idle-time=-1 2>/dev/null || true
+    fi
+    if [ "$_need_virgl" = "1" ] && command -v virgl_test_server_android >/dev/null 2>&1; then
+        nohup virgl_test_server_android >/dev/null 2>&1 &
+    fi
+
+    _runtime="/tmp/xdg-$_user-$_id"
+    echo "[*] Starting the Wayland session ($_comp) as $_user..."
+    # shellcheck disable=SC2046  # flag list, not one argument
+    nohup proot-distro login $(pd_login_flags) "$_id" --user "$_user" --shared-tmp -- \
+        env DISPLAY=:1 PULSE_SERVER=127.0.0.1 XDG_RUNTIME_DIR="$_runtime" \
+        LFA_WAYLAND_COMPOSITOR="$_comp" bash -c 'if command -v dbus-run-session >/dev/null 2>&1; then exec dbus-run-session -- start-lfa-wayland; else exec start-lfa-wayland; fi' \
+        > "$HOME/lfa-wayland.log" 2>&1 &
+    echo "$!" > "$(lfa_wayland_pidfile "$_id")"
+    sleep 4
+    if lfa_wayland_running "$_id"; then
+        echo "[*] Wayland session is running."
+        echo "    log: $HOME/lfa-wayland.log"
+        case "$(lfa_wayland_active)" in
+            Hyprland) echo "    compositor: Hyprland (nested)" ;;
+            Sway) echo "    compositor: Sway with the Hyprland profile" ;;
+            *) echo "    compositor: $_comp" ;;
+        esac
+    else
+        echo "[!] The session did not stay up. Last log lines:" >&2
+        tail -n 20 "$HOME/lfa-wayland.log" 2>/dev/null >&2 || true
+        return 1
+    fi
+}
+
+lfa_wayland_stop() {
+    local _inst=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            -i|--instance) _inst="${2:-}"; shift 2 ;;
+            *) echo "Unknown option: $1" >&2; return 2 ;;
+        esac
+    done
+    require_proot_distro || return 1
+    [ -n "$_inst" ] && CLI_INSTANCE="$_inst"
+    select_installed_instance || return 1
+    local _id="$INSTANCE_NAME" _p _f _user
+    _user="$(lfa_appimage_user "$_id")"
+    _f="$(lfa_wayland_pidfile "$_id")"
+    _p="$(tr -dc '0-9' < "$_f" 2>/dev/null || true)"
+    if [ -n "$_p" ] && lfa_pid_matches "$_p" "start-lfa-wayland" "sway" "Hyprland"; then
+        echo "[*] Stopping the Wayland session for $_id..."
+        kill "$_p" 2>/dev/null || true
+        for _ in 1 2 3 4 5; do
+            kill -0 "$_p" 2>/dev/null || break
+            sleep 1
+        done
+        kill -9 "$_p" 2>/dev/null || true
+    else
+        echo "No Wayland session is running for $_id."
+    fi
+    # A killed proot parent can leave Sway or Hyprland orphaned.
+    lfa_wayland_guest "$_id" "$_user" '
+        pkill -f "[l]fa-wayland/sway" 2>/dev/null || true
+        pkill -f "[l]fa-wayland/waybar" 2>/dev/null || true
+        pkill -x Hyprland 2>/dev/null || true
+        true
+    ' >/dev/null 2>&1 || true
+    rm -f "$_f" 2>/dev/null || true
+}
+
+lfa_wayland_doctor() {
+    local _inst=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            -i|--instance) _inst="${2:-}"; shift 2 ;;
+            *) echo "Unknown option: $1" >&2; return 2 ;;
+        esac
+    done
+    if [ -n "$_inst" ]; then lfa_wayland_status -i "$_inst" || true; else lfa_wayland_status || true; fi
+    echo ""
+    echo "Checks:"
+    if [ -x "$PREFIX/bin/linux-wayland" ]; then
+        echo "  launcher:   present"
+    else
+        echo "  launcher:   missing (lfa wayland install -i ${_inst:-NAME})"
+    fi
+    echo "  X server:   $(pgrep -f '^termux-x11 .* :1( |$)' >/dev/null 2>&1 && echo running || echo stopped)"
+    echo "  log:        $HOME/lfa-wayland.log"
+    [ -f "$HOME/lfa-wayland.log" ] && tail -n 8 "$HOME/lfa-wayland.log" | sed 's/^/    /'
+    echo ""
+    echo "Hyprland needs a writable DRM render node. Without one, Aquamarine"
+    echo "cannot allocate buffers and Hyprland exits with CBackend::create()."
+    echo "LFA then starts Sway with the same keybinds, gaps, borders, wallpaper,"
+    echo "and bar. Use: lfa wayland start -i ${_inst:-NAME}"
+}
+
+lfa_wayland_session() {
+    local _name="${1:-}"
+    [ $# -gt 0 ] && shift || true
+    if [ $# -gt 0 ]; then
+        echo "Unknown option: $1" >&2
+        return 2
+    fi
+    if [ -z "$_name" ]; then
+        echo "compositor: $(lfa_wayland_pref)"
+        echo "choices:    auto, hyprland, sway, xfce"
+        return 0
+    fi
+    lfa_wayland_set_pref "$_name" || return $?
+    echo "Wayland compositor set to: $_name"
+    if [ "$_name" = "hyprland" ]; then
+        echo "Hyprland will fall back to Sway if no writable DRM render node exists."
+    fi
+}
+
+lfa_wayland_cmd() {
+    local _cmd="${1:-}"
+    [ $# -gt 0 ] && shift || true
+    case "$_cmd" in
+        status) lfa_wayland_status "$@" ;;
+        install) lfa_wayland_install "$@" ;;
+        start) lfa_wayland_start "$@" ;;
+        stop) lfa_wayland_stop "$@" ;;
+        doctor) lfa_wayland_doctor "$@" ;;
+        session) lfa_wayland_session "$@" ;;
+        help|-h|--help|"") lfa_wayland_usage ;;
+        *) echo "Unknown wayland command: $_cmd" >&2; lfa_wayland_usage >&2; return 2 ;;
+    esac
+}
+
+
 lfa_cli_usage() {
     cat <<'HELP'
 Linux for Android - command line
@@ -1369,6 +1851,7 @@ Usage: lfa <command> [options]
   compat        inspect or enable compatibility shims
   android       inspect or enable the Termux:API bridge
   storage       Android shared storage: status, repair, run helpers
+  wayland       Wayland session manager: Hyprland or Sway (alias: wl)
   appimage      extract and run an AppImage (alias: app)
   run           run an AppImage once without installing it
   diagnostics   write a support bundle
@@ -1415,6 +1898,9 @@ Examples:
   lfa appimage list
   lfa appimage run Foo
   lfa run ~/Foo.AppImage
+  lfa wayland install -i arch
+  lfa wayland start -i arch
+  lfa wayland status -i arch
   lfa notice off
 HELP
 }
@@ -2198,7 +2684,7 @@ lfa_instance_session_running() {  # $1 = instance
                 # A terminal login also contains the instance path. Only
                 # count a real desktop session for the X11 running state.
                 case "$_cmd" in
-                    *startxfce4*|*startlxde*|*mate-session*|*gnome-shell*|*start-gnome-session*) return 0 ;;
+                    *startxfce4*|*startlxde*|*mate-session*|*gnome-shell*|*start-gnome-session*|*start-lfa-wayland*|*Hyprland*) return 0 ;;
                 esac ;;
         esac
     done
@@ -3230,6 +3716,7 @@ lfa_cli() {
         android) lfa_android_cmd "$@" ;;
         appimage|app) lfa_cli_appimage "$@" ;;
         storage) lfa_cli_storage "$@" ;;
+        wayland|wl) lfa_wayland_cmd "$@" ;;
         run) lfa_appimage_run "$@" ;;
         update)
             while [ $# -gt 0 ]; do case "$1" in -i|--instance) CLI_INSTANCE="${2:-}"; shift 2 ;; *) echo "Unknown option: $1" >&2; return 2 ;; esac; done
@@ -4913,7 +5400,7 @@ lfa_instance_session_running() {  # $1 = instance
         case "$_cmd" in
             *"/containers/$1/"*|*"/installed-rootfs/$1/"*)
                 case "$_cmd" in
-                    *startxfce4*|*startlxde*|*mate-session*|*gnome-shell*|*start-gnome-session*) return 0 ;;
+                    *startxfce4*|*startlxde*|*mate-session*|*gnome-shell*|*start-gnome-session*|*start-lfa-wayland*|*Hyprland*) return 0 ;;
                 esac ;;
         esac
     done

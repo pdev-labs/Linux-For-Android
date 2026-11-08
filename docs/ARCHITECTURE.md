@@ -92,6 +92,12 @@ the server when the login command returns. `exec` matters for shutdown: a
 shell loop defers SIGTERM until its current `sleep` returns, so `stop-linux`
 could leave the proot wrapper behind. The single sleep process dies at once.
 
+`lfa wayland` adds a third session on the same display. It starts Sway with
+`WLR_BACKENDS=x11` inside Termux:X11, so the compositor is a client of the X
+server. Hyprland runs as a client of a small Sway host when a writable DRM
+render node exists. The session has its own pidfile and log, and it refuses to
+start while an X11 or VNC desktop is up.
+
 An install can carry both back ends. `SERVER="both"` installs both package
 sets, and `start-linux` resolves the choice to `x11` or `vnc` before starting.
 Only one runs at a time because they share `:1` and port `5901`. The last
@@ -115,10 +121,11 @@ on every install and on menu 12. That copy is what lets the command line keep
 working after the repository is moved, renamed, or deleted.
 
 Preferences that are not tied to one distro live in
-`~/.config/linux-for-android/preferences.conf`. The only key today is
+`~/.config/linux-for-android/preferences.conf`. The key there is
 `START_NOTICE`, written by `lfa notice on|off`. The notice is printed to
 stderr by the classic `start-linux` path only; `linux`, non-interactive runs,
-and Termux:Boot are silent.
+and Termux:Boot are silent. The Wayland compositor choice lives next to it in
+`wayland.conf`.
 
 ## Android version cutoffs
 

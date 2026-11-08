@@ -1,0 +1,21 @@
+# Host compositor for a nested Hyprland session.
+# Termux:X11 is an X11 display, so Sway starts with its X11 backend and
+# gives Hyprland a Wayland socket. No bar and no wallpaper here: Hyprland
+# draws its own.
+
+set $mod Mod4
+
+gaps inner 0
+gaps outer 0
+default_border none
+smart_gaps off
+smart_borders off
+
+output * bg #000000 solid_color
+
+exec Hyprland
+
+for_window [app_id="Hyprland"] fullscreen enable
+for_window [app_id="hyprland"] fullscreen enable
+
+bindsym $mod+Shift+E exit

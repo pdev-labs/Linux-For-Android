@@ -15,6 +15,15 @@ tag names, define the order. See the table at the bottom.
 
 ### Added
 
+- `lfa wayland` (alias `lfa wl`) adds a nested Wayland session. It installs
+  Sway with a profile that copies the Hyprland keybinds, gaps, borders,
+  colours, Waybar bar, notification centre, and wallpaper; starts it on
+  Termux:X11; and stops it cleanly. `--config` imports hypr, waybar, kitty,
+  wofi, and swaync configs, `--resolution` sets the nested output size, and
+  `--wallpaper` replaces the background. Hyprland is installed and used when a
+  writable `/dev/dri/renderD*` exists. A stock phone has no such node, so
+  Hyprland aborts with `CBackend::create() failed!` and the Sway profile runs
+  instead. `status`, `doctor`, and `session` report which compositor is live.
 - `lfa appimage` (alias `lfa app`) adds first-class AppImage support. `add`
   extracts an AppImage once into `~/.local/opt/appimages`, writes a launcher
   in `~/.local/bin`, and adds a desktop entry; `list`, `run`, and `remove`

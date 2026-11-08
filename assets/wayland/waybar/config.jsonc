@@ -1,0 +1,71 @@
+{
+  "reload_style_on_change": true,
+  "layer": "top",
+  "position": "top",
+  "spacing": 0,
+  "height": 26,
+  "modules-left": ["custom/launcher", "sway/workspaces", "mpris"],
+  "modules-center": ["sway/window"],
+  "modules-right": ["tray", "custom/battery", "custom/audio", "custom/net", "custom/power", "clock"],
+  "custom/launcher": {
+    "format": "󰣇",
+    "on-click": "wofi --show drun",
+    "on-click-right": "kitty",
+    "tooltip-format": "Launcher\n\nSuper + Space"
+  },
+  "sway/workspaces": {
+    "format": "{icon}",
+    "format-icons": {
+      "1": "I",
+      "2": "II",
+      "3": "III",
+      "4": "IV",
+      "5": "V",
+      "6": "VI",
+      "7": "VII",
+      "8": "VIII",
+      "9": "IX",
+      "10": "X",
+      "default": "•"
+    },
+    "on-click": "activate"
+  },
+  "sway/window": {
+    "format": "{}",
+    "max-length": 50
+  },
+  "mpris": {
+    "format": "{}",
+    "format-paused": " {}",
+    "max-length": 30
+  },
+  "custom/battery": {
+    "exec": "~/.config/lfa-wayland/waybar/scripts/battery.sh",
+    "interval": 30,
+    "format": "{}",
+    "tooltip": false
+  },
+  "custom/audio": {
+    "exec": "pamixer --get-volume-human",
+    "interval": 2,
+    "format": "󰕾 {}",
+    "tooltip": true,
+    "on-click": "pamixer -t",
+    "on-scroll-up": "pamixer -i 5",
+    "on-scroll-down": "pamixer -d 5"
+  },
+  "custom/net": {
+    "format": "󰤨",
+    "tooltip": false
+  },
+  "custom/power": {
+    "format": "\uf011",
+    "tooltip": false,
+    "on-click": "swaymsg exit"
+  },
+  "clock": {
+    "format": "󰃰 {:%H:%M}",
+    "format-alt": " {:%a %d %b}",
+    "tooltip-format": "{calendar}"
+  }
+}

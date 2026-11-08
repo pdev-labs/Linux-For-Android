@@ -7,7 +7,7 @@ Status values:
 
 | Status | Meaning |
 |---|---|
-| `done` | code changed, suite green (`PASS=627 FAIL=0`), lint clean |
+| `done` | code changed, suite green (`PASS=674 FAIL=0`), lint clean |
 | `partial` | the main risk is addressed; a documented remainder is listed |
 | `deferred` | deliberately not fixed in this pass, with the reason recorded |
 | `device` | also exercised on the Vivo V2437 |
@@ -53,8 +53,20 @@ Lint: `shellcheck -S warning` clean, `bash -n` clean, CI workflow added.
 | Android 5/6 refusal | `done` | explicit explanation, `--remove-old` warning, VNC restore command |
 | `start-linux` notice | `done` | stderr, interactive classic runs only; `lfa notice`, `--no-notice`, `LFA_NO_NOTICE` |
 | Boot script ownership | `done` | switching a non-autostart instance no longer hijacks another instance's boot script |
-| Host suite | `done` | `PASS=627 FAIL=0`; Y1-Y10 cover CLI, switch, removal, guard, `-i`, legacy, SDK 24/25, compat/android, matrix, AppImage |
+| Host suite | `done` | `PASS=674 FAIL=0`; Y1-Y11 cover CLI, switch, removal, guard, `-i`, legacy, SDK 24/25, compat/android, matrix, AppImage, Wayland |
 | Device verification | `done` | Vivo V2437 (SDK 36): VNC `PASS=14`, Both switch `PASS=22`, X11 `PASS=14`, VirGL fallback, shims, bridge, `--software`; Oppo SDK 22 pending (off network) |
+
+## Wayland session (2026-11-08)
+
+| Item | Status | Notes |
+|---|---|---|
+| `lfa wayland` command | `done` | status, install, start, stop, doctor, session; alias `wl` |
+| Session profile | `done` | Sway on X11 with Hyprland keybinds, gaps, borders, colours, Waybar, SwayNC, wallpaper |
+| Config import | `done` | `--config` copies hypr, waybar, kitty, wofi, and swaync from a folder or tarball |
+| Output size | `done` | `--resolution 2408x1080`, rewritten instead of duplicated |
+| Hyprland path | `device` | installed and config-parsed; start blocked by the missing DRM render node |
+| Device verification | `done` | Vivo V2437: session, bar, notifications, battery, `grim` screenshot, clean stop |
+| Docs and tests | `done` | `docs/WAYLAND.md`, README section, troubleshooting entry, Y11 checks |
 
 ## Android CI and compatibility layers (2026-11-05)
 

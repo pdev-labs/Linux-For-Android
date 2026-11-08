@@ -12,15 +12,22 @@ Why: no root, no bootloader, works on a stock phone, one command.
 Cost: no real UIDs, no systemd, no loop mounts, no kernel modules. Every other
 decision below follows from this one.
 
-## D2: X11 and VNC only, no Wayland
+## D2: Wayland runs nested, and Hyprland waits for a DRM node
 
-Decision: no Wayland backend is planned.
+Decision: ship `lfa wayland` as a nested session. Sway is the compositor on a
+stock phone. Hyprland starts only when the app can open a DRM render node.
 
-Why: Wayland needs a compositor with a real session, DRM access, and often
-systemd. Under proot the best case is a nested compositor on top of X, which is
-slower and more fragile than the X11 session it replaces.
+Why: Termux:X11 is an X11 server, and Sway has an X11 backend, so a nested
+session works without root. Hyprland's Aquamarine back end asks for
+`zwp_linux_dmabuf_v1` and a render node while it starts. A stock Android app
+cannot open `/dev/dri/card0`, and there is no `/dev/dri/renderD128`, so
+Hyprland aborts with `CBackend::create() failed!`. A profile that copies the
+Hyprland keybinds, gaps, borders, and colours gives the same look on Sway.
 
-Cost: X11 is legacy upstream, and some modern toolkits deprecate it.
+Cost: software rendering with pixman, no hardware GL in Wayland clients, and no
+promise that Hyprland's blur, shadows, or screencast work. The Sway profile has
+to be kept in step with the Hyprland config by hand. X11 is still the default
+session for every distro.
 
 ## D3: the sudo ritual instead of a real sudo
 
