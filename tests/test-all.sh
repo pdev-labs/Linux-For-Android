@@ -1501,6 +1501,9 @@ check "Y11 start needs x11" 'Termux:X11 is not installed' "$T/y11-start.log"
 [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y11 stop exit $rc"; }
 check "Y11 stop idle" 'No Wayland session is running for debian.' "$T/y11-stop.log"
 
+check "Y11 battery refresher" 'lfa-wayland-battery.pid' "$T/prefix/lib/linux-for-android/install_linux.sh"
+check "Y11 battery env" 'lfa-android-battery.env' "$T/prefix/lib/linux-for-android/install_linux.sh"
+check "Y11 battery refresh interval" 'sleep 60' "$T/prefix/lib/linux-for-android/install_linux.sh"
 "$LFA" wayland bogus > "$T/y11-bogus.log" 2>&1; rc=$?
 [ "$rc" = "2" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y11 bogus command exit $rc"; }
 check "Y11 bogus message" 'Unknown wayland command: bogus' "$T/y11-bogus.log"

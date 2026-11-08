@@ -134,7 +134,7 @@ hardware, not simulated. Full details, root causes, and evidence are in
 | Alpine 3.18 (Android 5) | Yes | Yes | legacy VNC desktop, panel works; X11 and Both hidden | v1.7.1 |
 | Ubuntu GNOME 46 (experimental) | Yes | Yes | shell and apps run; session services missing | v1.7.0 |
 
-> The test suite runs `674` checks with 0 failures. The same suite runs on the
+> The test suite runs `677` checks with 0 failures. The same suite runs on the
 > devices (`tests/device-matrix.sh`). The table is as of v1.7.1. Ubuntu was
 > re-verified on v1.7.1, and Alpine 3.18 was re-verified on Android 5 on
 > 2026-11-04; the other rows were last verified on v1.7.0. A row is
@@ -655,6 +655,8 @@ The Vivo V2437 was tested at 2408x1080 with Waybar, SwayNC, SwayBG, the
 launcher, the battery bridge, and a working `grim` screenshot. Hyprland
 0.57.1 parses the host config but cannot start on that device. Full detail,
 logs, and the DRM explanation are in [docs/WAYLAND.md](docs/WAYLAND.md).
+
+![Sway session on the Vivo V2437](docs/screenshots/wayland-sway.png)
 
 ## Older and custom distro versions
 
@@ -1549,7 +1551,7 @@ plus `script` from util-linux for the pty test, which is skipped if absent:
 
 ```bash
 chmod +x tests/test-all.sh
-./tests/test-all.sh   # expect: PASS=674 FAIL=0
+./tests/test-all.sh   # expect: PASS=677 FAIL=0
 ```
 
 The suite is deliberately stubbed. It cannot prove a desktop actually appears.

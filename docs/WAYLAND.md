@@ -72,9 +72,10 @@ screen is 1080x2408, and the session uses 2408x1080 to match it in landscape.
 On Arch the install adds `sway`, `swaybg`, `swaylock`, `waybar`, `swaync`,
 `kitty`, `wofi`, `thunar`, the Adwaita and JetBrains Mono Nerd fonts, `grim`,
 `slurp`, `wl-clipboard`, `xorg-xwayland`, and the Hyprland packages. Debian and
-Ubuntu get the Sway side from apt where the package names exist. The Hyprland
-packages are Arch only. Alpine, Fedora, Void, and the legacy images are not
-handled yet; the command says so and exits.
+Ubuntu get the Sway side from apt where the package names exist. SwayNC is
+installed in a second step because not every release packages it. The
+Hyprland packages are Arch only. Alpine, Fedora, Void, and the legacy images
+are not handled yet; the command says so and exits.
 
 ## The profile
 
@@ -93,6 +94,9 @@ guest. It sets:
 
 The battery module reads `/tmp/lfa-android-battery.env`, which the Termux:API
 bridge writes. It shows the real Android percentage and charging state.
+`lfa wayland start` keeps that file fresh with a one-minute refresher, and
+`lfa wayland stop` ends it. Without Termux:API the module shows the last value
+or 100%.
 
 The Hyprland host profile is `~/.config/lfa-wayland/sway-nest/config`. It runs
 one window, Hyprland, fullscreen, with no bar and no wallpaper.
@@ -112,6 +116,8 @@ On the Vivo V2437, Android 16, arm64:
   `drm: render=none`.
 - Hyprland 0.57.1 is installed and its config parses, but it aborts with
   `CBackend::create() failed!` on this device.
+
+![Sway session on the Vivo V2437 at 2408x1080, with Waybar and the Android battery reading](screenshots/wayland-sway.png)
 
 ## Logs and recovery
 

@@ -1444,6 +1444,41 @@ lfa_wayland_active() {
     fi
 }
 
+lfa_wayland_battery_start() {
+    local _pidfile="$PREFIX/tmp/lfa-wayland-battery.pid" _p _j _pct _st
+    command -v termux-battery-status >/dev/null 2>&1 || return 0
+    _p=""
+    [ -f "$_pidfile" ] && _p="$(tr -dc '0-9' < "$_pidfile" 2>/dev/null || true)"
+    if [ -n "$_p" ] && kill -0 "$_p" 2>/dev/null; then
+        return 0
+    fi
+    (
+        while :; do
+            _j="$(lfa_android_battery_json 2>/dev/null || true)"
+            if [ -n "$_j" ]; then
+                _pct="$(printf '%s' "$_j" | sed -n 's/.*"percentage"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' | head -n1)"
+                _st="$(printf '%s' "$_j" | sed -n 's/.*"status"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1)"
+                {
+                    printf 'BATTERY_PERCENT=%s\n' "${_pct:-unknown}"
+                    printf 'BATTERY_STATE=%s\n' "${_st:-unknown}"
+                    printf 'BATTERY_TIME_EMPTY=unknown\nBATTERY_TIME_FULL=unknown\n'
+                } > "$PREFIX/tmp/lfa-android-battery.env.new" 2>/dev/null && \
+                    mv -f "$PREFIX/tmp/lfa-android-battery.env.new" \
+                        "$PREFIX/tmp/lfa-android-battery.env" 2>/dev/null || true
+            fi
+            sleep 60
+        done
+    ) >/dev/null 2>&1 &
+    printf '%s\n' "$!" > "$_pidfile"
+}
+
+lfa_wayland_battery_stop() {
+    local _pidfile="$PREFIX/tmp/lfa-wayland-battery.pid" _p=""
+    [ -f "$_pidfile" ] && _p="$(tr -dc '0-9' < "$_pidfile" 2>/dev/null || true)"
+    [ -n "$_p" ] && kill "$_p" 2>/dev/null || true
+    rm -f "$_pidfile" 2>/dev/null || true
+}
+
 lfa_wayland_guest() {  # $1 = instance, $2 = user, $3 = shell command
     # shellcheck disable=SC2046  # flag list, not one argument
     proot-distro login $(pd_login_flags) "$1" --user "$2" --shared-tmp -- bash -c "$3"
@@ -1562,9 +1597,14 @@ lfa_wayland_install() {
             lfa_wayland_guest_root "$_id" '
                 apt-get update
                 DEBIAN_FRONTEND=noninteractive apt-get install -y \
-                    sway swaybg swaylock waybar wofi sway-notification-center \
-                    kitty thunar fonts-jetbrains-mono grim slurp wl-clipboard \
-                    playerctl pamixer || true
+                    sway swaybg swaylock waybar wofi kitty thunar \
+                    fonts-jetbrains-mono grim slurp wl-clipboard \
+                    playerctl pamixer xwayland dbus-x11 || true
+                # SwayNC is not in every Debian/Ubuntu release. Install it
+                # separately so one missing name does not sink the set above.
+                DEBIAN_FRONTEND=noninteractive apt-get install -y \
+                    sway-notification-center || \
+                    echo "[i] sway-notification-center is not packaged here; notifications use the default daemon."
                 echo "[i] Hyprland is not packaged for this distro; Sway will be used."
             ' || { echo "Package installation failed." >&2; return 1; } ;;
         *)
@@ -1724,6 +1764,7 @@ lfa_wayland_start() {
             Sway) echo "    compositor: Sway with the Hyprland profile" ;;
             *) echo "    compositor: $_comp" ;;
         esac
+        lfa_wayland_battery_start
     else
         echo "[!] The session did not stay up. Last log lines:" >&2
         tail -n 20 "$HOME/lfa-wayland.log" 2>/dev/null >&2 || true
@@ -1745,7 +1786,8 @@ lfa_wayland_stop() {
     local _id="$INSTANCE_NAME" _p _f _user
     _user="$(lfa_appimage_user "$_id")"
     _f="$(lfa_wayland_pidfile "$_id")"
-    _p="$(tr -dc '0-9' < "$_f" 2>/dev/null || true)"
+    _p=""
+    [ -f "$_f" ] && _p="$(tr -dc '0-9' < "$_f" 2>/dev/null || true)"
     if [ -n "$_p" ] && lfa_pid_matches "$_p" "start-lfa-wayland" "sway" "Hyprland"; then
         echo "[*] Stopping the Wayland session for $_id..."
         kill "$_p" 2>/dev/null || true
@@ -1757,6 +1799,7 @@ lfa_wayland_stop() {
     else
         echo "No Wayland session is running for $_id."
     fi
+    lfa_wayland_battery_stop
     # A killed proot parent can leave Sway or Hyprland orphaned.
     lfa_wayland_guest "$_id" "$_user" '
         pkill -f "[l]fa-wayland/sway" 2>/dev/null || true
