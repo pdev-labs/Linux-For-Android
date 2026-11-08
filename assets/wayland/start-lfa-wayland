@@ -1,0 +1,85 @@
+#!/bin/sh
+# Linux for Android: start a Wayland desktop inside Termux:X11.
+#
+# The phone has no DRM render node that a normal app may open, so Hyprland
+# cannot start on its own. When a render node is available (rooted device or
+# a future Android build), this script nests Hyprland inside a minimal Sway
+# host. Otherwise it runs Sway with the Hyprland-style profile, which keeps
+# the same keybinds, gaps, borders and bar.
+set -u
+
+COMP="${LFA_WAYLAND_COMPOSITOR:-auto}"
+CACHE="${XDG_CACHE_HOME:-$HOME/.cache}"
+mkdir -p "$CACHE" 2>/dev/null || true
+
+export XDG_SESSION_TYPE=wayland
+export XDG_CURRENT_DESKTOP=sway
+export MOZ_ENABLE_WAYLAND=1
+export GTK_THEME=Adwaita-dark
+export XCURSOR_THEME=Adwaita-Tiny
+export XCURSOR_SIZE=16
+
+if [ -z "${XDG_RUNTIME_DIR:-}" ]; then
+    export XDG_RUNTIME_DIR="/tmp/xdg-$USER-arch"
+fi
+mkdir -p "$XDG_RUNTIME_DIR" 2>/dev/null || true
+chmod 700 "$XDG_RUNTIME_DIR" 2>/dev/null || true
+
+if [ "$COMP" = "xfce" ]; then
+    exec startxfce4
+fi
+
+hyprland_ready() {
+    command -v Hyprland >/dev/null 2>&1 || return 1
+    # Aquamarine's nested backend needs a DRM render node it can open.
+    for _n in /dev/dri/renderD*; do
+        [ -r "$_n" ] && [ -w "$_n" ] && return 0
+    done
+    return 1
+}
+
+run_nested() {
+    WLR_BACKENDS=x11 WLR_RENDERER=gles2 \
+        sway -c "$HOME/.config/lfa-wayland/sway-nest/config" \
+        >"$CACHE/lfa-wayland-host.log" 2>&1 &
+    _pid=$!
+    sleep 8
+    if pgrep -x Hyprland >/dev/null 2>&1; then
+        wait "$_pid"
+        return 0
+    fi
+    kill "$_pid" 2>/dev/null || true
+    wait "$_pid" 2>/dev/null || true
+    return 1
+}
+
+run_sway() {
+    _cfg="$1"
+    _renderers="pixman"
+    for _n in /dev/dri/renderD*; do
+        [ -r "$_n" ] && [ -w "$_n" ] && _renderers="gles2 pixman"
+    done
+    for _r in $_renderers; do
+        WLR_BACKENDS=x11 WLR_RENDERER="$_r" \
+            sway -c "$_cfg" >"$CACHE/lfa-wayland-sway-$_r.log" 2>&1
+        [ "$?" = "0" ] && return 0
+    done
+    return 1
+}
+
+if [ "$COMP" = "hyprland" ] || [ "$COMP" = "auto" ]; then
+    if hyprland_ready; then
+        if run_nested; then
+            exit 0
+        fi
+        echo "Hyprland could not start; using Sway." >&2
+    elif [ "$COMP" = "hyprland" ]; then
+        echo "Hyprland needs an accessible /dev/dri render node; using Sway." >&2
+    fi
+fi
+
+if run_sway "$HOME/.config/lfa-wayland/sway/config"; then
+    exit 0
+fi
+
+exec startxfce4

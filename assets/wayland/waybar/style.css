@@ -1,0 +1,98 @@
+/* Graphite / teal. Same palette as the host: kitty, wofi, swaync and starship. */
+@define-color background #0b1013;
+@define-color foreground #d7dae1;
+@define-color accent #7ad6e0;
+@define-color hairline #232d31;
+@define-color surface #23262e;
+
+* {
+  background-color: transparent;
+  color: @foreground;
+  border: none;
+  border-radius: 0;
+  min-height: 0;
+  font-family: 'JetBrainsMono Nerd Font';
+  font-size: 12px;
+}
+
+window#waybar {
+  background-color: alpha(@background, 0.90);
+  border-bottom: 1px solid alpha(@foreground, 0.05);
+}
+
+.modules-left {
+  margin-left: 8px;
+}
+
+.modules-right {
+  margin-right: 8px;
+}
+
+/* Workspaces: Roman numerals, accent underline on the focused one. */
+#workspaces button {
+  transition: all 90ms ease-in-out;
+  padding: 0 6px;
+  margin: 0 1.5px;
+  min-width: 9px;
+  opacity: 0.4;
+  border-bottom: 2px solid transparent;
+}
+
+#workspaces button.occupied {
+  opacity: 0.9;
+  border-bottom-color: alpha(@foreground, 0.55);
+}
+
+#workspaces button.focused {
+  opacity: 1;
+  border-bottom: 3px solid @accent;
+}
+
+#workspaces button:hover {
+  opacity: 1;
+  background-color: alpha(@foreground, 0.10);
+  border-radius: 4px;
+}
+
+#custom-launcher {
+  font-size: 15px;
+  margin: 0 8px 0 2px;
+  color: @accent;
+}
+
+#mpris,
+#tray,
+#battery,
+#custom-audio,
+#network,
+#custom-power,
+#clock {
+  margin: 0 6px;
+}
+
+#battery,
+#network,
+#custom-audio {
+  padding: 0 6px;
+  border-radius: 6px;
+  background-color: alpha(@foreground, 0.06);
+  border: 1px solid alpha(@foreground, 0.05);
+}
+
+#custom-power {
+  color: @foreground;
+}
+
+#clock {
+  font-weight: 600;
+}
+
+tooltip {
+  background: alpha(@background, 0.96);
+  border: 1px solid @hairline;
+  border-radius: 8px;
+}
+
+tooltip label {
+  color: @foreground;
+}

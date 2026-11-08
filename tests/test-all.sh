@@ -11,6 +11,8 @@
 #     launchers syntax, manager conf, setup.conf (0600), boot script
 #   * sudo shim: syntax + real password ritual over a pty
 #   * manager menu smoke test: options 2-11 run clean with stubs
+#   * Wayland session manager: profile install, config import, resolution,
+#     compositor preference, doctor, and start/stop guards
 #
 # How it works: fake HOME/PREFIX/PATH with stub commands (pkg, proot-distro,
 # sshd, pulseaudio, termux-setup-storage, getprop, free, proot, git). No
@@ -1430,6 +1432,93 @@ check "Y10 env marker added" 'APPIMAGE_EXTRACT_AND_RUN=1' "$Y10ROOT/etc/profile.
 check "Y10 env marker exported" 'export APPIMAGE_EXTRACT_AND_RUN' "$Y10ROOT/etc/profile.d/zz-lfa-env.sh"
 
 echo ""
+echo "===== Y11: lfa wayland session manager ====="
+"$LFA" help > "$T/y11-tophelp.log" 2>&1
+check "Y11 top-level help" 'Wayland session manager' "$T/y11-tophelp.log"
+"$LFA" wayland help > "$T/y11-help.log" 2>&1; rc=$?
+[ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y11 help exit $rc"; }
+check "Y11 help status" 'status' "$T/y11-help.log"
+check "Y11 help install" 'install the Wayland stack' "$T/y11-help.log"
+check "Y11 help doctor" 'doctor' "$T/y11-help.log"
+check "Y11 help resolution" '--resolution WxH' "$T/y11-help.log"
+check "Y11 help drm" 'DRM render node' "$T/y11-help.log"
+
+"$LFA" wl status -i debian > "$T/y11-status.log" 2>&1; rc=$?
+[ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y11 status exit $rc"; }
+check "Y11 status instance" 'instance:    debian' "$T/y11-status.log"
+check "Y11 status distro" 'distro:      debian' "$T/y11-status.log"
+check "Y11 status session" 'session:     stopped' "$T/y11-status.log"
+check "Y11 status compositor" 'compositor:  auto' "$T/y11-status.log"
+
+"$LFA" wayland session > "$T/y11-session.log" 2>&1; rc=$?
+[ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y11 session exit $rc"; }
+check "Y11 session choices" 'choices:    auto, hyprland, sway, xfce' "$T/y11-session.log"
+"$LFA" wayland session sway > "$T/y11-set.log" 2>&1; rc=$?
+[ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y11 session set exit $rc"; }
+check "Y11 pref written" 'COMPOSITOR="sway"' "$T/home/.config/linux-for-android/wayland.conf"
+"$LFA" wayland session bogus > "$T/y11-bad.log" 2>&1; rc=$?
+[ "$rc" = "2" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y11 bad compositor exit $rc"; }
+check "Y11 bad compositor" 'Unknown compositor: bogus' "$T/y11-bad.log"
+"$LFA" wayland session auto >/dev/null 2>&1
+
+mkdir -p "$T/y11-cfg/kitty" "$T/y11-cfg/waybar" "$T/y11-cfg/fastfetch"
+printf 'font_family JetBrainsMono\n' > "$T/y11-cfg/kitty/kitty.conf"
+printf '{"layer":"top"}\n' > "$T/y11-cfg/waybar/config.jsonc"
+printf '{"fastfetch":true}\n' > "$T/y11-cfg/fastfetch/config.jsonc"
+printf '[hostname]\nformat   = "[@$hostname ]($style)"\n' > "$T/y11-cfg/starship.toml"
+"$LFA" wayland install -i debian --config "$T/y11-cfg" --resolution 2408x1080 > "$T/y11-install.log" 2>&1; rc=$?
+[ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y11 install exit $rc"; }
+check "Y11 install done" 'Wayland stack installed.' "$T/y11-install.log"
+check "Y11 install explains drm" 'writable /dev/dri/renderD*' "$T/y11-install.log"
+Y11ROOT="$T/prefix/var/lib/proot-distro/installed-rootfs/debian"
+[ -x "$Y11ROOT/usr/local/bin/start-lfa-wayland" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y11 helper not installed"; }
+[ -x "$T/prefix/bin/linux-wayland" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y11 launcher not installed"; }
+check "Y11 sway profile" 'gaps inner 3' "$Y11ROOT/home/user/.config/lfa-wayland/sway/config"
+check "Y11 sway keybind" 'bindsym $mod+Space exec $menu' "$Y11ROOT/home/user/.config/lfa-wayland/sway/config"
+check "Y11 waybar profile" 'sway/workspaces' "$Y11ROOT/home/user/.config/lfa-wayland/waybar/config.jsonc"
+check "Y11 resolution" 'output X11-1 resolution 2408x1080 position 0 0' "$Y11ROOT/home/user/.config/lfa-wayland/sway/config"
+check "Y11 imported kitty" 'font_family JetBrainsMono' "$Y11ROOT/home/user/.config/kitty/kitty.conf"
+check "Y11 imported waybar" '"layer":"top"' "$Y11ROOT/home/user/.config/waybar/config.jsonc"
+check "Y11 imported fastfetch" '"fastfetch":true' "$Y11ROOT/home/user/.config/fastfetch/config.jsonc"
+check "Y11 imported starship" '[hostname]' "$Y11ROOT/home/user/.config/starship.toml"
+check_absent "Y11 starship hostname pinned" '@$hostname' "$Y11ROOT/home/user/.config/starship.toml"
+check "Y11 gtk dark" 'gtk-theme-name=Adwaita-dark' "$Y11ROOT/home/user/.config/gtk-3.0/settings.ini"
+check "Y11 gtk font" 'gtk-font-name=Adwaita Sans 11' "$Y11ROOT/home/user/.config/gtk-3.0/settings.ini"
+
+"$LFA" wayland install -i debian --resolution 2408x1080 >/dev/null 2>&1
+_y11_lines="$(grep -c '^output X11-1 resolution' "$Y11ROOT/home/user/.config/lfa-wayland/sway/config" 2>/dev/null || true)"
+[ "$_y11_lines" = "1" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y11 resolution duplicated ($_y11_lines lines)"; }
+"$LFA" wayland install -i debian --resolution huge > "$T/y11-res-bad.log" 2>&1; rc=$?
+[ "$rc" = "2" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y11 bad resolution exit $rc"; }
+check "Y11 resolution validation" 'Resolution must look like 2408x1080.' "$T/y11-res-bad.log"
+"$LFA" wayland install -i debian --compositor bogus > "$T/y11-comp-bad.log" 2>&1; rc=$?
+[ "$rc" = "2" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y11 bad install compositor exit $rc"; }
+check "Y11 install compositor validation" 'Unknown compositor: bogus' "$T/y11-comp-bad.log"
+
+"$LFA" wayland doctor -i debian > "$T/y11-doctor.log" 2>&1; rc=$?
+[ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y11 doctor exit $rc"; }
+check "Y11 doctor launcher" 'launcher:   present' "$T/y11-doctor.log"
+check "Y11 doctor explains backend" 'CBackend::create()' "$T/y11-doctor.log"
+check "Y11 doctor x server" 'X server:' "$T/y11-doctor.log"
+
+"$LFA" wayland start -i debian > "$T/y11-start.log" 2>&1; rc=$?
+[ "$rc" = "1" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y11 start without X11 exit $rc"; }
+check "Y11 start needs x11" 'Termux:X11 is not installed' "$T/y11-start.log"
+"$LFA" wayland stop -i debian > "$T/y11-stop.log" 2>&1; rc=$?
+[ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y11 stop exit $rc"; }
+check "Y11 stop idle" 'No Wayland session is running for debian.' "$T/y11-stop.log"
+
+check "Y11 battery refresher" 'lfa-wayland-battery.pid' "$T/prefix/lib/linux-for-android/install_linux.sh"
+check "Y11 battery env" 'lfa-android-battery.env' "$T/prefix/lib/linux-for-android/install_linux.sh"
+check "Y11 battery refresh interval" 'sleep 60' "$T/prefix/lib/linux-for-android/install_linux.sh"
+"$LFA" wayland bogus > "$T/y11-bogus.log" 2>&1; rc=$?
+[ "$rc" = "2" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y11 bogus command exit $rc"; }
+check "Y11 bogus message" 'Unknown wayland command: bogus' "$T/y11-bogus.log"
+
+[ -s "$REPO/docs/WAYLAND.md" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y11 wayland guide missing"; }
+grep -qF 'docs/WAYLAND.md' "$REPO/README.md" && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y11 README does not link the wayland guide"; }
+grep -qF 'WAYLAND.md' "$REPO/docs/README.md" && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y11 docs index does not link the wayland guide"; }
+
 echo "===== Z: documentation links ====="
 [ -s "$REPO/docs/TROUBLESHOOTING.md" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Z troubleshooting guide missing"; }
 grep -qF 'docs/TROUBLESHOOTING.md' "$REPO/README.md" && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Z README does not link the troubleshooting guide"; }

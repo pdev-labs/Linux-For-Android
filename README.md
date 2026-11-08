@@ -28,6 +28,7 @@
 - [GNOME (experimental)](#gnome-experimental)
 - [Key features](#key-features)
 - [Installation](#installation)
+- [Wayland sessions](#wayland-sessions)
 - [Older and custom distro versions](#older-and-custom-distro-versions)
 - [First-run setup](#first-run-setup)
 - [Older devices (Android 5/6)](#older-devices-android-56-eg-oppo-a37fw)
@@ -133,7 +134,7 @@ hardware, not simulated. Full details, root causes, and evidence are in
 | Alpine 3.18 (Android 5) | Yes | Yes | legacy VNC desktop, panel works; X11 and Both hidden | v1.7.1 |
 | Ubuntu GNOME 46 (experimental) | Yes | Yes | shell and apps run; session services missing | v1.7.0 |
 
-> The test suite runs `627` checks with 0 failures. The same suite runs on the
+> The test suite runs `682` checks with 0 failures. The same suite runs on the
 > devices (`tests/device-matrix.sh`). The table is as of v1.7.1. Ubuntu was
 > re-verified on v1.7.1, and Alpine 3.18 was re-verified on Android 5 on
 > 2026-11-04; the other rows were last verified on v1.7.0. A row is
@@ -472,6 +473,7 @@ is accepted.
 | `lfa appimage` / `lfa app` | extract an AppImage once and add a menu entry |
 | `lfa run` | run an AppImage once without installing it |
 | `lfa storage` | Android storage status, repair, run, and protected data helpers |
+| `lfa wayland` / `lfa wl` | nested Wayland session: install, start, stop, status, doctor, and compositor choice |
 | `lfa diagnostics` | write a redacted support bundle |
 | `lfa notice` | `on`, `off`, or `status` for the `start-linux` change notice |
 | `lfa version` / `lfa help` | version and command list |
@@ -490,6 +492,9 @@ lfa android test
 lfa appimage add ~/Foo.AppImage
 lfa appimage run Foo
 lfa storage status
+lfa wayland install -i arch --resolution 2408x1080
+lfa wayland start -i arch
+lfa wayland status -i arch
 lfa notice off
 ```
 
@@ -617,6 +622,41 @@ adb tcpip 5555
 Then `lfa storage data status` connects to `127.0.0.1:5555`. The connection
 lasts until the phone reboots. After a reboot, run `adb tcpip 5555` again, or
 enable Wireless debugging and pair Termux's adb once.
+
+## Wayland sessions
+
+Termux:X11 is an X11 server, so a Wayland compositor has to run nested inside
+it. `lfa wayland` installs Sway with a profile that copies the Hyprland look,
+starts it, and stops it. Hyprland is installed too, and started instead when
+the phone has a DRM render node that an app can open.
+
+The stock phone does not have one. `/dev/dri/card0` is owned by
+`system:system` with mode `660`, and there is no `/dev/dri/renderD128`.
+Hyprland's Aquamarine back end needs a render node for dmabuf, so it exits with
+`CBackend::create() failed!`. Sway with the pixman renderer does run nested on
+X11. The profile keeps the host keybinds, gaps, borders, colours, Waybar,
+SwayNC, wallpaper, and the Android battery reading.
+
+```bash
+lfa wayland install -i arch --resolution 2408x1080
+lfa wayland install -i arch --config ~/hypr-config.tar.gz
+lfa wayland start -i arch
+lfa wayland status -i arch
+lfa wayland doctor -i arch
+lfa wayland stop -i arch
+```
+
+`--config` imports `hypr`, `waybar`, `kitty`, `wofi`, `swaync`, and `fastfetch`
+directories plus `starship.toml` from a folder or a tarball. `--resolution` sets the nested output size, which
+is useful because the phone panel is portrait. `lfa wayland session` chooses
+`auto`, `hyprland`, `sway`, or `xfce`.
+
+The Vivo V2437 was tested at 2408x1080 with Waybar, SwayNC, SwayBG, the
+launcher, the battery bridge, and a working `grim` screenshot. Hyprland
+0.57.1 parses the host config but cannot start on that device. Full detail,
+logs, and the DRM explanation are in [docs/WAYLAND.md](docs/WAYLAND.md).
+
+![Sway session on the Vivo V2437](docs/screenshots/wayland-sway.png)
 
 ## Older and custom distro versions
 
@@ -1185,7 +1225,8 @@ short list is:
 - kernel modules, real `mount`/`chroot`/`unshare`, real root/SELinux control
 - Bluetooth/BlueZ, NFC, camera as `/dev/video*`, sensors, USB host as device
   nodes
-- Wayland compositors, simultaneous X11 + VNC, foreign-architecture binaries
+- Hyprland on a phone without a writable DRM render node, simultaneous X11 + VNC,
+  foreign-architecture binaries
 
 Full reasons, the “works with caveats” list, Android 5/6/7 differences, and
 what Termux:API can actually expose are in
@@ -1496,8 +1537,8 @@ test procedure, and how to add a distro or desktop.
 - Bug reports: use the issue form. It asks for version, device, distro, and
   logs.
 - Security problems: use [SECURITY.md](SECURITY.md). Never a public issue.
-- Design questions: `docs/DECISIONS.md` explains why Wayland, real `sudo`, and
-  systemd are out of scope.
+- Design questions: `docs/DECISIONS.md` explains why real `sudo` and systemd are
+  out of scope, and what a nested Wayland session can and cannot do.
 
 ### Running the test suite
 
@@ -1510,7 +1551,7 @@ plus `script` from util-linux for the pty test, which is skipped if absent:
 
 ```bash
 chmod +x tests/test-all.sh
-./tests/test-all.sh   # expect: PASS=627 FAIL=0
+./tests/test-all.sh   # expect: PASS=682 FAIL=0
 ```
 
 The suite is deliberately stubbed. It cannot prove a desktop actually appears.

@@ -24,7 +24,7 @@ on a fast phone.
 | `snapd`, Snap Store, all snap packages, Ubuntu's snap-only Firefox/Chromium | snapd needs systemd, mounts and `CAP_SETFCAP`. There is no confinement. `lfa compat` maps a few named snaps to distro packages instead. |
 | Flatpak, Flathub applications, any bubblewrap-sandboxed application | needs user namespaces and a working sandbox. LFA can only run the program unsandboxed when the program has a fallback. |
 | Docker, Podman, containerd, LXC/LXD, libvirt, VirtualBox, VMware, QEMU/KVM, the Android Emulator, Waydroid | need namespaces, cgroups, `/dev/kvm`, or a host daemon. A proot wrapper is not Docker-compatible and is not presented as one. |
-| Sway, Hyprland, Wayfire, GNOME Wayland, KDE Wayland, any Wayland compositor | LFA provides X11 (Termux:X11) or VNC. There is no Wayland compositor integration. |
+| Hyprland, GNOME Wayland, KDE Wayland, or any compositor that needs DRM and a seat | an Android app cannot open `/dev/dri/card0` and there is no `/dev/dri/renderD128`, so Aquamarine and libweston cannot allocate buffers. `lfa wayland` runs Sway nested on X11 instead, and starts Hyprland only where a writable render node exists. |
 | Real `sudo`/`su`/setuid, PAM, real `mount`, real `chroot`, `unshare` | Android marks app processes `NO_NEW_PRIVS`; setuid cannot elevate. LFA's `sudo` is a password ritual plus a narrow `uid0` library for tools such as `dpkg`. |
 | Kernel modules, DKMS, eBPF, `perf`, `ftrace` | an Android app cannot load modules or control the kernel. |
 | `tcpdump`, packet capture, `nmap -sS`, raw sockets | Termux has no raw-socket capability. `nmap -sT` (a normal connect scan) may work. |
@@ -45,6 +45,7 @@ These may start, or may work on some distros, but LFA does not promise them.
 |---|---|
 | Full GNOME session | experimental. `gnome-session` needs systemd/logind, so LFA starts `gnome-shell --x11` directly. Login/logout, screen locking, suspend/inhibit, UPower, portals, notifications and some Settings panels are missing or unstable. GNOME 49+ removed X11. Not offered on Alpine/Void or Android 5/6/7. |
 | KDE Plasma, Cinnamon, Budgie, Deepin, Pantheon, LXQt | not offered or tested. Many assume systemd, Wayland, or a full session manager. |
+| Nested Sway through `lfa wayland` | starts on X11 with the pixman renderer. Wayland clients get no hardware GL, dmabuf screencast may fail, and the bar uses Waybar's Sway modules rather than Hyprland's. |
 | Steam, Proton, Wine games with anti-cheat or DXVK | no GPU/anti-cheat environment. Simple Wine applications may work, but this is not a supported target. |
 | Blender GPU/Cycles CUDA/OptiX, DaVinci Resolve, OBS hardware encoders, GPU video editors | no CUDA/OptiX and no hardware encode. CPU rendering may work but is slow. |
 | CUPS/USB printing, SANE scanners, Bluetooth audio | no hardware passthrough. |

@@ -48,6 +48,7 @@ Commands that say *inside the distro* are run in a guest shell opened with
 | Screen is the wrong size or rotated | [§4.2](#42-wrong-resolution-or-rotation) |
 | Touch pointer is offset, keys are missing | [§4.3](#43-touch-pointer-keyboard-and-clipboard) |
 | VNC black screen or connection refused | [§4.4](#44-vnc-does-not-connect-or-shows-black) |
+| Wayland session fails, or Hyprland prints `CBackend::create() failed!` | [§4.5](#45-a-wayland-session-or-hyprland-fails) |
 | VS Code / Chromium / Antigravity do nothing | [§5.1](#51-electron-apps-do-nothing-at-all) |
 | Firefox or Chromium shows a sandbox warning | [§5.2](#52-firefox-or-chromium-shows-a-sandbox-warning) |
 | App is missing from the XFCE menu | [§5.3](#53-app-is-missing-from-the-menu) |
@@ -816,6 +817,56 @@ ssh -N -L 5901:127.0.0.1:5901 -p 8022 u0_aNNN@PHONE_IP
 Then point the viewer at `localhost:5901`. Do not expose 5901 to the network;
 VNC's password is not a substitute for SSH.
 
+### 4.5 A Wayland session or Hyprland fails
+
+Symptom: `lfa wayland start` exits, the session dies after a few seconds, or
+Hyprland prints `CBackend::create() failed!`.
+
+Why: the phone has no DRM render node that an app can open. Aquamarine, the
+Hyprland back end, needs one for dmabuf. Sway can fall back to its X11 backend
+and the pixman renderer, so it works where Hyprland cannot.
+
+Fix:
+
+1. Read the state and the logs:
+
+   ```bash
+   lfa wayland status -i arch
+   lfa wayland doctor -i arch
+   tail -n 40 ~/lfa-wayland.log
+   tail -n 40 ~/.cache/lfa-wayland-sway-pixman.log
+   ```
+
+2. Check the render nodes. `render=none` means Hyprland cannot start:
+
+   ```bash
+   ls -l /dev/dri/
+   ```
+
+   On the Vivo V2437, `card0` is `system:system` mode `660` and there is no
+   `renderD128`. A rooted device or a vendor build with a render node may
+   differ.
+
+3. Use the Sway profile, which keeps the Hyprland keybinds and look:
+
+   ```bash
+   lfa wayland session sway
+   lfa wayland start -i arch --restart
+   ```
+
+4. If the session was killed from outside, clear the leftover processes:
+
+   ```bash
+   lfa wayland stop -i arch
+   lfa wayland start -i arch
+   ```
+
+5. To go back to XFCE, run `lfa wayland session xfce`, or stop the session and
+   use `lfa start -i arch`.
+
+The full explanation and the verified device results are in
+[WAYLAND.md](WAYLAND.md).
+
 ## 5. Applications
 
 ### 5.0 `systemctl`, `snap`, Docker, or CUDA still fail
@@ -1581,5 +1632,6 @@ adb shell cmd deviceidle whitelist +com.termux
 | `Process completed (signal 9)` | [§10.2](#102-android-kills-termux-signal-9) |
 | `The security sandbox is disabled` | [§5.2](#52-firefox-or-chromium-shows-a-sandbox-warning) |
 | `unsupported command-line flag: --no-sandbox` | [§5.2](#52-firefox-or-chromium-shows-a-sandbox-warning) |
+| `CBackend::create() failed!` | [§4.5](#45-a-wayland-session-or-hyprland-fails) |
 | `Unable to locate package` | [§2.10](#210-package-not-found-after-installation) |
 | `Release file ... is not valid yet` | [§9.2](#92-apt-tls-or-clock-errors) |

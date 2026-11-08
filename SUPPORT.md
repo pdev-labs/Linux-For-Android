@@ -8,7 +8,7 @@ answer depends on what you need.
 1. Read the [detailed troubleshooting guide](docs/TROUBLESHOOTING.md). The
    [short index](README.md#troubleshooting-index) is in the README.
 2. Check [issues.md](issues.md). The limitation may be known and deliberate
-   (for example, no Wayland, no real `sudo`, GNOME is beta).
+   (for example, no DRM access for Hyprland, no real `sudo`, GNOME is beta).
 3. Collect a support bundle and open a bug report:
 
    ```bash
@@ -37,6 +37,7 @@ block plus a stub test. A pull request is welcome. See
 
 ## What is out of scope
 
-- Wayland sessions (see [docs/DECISIONS.md](docs/DECISIONS.md), D2)
+- Hyprland on a phone that does not expose a DRM render node to apps (see
+  [docs/WAYLAND.md](docs/WAYLAND.md))
 - real privilege escalation or `systemctl` inside the guest (D10)
 - Play Store Termux. It is broken by design and not supported.
