@@ -1668,6 +1668,19 @@ lfa_wayland_install() {
         cp -f "$_rf/usr/share/backgrounds/lfa-default.jpg" "$_rf/usr/share/backgrounds/lfa-wayland.jpg" 2>/dev/null || true
     fi
 
+    for _gtk in gtk-3.0 gtk-4.0; do
+        _gsettings="$_rf/home/$_user/.config/$_gtk/settings.ini"
+        mkdir -p "$(dirname "$_gsettings")" 2>/dev/null || true
+        {
+            printf '[Settings]\n'
+            printf 'gtk-theme-name=Adwaita-dark\n'
+            printf 'gtk-icon-theme-name=Adwaita\n'
+            printf 'gtk-cursor-theme-name=Adwaita-Tiny\n'
+            printf 'gtk-cursor-theme-size=16\n'
+            printf 'gtk-font-name=Adwaita Sans 11\n'
+        } > "$_gsettings" 2>/dev/null || true
+    done
+
     _bashrc="$_rf/home/$_user/.bashrc"
     if [ -f "$_bashrc" ] && ! grep -q 'starship init bash' "$_bashrc" 2>/dev/null; then
         {

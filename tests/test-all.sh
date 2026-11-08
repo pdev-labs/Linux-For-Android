@@ -1481,6 +1481,8 @@ check "Y11 imported kitty" 'font_family JetBrainsMono' "$Y11ROOT/home/user/.conf
 check "Y11 imported waybar" '"layer":"top"' "$Y11ROOT/home/user/.config/waybar/config.jsonc"
 check "Y11 imported fastfetch" '"fastfetch":true' "$Y11ROOT/home/user/.config/fastfetch/config.jsonc"
 check "Y11 imported starship" '[character]' "$Y11ROOT/home/user/.config/starship.toml"
+check "Y11 gtk dark" 'gtk-theme-name=Adwaita-dark' "$Y11ROOT/home/user/.config/gtk-3.0/settings.ini"
+check "Y11 gtk font" 'gtk-font-name=Adwaita Sans 11' "$Y11ROOT/home/user/.config/gtk-3.0/settings.ini"
 
 "$LFA" wayland install -i debian --resolution 2408x1080 >/dev/null 2>&1
 _y11_lines="$(grep -c '^output X11-1 resolution' "$Y11ROOT/home/user/.config/lfa-wayland/sway/config" 2>/dev/null || true)"
