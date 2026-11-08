@@ -1465,7 +1465,7 @@ mkdir -p "$T/y11-cfg/kitty" "$T/y11-cfg/waybar" "$T/y11-cfg/fastfetch"
 printf 'font_family JetBrainsMono\n' > "$T/y11-cfg/kitty/kitty.conf"
 printf '{"layer":"top"}\n' > "$T/y11-cfg/waybar/config.jsonc"
 printf '{"fastfetch":true}\n' > "$T/y11-cfg/fastfetch/config.jsonc"
-printf '[character]\n' > "$T/y11-cfg/starship.toml"
+printf '[hostname]\nformat   = "[@$hostname ]($style)"\n' > "$T/y11-cfg/starship.toml"
 "$LFA" wayland install -i debian --config "$T/y11-cfg" --resolution 2408x1080 > "$T/y11-install.log" 2>&1; rc=$?
 [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y11 install exit $rc"; }
 check "Y11 install done" 'Wayland stack installed.' "$T/y11-install.log"
@@ -1480,7 +1480,8 @@ check "Y11 resolution" 'output X11-1 resolution 2408x1080 position 0 0' "$Y11ROO
 check "Y11 imported kitty" 'font_family JetBrainsMono' "$Y11ROOT/home/user/.config/kitty/kitty.conf"
 check "Y11 imported waybar" '"layer":"top"' "$Y11ROOT/home/user/.config/waybar/config.jsonc"
 check "Y11 imported fastfetch" '"fastfetch":true' "$Y11ROOT/home/user/.config/fastfetch/config.jsonc"
-check "Y11 imported starship" '[character]' "$Y11ROOT/home/user/.config/starship.toml"
+check "Y11 imported starship" '[hostname]' "$Y11ROOT/home/user/.config/starship.toml"
+check_absent "Y11 starship hostname pinned" '@$hostname' "$Y11ROOT/home/user/.config/starship.toml"
 check "Y11 gtk dark" 'gtk-theme-name=Adwaita-dark' "$Y11ROOT/home/user/.config/gtk-3.0/settings.ini"
 check "Y11 gtk font" 'gtk-font-name=Adwaita Sans 11' "$Y11ROOT/home/user/.config/gtk-3.0/settings.ini"
 

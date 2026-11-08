@@ -1588,7 +1588,7 @@ lfa_wayland_install() {
                 pacman -S --noconfirm --needed \
                     sway swaybg swaylock waybar swaync kitty wofi thunar \
                     ttf-jetbrains-mono-nerd adwaita-fonts gnome-themes-extra \
-                    adwaita-icon-theme starship lsd bat playerctl pamixer \
+                    adwaita-icon-theme starship fastfetch lsd bat playerctl pamixer \
                     grim slurp wl-clipboard xorg-xwayland
                 pacman -S --noconfirm --needed hyprland hyprpaper hyprlock hypridle || \
                     echo "[!] Hyprland packages are not available; Sway will be used."
@@ -1636,6 +1636,12 @@ lfa_wayland_install() {
         done
         if [ -f "$_stage/starship.toml" ]; then
             install -m 644 "$_stage/starship.toml" \
+                "$_rf/home/$_user/.config/starship.toml" 2>/dev/null || true
+            # proot reports the Android kernel hostname, so Starship would
+            # print "localhost". Pin the instance hostname in the prompt.
+            _hostname="$( . "$_conf" 2>/dev/null; printf '%s' "${HOSTNAME:-arch}" )"
+            [ -n "$_hostname" ] || _hostname="arch"
+            sed -i "s|^format *= *\"\[@\$hostname *\](\$style)\"|format = \"[@${_hostname} ](\$style)\"|" \
                 "$_rf/home/$_user/.config/starship.toml" 2>/dev/null || true
         fi
         [ "$_stage" != "$_config" ] && rm -rf "$_stage" 2>/dev/null || true

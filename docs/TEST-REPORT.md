@@ -1,6 +1,21 @@
 # Test report for v1.7.1
 
-> Current development suite: `PASS=681 FAIL=0`.
+> Current development suite: `PASS=682 FAIL=0`.
+
+## Fresh Arch reinstall, 2026-11-08
+
+The Vivo V2437 was wiped and rebuilt through LFA, then themed from the host.
+
+| Step | Result |
+|---|---|
+| `lfa remove -i arch -y` | old 3.0G container removed |
+| `lfa install --distro archlinux --desktop xfce4 --backend x11 --user pdev -i arch` | completed in 29m 16s |
+| `lfa wayland install -i arch --config ~/host-config.tar.gz --resolution 2408x1080 --wallpaper ~/lfa-wayland-wallpaper.jpg` | 91 packages plus Hyprland, profile and host configs applied |
+| Session | Sway at 2408x1080; Waybar, SwayNC, SwayBG, kitty, wofi |
+| Host look | host wallpaper, graphite and teal Waybar, kitty, wofi, swaync, GTK dark, Adwaita Sans 11, Adwaita-Tiny cursor, Starship prompt with `pdev@arch` |
+| Battery | 46% charging, refreshed by the Termux:API loop |
+| Fastfetch | host config and Arch wordmark render correctly |
+| Hyprland | installed; still blocked by the missing DRM render node |
 
 ## Wayland session, 2026-11-08
 
@@ -9,7 +24,7 @@ Wayland changes.
 
 | Check | Result |
 |---|---|
-| Host suite | `PASS=681 FAIL=0` |
+| Host suite | `PASS=682 FAIL=0` |
 | `lfa wayland install -i arch --resolution 2408x1080` | packages and profile installed |
 | `lfa wayland start -i arch` | Termux:X11, Sway, Waybar, SwayNC, and SwayBG started |
 | Nested output | `swaymsg` reported `2408x1080`; `grim` screenshot checked |
@@ -30,7 +45,7 @@ storage changes.
 
 | Check | Result |
 |---|---|
-| Host suite | `PASS=681 FAIL=0` |
+| Host suite | `PASS=682 FAIL=0` |
 | Thunar false X | gid 1023; folder icons normal; screenshot checked |
 | `lfa storage exec` | shell and Python scripts from `/storage/emulated/0` ran from a `/tmp` copy |
 | `lfa storage data` | adb at `127.0.0.1:5555`; `list` and `pull` worked for `Android/data` and `Android/obb`; guest read the copy |
@@ -54,7 +69,7 @@ the network during this pass, so the legacy-device rows remain pending.
 
 | Check | Result |
 |---|---|
-| Host suite (`./tests/test-all.sh`) | `PASS=681 FAIL=0` |
+| Host suite (`./tests/test-all.sh`) | `PASS=682 FAIL=0` |
 | On-device VNC scenario (`termux-e2e.sh`) | `PASS=14 FAIL=0` |
 | On-device Both → VNC/X11 switch | `PASS=22 FAIL=0` |
 | On-device X11 scenario | `PASS=14 FAIL=0` |

@@ -19,8 +19,8 @@ tag names, define the order. See the table at the bottom.
   Sway with a profile that copies the Hyprland keybinds, gaps, borders,
   colours, Waybar bar, notification centre, and wallpaper; starts it on
   Termux:X11; and stops it cleanly. `--config` imports hypr, waybar, kitty,
-  wofi, and swaync configs, `--resolution` sets the nested output size, and
-  `--wallpaper` replaces the background. Hyprland is installed and used when a
+  wofi, swaync, fastfetch, and starship configs, `--resolution` sets the
+  nested output size, and `--wallpaper` replaces the background. Hyprland is installed and used when a
   writable `/dev/dri/renderD*` exists. A stock phone has no such node, so
   Hyprland aborts with `CBackend::create() failed!` and the Sway profile runs
   instead. `status`, `doctor`, and `session` report which compositor is live.

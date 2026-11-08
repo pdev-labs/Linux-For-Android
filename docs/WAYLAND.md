@@ -56,9 +56,11 @@ lfa wayland install -i arch --config ~/hypr-config.tar.gz
 ```
 
 `--config` accepts a directory or a `.tar.gz` with `hypr`, `waybar`, `kitty`,
-`wofi`, or `swaync` subdirectories. Each one is copied into the guest user's
-`~/.config`. That is how the host's Hyprland and Waybar files get in without a
-manual `scp`.
+`wofi`, `swaync`, or `fastfetch` subdirectories, plus a top-level
+`starship.toml`. Each one is copied into the guest user's `~/.config`. That is
+how the host's desktop files get in without a manual `scp`. The Starship
+hostname is pinned to the instance name, because proot reports the Android
+kernel hostname as `localhost`.
 
 `--resolution` appends an output rule to the Sway profile:
 
