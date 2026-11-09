@@ -118,7 +118,11 @@ static wayland_server_t *compositor_create_impl(const char *runtime_dir, const c
     setenv("XDG_RUNTIME_DIR", runtime_dir, 1);
     chmod(runtime_dir, 0755);
 
-    if (listen_fd >= 0) {
+    if (listen_fd == -2) {
+        /* No socket: the Termux-side bridge accepts clients and hands over
+         * connected fds (SELinux forbids accepting on a socket created by
+         * another UID's domain). */
+    } else if (listen_fd >= 0) {
         /* Socket created by the Termux-side bridge: adopt the listening fd. */
         if (wl_display_add_socket_fd(srv->display, listen_fd) < 0) {
             LOGE("wl_display_add_socket_fd failed");
@@ -188,6 +192,23 @@ wayland_server_t *compositor_create_named(const char *runtime_dir, const char *s
 
 wayland_server_t *compositor_create_from_fd(const char *runtime_dir, int listen_fd) {
     return compositor_create_impl(runtime_dir, NULL, listen_fd);
+}
+
+wayland_server_t *compositor_create_display(const char *runtime_dir) {
+    return compositor_create_impl(runtime_dir, NULL, -2);
+}
+
+bool compositor_add_client_fd(wayland_server_t *srv_opaque, int fd) {
+    if (!srv_opaque || fd < 0) return false;
+    struct wayland_server *srv = (struct wayland_server *)srv_opaque;
+    struct wl_client *client = wl_client_create(srv->display, fd);
+    if (!client) {
+        LOGE("wl_client_create failed for fd %d", fd);
+        close(fd);
+        return false;
+    }
+    LOGI("Attached Wayland client from fd %d", fd);
+    return true;
 }
 
 void compositor_destroy(wayland_server_t *srv_opaque) {

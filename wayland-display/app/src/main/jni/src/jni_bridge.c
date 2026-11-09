@@ -328,6 +328,30 @@ JNIEXPORT jlong JNICALL Java_io_github_pdevlabs_lfadisplay_WaylandBridge_nativeC
     return id;
 }
 
+JNIEXPORT jlong JNICALL Java_io_github_pdevlabs_lfadisplay_WaylandBridge_nativeCreateDisplay(JNIEnv *env, jobject thiz,
+        jstring runtime_dir) {
+    (void)thiz;
+    if (!runtime_dir) return 0;
+    const char *dir = (*env)->GetStringUTFChars(env, runtime_dir, NULL);
+    if (!dir) return 0;
+    mkdir(dir, 0755);
+    chmod(dir, 0755);
+    wayland_server_t *srv = compositor_create_display(dir);
+    (*env)->ReleaseStringUTFChars(env, runtime_dir, dir);
+    jlong id = register_server(srv);
+    if (id && !g_server) g_server = srv;
+    if (id) start_dispatch();
+    return id;
+}
+
+JNIEXPORT jboolean JNICALL Java_io_github_pdevlabs_lfadisplay_WaylandBridge_nativeAddClientFd(JNIEnv *env, jobject thiz,
+        jint fd) {
+    (void)env;
+    (void)thiz;
+    if (!g_server) return JNI_FALSE;
+    return compositor_add_client_fd(g_server, (int)fd) ? JNI_TRUE : JNI_FALSE;
+}
+
 JNIEXPORT void JNICALL Java_io_github_pdevlabs_lfadisplay_WaylandBridge_nativeSetActiveServer(JNIEnv *env, jobject thiz, jlong id) {
     (void)env;
     (void)thiz;

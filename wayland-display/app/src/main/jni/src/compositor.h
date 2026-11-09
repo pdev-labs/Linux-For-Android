@@ -44,6 +44,11 @@ wayland_server_t *compositor_create_named(const char *runtime_dir, const char *s
  * another process (the Termux-side bridge). The fd is owned by the display
  * once this returns. */
 wayland_server_t *compositor_create_from_fd(const char *runtime_dir, int listen_fd);
+/* Create a display with no socket: clients are attached with
+ * compositor_add_client_fd() when another process accepts them. */
+wayland_server_t *compositor_create_display(const char *runtime_dir);
+/* Attach an already-connected client socket (owned by the display). */
+bool compositor_add_client_fd(wayland_server_t *srv, int fd);
 void compositor_destroy(wayland_server_t *srv);
 
 /* Event dispatch (non-blocking from render thread, or blocking from background thread) */

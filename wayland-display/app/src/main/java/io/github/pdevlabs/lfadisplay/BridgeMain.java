@@ -16,12 +16,12 @@ import java.lang.reflect.Method;
  * Termux-side entry point, run with app_process under the Termux UID:
  *
  *   app_process -Djava.class.path=<apk> /system/bin \
- *       io.github.pdevlabs.lfadisplay.BridgeMain <socket-path> <package>
+ *       io.github.pdevlabs.lfadisplay.BridgeMain <socket-path> <package> <lib-dir>
  *
- * It binds a Unix socket at a path the guest can reach (normally
- * $PREFIX/tmp/lfa-wayland/wayland-0), keeps it open, and publishes a Binder
- * that lets the display app duplicate the listening fd. Re-publishing once a
- * second lets an activity recreated later adopt the same socket.
+ * It binds a Unix socket at a path the guest can reach, accepts each client,
+ * and publishes a Binder that hands the connected fds to the display app.
+ * SELinux forbids the app from accepting on a socket created by Termux's
+ * domain, but read/write on an fd passed over Binder is allowed.
  */
 public final class BridgeMain {
     public static final String ACTION = "io.github.pdevlabs.lfadisplay.BRIDGE";
@@ -31,14 +31,18 @@ public final class BridgeMain {
     private static final String TAG = "LfaWdBridge";
 
     private final Context context;
-    private final BridgeBinder binder;
+    private final BridgeBinder binder = new BridgeBinder();
+    private final Handler handler;
+    private int listenFd = -1;
 
-    private BridgeMain(Context context, ParcelFileDescriptor socket) {
+    private BridgeMain(Context context) {
         this.context = context;
-        this.binder = new BridgeBinder(socket);
+        this.handler = new Handler(Looper.getMainLooper());
     }
 
     private static native int nativeBindSocket(String path);
+
+    private static native int nativeAccept(int listenFd);
 
     public static void main(String[] args) {
         if (Looper.getMainLooper() == null)
@@ -53,21 +57,18 @@ public final class BridgeMain {
         String pkg = args[1];
         String libDir = args[2];
 
-        System.load(libDir + "/liblfabridge.so");
-
         try {
+            System.load(libDir + "/liblfabridge.so");
+
             Context context = createContext();
             if (context == null)
                 throw new IOException("could not create an Android system context");
 
-            // Filesystem-namespace Unix socket at a path the guest can reach.
             int fd = nativeBindSocket(path);
             if (fd < 0)
                 throw new IOException("cannot bind " + path);
-            ParcelFileDescriptor socket = ParcelFileDescriptor.adoptFd(fd);
-            Log.i(TAG, "listening on " + path + " for " + pkg);
 
-            new BridgeMain(context, socket).run(pkg);
+            new BridgeMain(context).run(pkg, fd);
         } catch (Exception e) {
             Log.e(TAG, "bridge failed", e);
             e.printStackTrace(System.err);
@@ -75,26 +76,47 @@ public final class BridgeMain {
         }
     }
 
-    private void run(final String pkg) {
-        Handler handler = new Handler(Looper.getMainLooper());
+    private void run(final String pkg, int fd) {
+        listenFd = fd;
+        Log.i(TAG, "listening on fd " + fd + " for " + pkg);
+
+        Thread acceptor = new Thread(new Runnable() {
+            @Override
+            public void run() {
+                for (;;) {
+                    int client = nativeAccept(listenFd);
+                    if (client < 0)
+                        break;
+                    binder.add(ParcelFileDescriptor.adoptFd(client));
+                    handler.post(BridgeMain.this::broadcast);
+                }
+            }
+        }, "lfa-wd-accept");
+        acceptor.setDaemon(true);
+        acceptor.start();
+
         handler.post(new Runnable() {
             @Override
             public void run() {
-                Bundle bundle = new Bundle();
-                bundle.putBinder(EXTRA_BINDER, binder);
-
-                Intent intent = new Intent(ACTION);
-                intent.setPackage(pkg);
-                intent.putExtra(EXTRA_BUNDLE, bundle);
-                try {
-                    context.sendBroadcast(intent);
-                } catch (RuntimeException e) {
-                    Log.e(TAG, "broadcast failed", e);
-                }
+                broadcast();
                 handler.postDelayed(this, 1000L);
             }
         });
         Looper.loop();
+    }
+
+    private void broadcast() {
+        Bundle bundle = new Bundle();
+        bundle.putBinder(EXTRA_BINDER, binder);
+
+        Intent intent = new Intent(ACTION);
+        intent.setPackage(pkg);
+        intent.putExtra(EXTRA_BUNDLE, bundle);
+        try {
+            context.sendBroadcast(intent);
+        } catch (RuntimeException e) {
+            Log.e(TAG, "broadcast failed", e);
+        }
     }
 
     private static Context createContext() {

@@ -8,6 +8,7 @@ import android.content.IntentFilter;
 import android.graphics.Color;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.ParcelFileDescriptor;
 import android.os.SystemClock;
 import android.util.Log;
 import android.util.TypedValue;
@@ -60,12 +61,12 @@ public final class MainActivity extends Activity implements BridgeReceiver.Liste
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
-        hideSystemBars();
 
         String runtimeDir = new File(getFilesDir(), "wayland").getAbsolutePath();
         new File(runtimeDir).mkdirs();
 
         buildUi();
+        hideSystemBars();
 
         BridgeReceiver.setListener(this);
         bridgeReceiver = new BridgeReceiver();
@@ -79,6 +80,11 @@ public final class MainActivity extends Activity implements BridgeReceiver.Liste
             new File(TERMUX_TMP).mkdirs();
             long id = WaylandBridge.nativeCreateServer(TERMUX_TMP, SOCKET_NAME);
             Log.i(TAG, "direct socket " + TERMUX_TMP + "/" + SOCKET_NAME + " id=" + id);
+            if (id != 0)
+                serverReady = true;
+        } else {
+            long id = WaylandBridge.nativeCreateDisplay(runtimeDir);
+            Log.i(TAG, "display id=" + id);
             if (id != 0)
                 serverReady = true;
         }
@@ -201,18 +207,22 @@ public final class MainActivity extends Activity implements BridgeReceiver.Liste
     }
 
     private void hideSystemBars() {
-        if (Build.VERSION.SDK_INT >= 30) {
-            WindowInsetsController c = getWindow().getInsetsController();
-            if (c != null) {
-                c.hide(WindowInsets.Type.statusBars() | WindowInsets.Type.navigationBars());
-                c.setSystemBarsBehavior(WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
+        try {
+            if (Build.VERSION.SDK_INT >= 30) {
+                WindowInsetsController c = getWindow().getDecorView().getWindowInsetsController();
+                if (c != null) {
+                    c.hide(WindowInsets.Type.statusBars() | WindowInsets.Type.navigationBars());
+                    c.setSystemBarsBehavior(WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
+                }
+            } else {
+                getWindow().getDecorView().setSystemUiVisibility(
+                        View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+                                | View.SYSTEM_UI_FLAG_FULLSCREEN
+                                | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                                | View.SYSTEM_UI_FLAG_LAYOUT_STABLE);
             }
-        } else {
-            getWindow().getDecorView().setSystemUiVisibility(
-                    View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
-                            | View.SYSTEM_UI_FLAG_FULLSCREEN
-                            | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
-                            | View.SYSTEM_UI_FLAG_LAYOUT_STABLE);
+        } catch (RuntimeException ignored) {
+            // The decor view may not be attached yet; the window stays as-is.
         }
     }
 
@@ -259,17 +269,17 @@ public final class MainActivity extends Activity implements BridgeReceiver.Liste
     // -------------------------------------------------------- bridge socket
 
     @Override
-    public void onSocket(int fd) {
-        if (serverReady)
+    public void onClient(int fd) {
+        if (!serverReady) {
+            Log.w(TAG, "client fd before the display exists, closing");
+            try {
+                ParcelFileDescriptor.adoptFd(fd).close();
+            } catch (Exception ignored) {
+            }
             return;
-
-        String runtimeDir = new File(getFilesDir(), "wayland").getAbsolutePath();
-        long id = WaylandBridge.nativeCreateServerFd(runtimeDir, fd);
-        Log.i(TAG, "adopted bridge socket fd=" + fd + " id=" + id);
-        if (id != 0) {
-            serverReady = true;
-            maybeStartRenderer();
         }
+        if (WaylandBridge.nativeAddClientFd(fd))
+            maybeStartRenderer();
     }
 
     // ------------------------------------------------------------ key events

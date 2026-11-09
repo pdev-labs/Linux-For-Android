@@ -1,3 +1,4 @@
+#define _GNU_SOURCE
 /*
  * Minimal helper for the Termux-side bridge: create, bind and listen on a
  * filesystem Unix socket. Java's LocalServerSocket only exposes the abstract
@@ -52,4 +53,23 @@ Java_io_github_pdevlabs_lfadisplay_BridgeMain_nativeBindSocket(JNIEnv *env, jcla
 
     (*env)->ReleaseStringUTFChars(env, path, name);
     return fd;
+}
+
+/*
+ * Blocking accept on the bridge's listening socket. The accepted fd is passed
+ * to the app over Binder; the app then owns it.
+ */
+JNIEXPORT jint JNICALL
+Java_io_github_pdevlabs_lfadisplay_BridgeMain_nativeAccept(JNIEnv *env, jclass clazz, jint listen_fd) {
+    (void)env;
+    (void)clazz;
+
+    for (;;) {
+        int fd = accept4(listen_fd, NULL, NULL, SOCK_CLOEXEC);
+        if (fd >= 0)
+            return fd;
+        if (errno == EINTR)
+            continue;
+        return -1;
+    }
 }

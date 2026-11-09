@@ -27,10 +27,13 @@ public final class WaylandBridge {
     public static native long nativeCreateServer(String runtimeDir, String socketName);
 
     /**
-     * Create a server on a listening Unix socket inherited from the Termux-side
-     * bridge. The compositor owns {@code fd} afterwards.
+     * Create a server with no socket. Clients arrive as connected fds from the
+     * Termux-side bridge and are attached with {@link #nativeAddClientFd}.
      */
-    public static native long nativeCreateServerFd(String runtimeDir, int fd);
+    public static native long nativeCreateDisplay(String runtimeDir);
+
+    /** Attach a connected client socket to the display (takes ownership). */
+    public static native boolean nativeAddClientFd(int fd);
 
     public static native void nativeSurfaceCreated(
             Surface surface, String runtimeDir, int resolutionPercent, int scalePercent, boolean skipEglWaylandBind);

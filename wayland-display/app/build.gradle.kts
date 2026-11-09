@@ -16,6 +16,7 @@ android {
         ndk {
             abiFilters += "arm64-v8a"
         }
+
     }
 
     buildFeatures {
@@ -31,6 +32,9 @@ android {
             storePassword = "xrj45yWGLbsO7W0v"
             keyAlias = "alias"
             keyPassword = "xrj45yWGLbsO7W0v"
+            enableV1Signing = true
+            enableV2Signing = true
+            enableV3Signing = true
         }
     }
 
@@ -50,7 +54,7 @@ android {
 
     buildTypes {
         debug {
-            signingConfig = signingConfigs.getByName("testkey")
+            signingConfig = signingConfigs.getByName("debug")
         }
         release {
             isMinifyEnabled = false

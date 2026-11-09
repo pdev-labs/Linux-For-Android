@@ -8,12 +8,12 @@ import android.os.IBinder;
 import android.os.ParcelFileDescriptor;
 import android.util.Log;
 
-/** Receives the listening socket from the Termux-side bridge. */
+/** Drains connected client sockets from the Termux-side bridge. */
 public final class BridgeReceiver extends BroadcastReceiver {
     private static final String TAG = "LfaWdBridge";
 
     public interface Listener {
-        void onSocket(int fd);
+        void onClient(int fd);
     }
 
     private static Listener listener;
@@ -39,12 +39,15 @@ public final class BridgeReceiver extends BroadcastReceiver {
         }
 
         try {
-            ParcelFileDescriptor pfd = IWaylandBridge.Stub.asInterface(binder).getSocket();
-            if (pfd == null)
-                return;
-            l.onSocket(pfd.detachFd());
+            IWaylandBridge bridge = IWaylandBridge.Stub.asInterface(binder);
+            ParcelFileDescriptor pfd;
+            while ((pfd = bridge.getSocket()) != null) {
+                int fd = pfd.detachFd();
+                Log.i(TAG, "client socket fd=" + fd);
+                l.onClient(fd);
+            }
         } catch (Exception e) {
-            Log.e(TAG, "failed to obtain the bridge socket", e);
+            Log.e(TAG, "failed to drain bridge sockets", e);
         }
     }
 }
