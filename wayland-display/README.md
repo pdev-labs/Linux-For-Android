@@ -102,7 +102,14 @@ export XDG_RUNTIME_DIR=/tmp/lfa-wayland WAYLAND_DISPLAY=wayland-0
 WLR_BACKENDS=wayland WLR_RENDERER=pixman sway -c ~/.config/lfa-wayland/sway/config
 ```
 
-Hyprland uses the same environment once the patched Aquamarine is installed.
+Hyprland needs the shm patch series in both Aquamarine and Hyprland itself
+(the guest compositor also has to render into shm). Build both inside the
+guest once:
+
+```bash
+lfa wd hyprland -i arch
+lfa wd session -i arch --compositor hyprland
+```
 
 ## Roadmap
 

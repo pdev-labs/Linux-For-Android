@@ -1923,6 +1923,7 @@ Usage: lfa wd <command> [options]
   stop                     stop the app and the bridge
   status                   show app, bridge, socket and session state
   session                  start Sway or Hyprland on the app display
+  hyprland                 build patched Aquamarine and Hyprland in a guest
   doctor                   diagnose install, socket, SELinux and logs
   help                     show this help
 
@@ -2208,6 +2209,45 @@ lfa_wd_doctor() {
     fi
 }
 
+lfa_wd_hyprland() {
+    local _inst=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            -i|--instance) _inst="${2:-}"; shift 2 ;;
+            *) echo "Unknown option: $1" >&2; return 2 ;;
+        esac
+    done
+
+    require_proot_distro || return 1
+    [ -n "$_inst" ] && CLI_INSTANCE="$_inst"
+    select_installed_instance || return 1
+    local _id="$INSTANCE_NAME" _stage="$PREFIX/tmp/lfa-wd"
+
+    [ -f "$LFA_DIR/assets/wayland-display/apply-shm-patches.py" ] || {
+        echo "Display assets are missing from this LFA build." >&2
+        return 1
+    }
+
+    mkdir -p "$_stage" 2>/dev/null || true
+    install -m 644 "$LFA_DIR/assets/wayland-display/apply-shm-patches.py" \
+        "$_stage/apply-shm-patches.py" 2>/dev/null || true
+    install -m 755 "$LFA_DIR/assets/wayland-display/build-hyprland.sh" \
+        "$_stage/build-hyprland.sh" 2>/dev/null || true
+
+    echo "[*] Building patched Aquamarine and Hyprland inside $_id."
+    echo "    This compiles both projects; expect several minutes on a phone."
+    echo "    log: $HOME/lfa-wd-hyprland.log"
+    lfa_wayland_guest_root "$_id" "bash /tmp/lfa-wd/build-hyprland.sh" \
+        2>&1 | tee "$HOME/lfa-wd-hyprland.log"
+    local _rc="${PIPESTATUS[0]}"
+    if [ "$_rc" != "0" ]; then
+        echo "Build failed (exit $_rc). See $HOME/lfa-wd-hyprland.log" >&2
+        return "$_rc"
+    fi
+    echo "[*] Patched Hyprland installed in $_id."
+    echo "    start it with: lfa wd session -i $_id --compositor hyprland"
+}
+
 lfa_wd_cmd() {
     local _cmd="${1:-}"
     [ $# -gt 0 ] && shift || true
@@ -2217,6 +2257,7 @@ lfa_wd_cmd() {
         stop) lfa_wd_stop "$@" ;;
         status) lfa_wd_status "$@" ;;
         session) lfa_wd_session "$@" ;;
+        hyprland) lfa_wd_hyprland "$@" ;;
         doctor) lfa_wd_doctor "$@" ;;
         help|-h|--help|"") lfa_wd_usage ;;
         *) echo "Unknown display command: $_cmd" >&2; lfa_wd_usage >&2; return 2 ;;

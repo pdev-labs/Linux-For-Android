@@ -1557,6 +1557,16 @@ check "Y12 doctor selinux" 'selinux:' "$T/y12-doctor.log"
 [ "$rc" = "2" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y12 bad compositor exit $rc"; }
 check "Y12 session compositor validation" 'Unknown compositor: bogus' "$T/y12-session-bad.log"
 
+check "Y12 help hyprland" 'build patched Aquamarine' "$T/y12-help.log"
+"$LFA" wd hyprland -i debian > "$T/y12-hypr.log" 2>&1; rc=$?
+[ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y12 hyprland exit $rc"; }
+check "Y12 hyprland builds" 'Building patched Aquamarine and Hyprland inside debian' "$T/y12-hypr.log"
+check "Y12 hyprland session hint" 'lfa wd session -i debian --compositor hyprland' "$T/y12-hypr.log"
+[ -f "$T/prefix/tmp/lfa-wd/apply-shm-patches.py" ] && pass=$((pass+1)) \
+    || { fail=$((fail+1)); echo "FAIL: Y12 hyprland patch not staged"; }
+check "Y12 hyprland patch content" 'AQ_ALLOCATOR_TYPE_SHM' "$T/prefix/tmp/lfa-wd/apply-shm-patches.py"
+check "Y12 hyprland build flags" 'NO_XWAYLAND' "$T/prefix/tmp/lfa-wd/build-hyprland.sh"
+
 "$LFA" wd bogus > "$T/y12-bogus.log" 2>&1; rc=$?
 [ "$rc" = "2" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y12 bogus exit $rc"; }
 check "Y12 bogus message" 'Unknown display command: bogus' "$T/y12-bogus.log"
