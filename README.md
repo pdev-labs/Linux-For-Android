@@ -134,7 +134,7 @@ hardware, not simulated. Full details, root causes, and evidence are in
 | Alpine 3.18 (Android 5) | Yes | Yes | legacy VNC desktop, panel works; X11 and Both hidden | v1.7.1 |
 | Ubuntu GNOME 46 (experimental) | Yes | Yes | shell and apps run; session services missing | v1.7.0 |
 
-> The test suite runs `682` checks with 0 failures. The same suite runs on the
+> The test suite runs `711` checks with 0 failures. The same suite runs on the
 > devices (`tests/device-matrix.sh`). The table is as of v1.7.1. Ubuntu was
 > re-verified on v1.7.1, and Alpine 3.18 was re-verified on Android 5 on
 > 2026-11-04; the other rows were last verified on v1.7.0. A row is
@@ -657,6 +657,32 @@ launcher, the battery bridge, and a working `grim` screenshot. Hyprland
 logs, and the DRM explanation are in [docs/WAYLAND.md](docs/WAYLAND.md).
 
 ![Sway session on the Vivo V2437](docs/screenshots/wayland-sway.png)
+
+### Dedicated display app
+
+Nesting inside an X11 server costs a full X round trip per frame. The display
+app runs a small shm Wayland compositor itself and shows the guest desktop on
+an Android Surface, the way Termux:X11 shows X11. It is built by GitHub
+Actions, and `lfa wd` installs and drives it.
+
+```bash
+lfa wd install                 # download the APK and open the installer
+lfa wd start -i arch           # start the bridge and the app
+lfa wd session -i arch         # start Sway on the app display
+lfa wd status -i arch
+lfa wd doctor
+lfa wd stop
+```
+
+The guest connects to `/tmp/lfa-wayland/wayland-0`. A Termux-side bridge binds
+that socket and hands the listening fd to the app over Binder, so the APK does
+not need Termux's signing key. The shared-UID build creates the socket directly
+and is the faster option when the signatures match. Hyprland needs the
+Aquamarine shm patch series in `wayland-display/scripts/`; Sway works as-is
+with `WLR_BACKENDS=wayland`.
+
+Sources, build instructions, and the patch series are in
+[wayland-display/README.md](wayland-display/README.md).
 
 ## Older and custom distro versions
 
@@ -1551,7 +1577,7 @@ plus `script` from util-linux for the pty test, which is skipped if absent:
 
 ```bash
 chmod +x tests/test-all.sh
-./tests/test-all.sh   # expect: PASS=682 FAIL=0
+./tests/test-all.sh   # expect: PASS=711 FAIL=0
 ```
 
 The suite is deliberately stubbed. It cannot prove a desktop actually appears.

@@ -59,6 +59,51 @@ cursors, no blur or shadows, stdout logs on.
 Measured on an Intel HD 4400 with llvmpipe: 1280x720, kitty and a wl_shm test
 client render correctly; the readback costs a full-frame copy per frame.
 
+## The app
+
+`app/` is a small Android app (minSdk 26, arm64-v8a) that runs a shm Wayland
+compositor in-process and composites the guest desktop onto a Surface.
+
+* `jni/src` is Trierarch's compositor (GPL-3.0) with two changes:
+  `compositor_create_from_fd()` adopts a listening socket instead of binding
+  its own path, and linux-dmabuf is not advertised so clients allocate shm
+  buffers.
+* `MainActivity` owns the surface, touch (pointer, two-finger scroll, long-press
+  right click), hardware keys, a small extra-keys bar, and the IME. Committed
+  text becomes key events; characters without a key mapping use the
+  `Ctrl+Shift+U` codepoint sequence.
+* Two flavours:
+  * `compatible` (default) has no `sharedUserId`. A Termux-side bridge binds
+    the socket and hands the listening fd to the app over Binder, so the APK
+    does not need Termux's signing key.
+  * `standard` runs under `com.termux` (signed with the public test key) and
+    creates the socket in Termux's tmp directory directly.
+
+`scripts/build-native.sh` builds libffi, libwayland-server, the compositor and
+the tiny bridge helper for arm64-v8a. CI (`.github/workflows/wayland-display.yml`)
+runs it and builds both APKs.
+
+## Using it
+
+```bash
+lfa wd install              # download the APK and open the Android installer
+lfa wd start -i arch        # start the Termux bridge and the app
+lfa wd session -i arch      # Sway on the app display (WLR_BACKENDS=wayland)
+lfa wd status -i arch
+lfa wd doctor
+lfa wd stop
+```
+
+The guest sees the socket at `/tmp/lfa-wayland/wayland-0` because LFA enters
+the container with `--shared-tmp`. For a manual session:
+
+```bash
+export XDG_RUNTIME_DIR=/tmp/lfa-wayland WAYLAND_DISPLAY=wayland-0
+WLR_BACKENDS=wayland WLR_RENDERER=pixman sway -c ~/.config/lfa-wayland/sway/config
+```
+
+Hyprland uses the same environment once the patched Aquamarine is installed.
+
 ## Roadmap
 
 1. **Stage B** — app displays Sway at a chosen resolution; touch, IME and extra

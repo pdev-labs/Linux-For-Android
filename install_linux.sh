@@ -1903,6 +1903,326 @@ lfa_wayland_cmd() {
     esac
 }
 
+# ---------------------------------------------------------------------------
+# lfa wd / lfa display: the dedicated Wayland display app
+#
+# The app runs a shm Wayland compositor and shows the guest desktop on an
+# Android Surface. The listening socket lives in Termux's tmp directory, which
+# the guest sees as /tmp because proot-distro is entered with --shared-tmp.
+# ---------------------------------------------------------------------------
+
+LFA_WD_PKG="${LFA_WD_PKG:-io.github.pdevlabs.lfadisplay}"
+LFA_WD_SOCKET_NAME="wayland-0"
+
+lfa_wd_usage() {
+    cat <<'WDHELP'
+Usage: lfa wd <command> [options]
+
+  install                  install the display APK and the Termux bridge
+  start                    start the bridge and the app
+  stop                     stop the app and the bridge
+  status                   show app, bridge, socket and session state
+  session                  start Sway or Hyprland on the app display
+  doctor                   diagnose install, socket, SELinux and logs
+  help                     show this help
+
+Options:
+  -i, --instance NAME      distribution to use for session and status
+  --apk PATH               install this APK instead of downloading one
+  --compositor NAME        session compositor: sway (default) or hyprland
+  --restart                stop a running session first
+
+Environment:
+  LFA_WD_PKG               override the app package name
+  LFA_WD_APK               default APK path for install
+
+The guest sees the display socket as /tmp/lfa-wayland/wayland-0.
+WDHELP
+}
+
+lfa_wd_socket_dir() { printf '%s' "$PREFIX/tmp/lfa-wayland"; }
+lfa_wd_socket() { printf '%s/%s' "$(lfa_wd_socket_dir)" "$LFA_WD_SOCKET_NAME"; }
+lfa_wd_bridge_pidfile() { printf '%s' "$PREFIX/tmp/lfa-wd-bridge.pid"; }
+lfa_wd_session_pidfile() { printf '%s' "$PREFIX/tmp/lfa-wd-session.pid"; }
+lfa_wd_bridge_log() { printf '%s' "$PREFIX/tmp/lfa-wd-bridge.log"; }
+
+lfa_wd_bridge_script() {
+    local _s="$PREFIX/bin/lfa-wd-bridge"
+    [ -x "$_s" ] || _s="$LFA_DIR/assets/wayland-display/lfa-wd-bridge"
+    [ -x "$_s" ] || _s="$LFA_DIR/wayland-display/termux/lfa-wd-bridge"
+    [ -x "$_s" ] && printf '%s' "$_s"
+}
+
+lfa_wd_installed() {
+    command -v pm >/dev/null 2>&1 || return 1
+    [ -n "$(pm path "$LFA_WD_PKG" 2>/dev/null | head -n1)" ]
+}
+
+lfa_wd_bridge_running() {
+    local _p="" _c=""
+    _p="$(tr -dc '0-9' < "$(lfa_wd_bridge_pidfile)" 2>/dev/null || true)"
+    [ -n "$_p" ] || return 1
+    kill -0 "$_p" 2>/dev/null || return 1
+    _c="$(tr '\0' ' ' < "/proc/$_p/cmdline" 2>/dev/null || true)"
+    case "$_c" in *BridgeMain*) return 0 ;; esac
+    return 1
+}
+
+lfa_wd_app_running() {
+    command -v pidof >/dev/null 2>&1 || return 1
+    pidof "$LFA_WD_PKG" >/dev/null 2>&1
+}
+
+lfa_wd_install() {
+    local _apk="${LFA_WD_APK:-}"
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --apk) _apk="${2:-}"; shift 2 ;;
+            *) echo "Unknown option: $1" >&2; return 2 ;;
+        esac
+    done
+
+    if [ -z "$_apk" ] && [ -f "$LFA_DIR/wayland-display/out/lfa-display-compatible.apk" ]; then
+        _apk="$LFA_DIR/wayland-display/out/lfa-display-compatible.apk"
+    fi
+    if [ -z "$_apk" ]; then
+        _apk="$HOME/lfa-display-compatible.apk"
+        if [ ! -f "$_apk" ]; then
+            echo "[*] Downloading the display APK..."
+            curl -fsSL --max-time 120 -o "$_apk" \
+                "https://github.com/pdev-labs/Linux-For-Android/releases/latest/download/lfa-display-compatible.apk" \
+                || { echo "Download failed. Pass --apk PATH or set LFA_WD_APK." >&2; return 1; }
+        fi
+    fi
+    [ -f "$_apk" ] || { echo "APK not found: $_apk" >&2; return 1; }
+
+    local _bridge
+    _bridge="$(lfa_wd_bridge_script)" || { echo "Bridge script not found." >&2; return 1; }
+    if [ "$_bridge" != "$PREFIX/bin/lfa-wd-bridge" ]; then
+        install -m 755 "$_bridge" "$PREFIX/bin/lfa-wd-bridge" 2>/dev/null || true
+    fi
+
+    echo "[*] Opening the Android installer for $_apk"
+    if command -v termux-open >/dev/null 2>&1; then
+        termux-open --content-type application/vnd.android.package-archive "$_apk" >/dev/null 2>&1 || true
+    else
+        am start -a android.intent.action.VIEW -t application/vnd.android.package-archive \
+            -d "file://$_apk" >/dev/null 2>&1 || true
+    fi
+    echo "    Confirm the install on the device, then run: lfa wd start"
+}
+
+lfa_wd_start() {
+    local _inst=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            -i|--instance) _inst="${2:-}"; shift 2 ;;
+            *) echo "Unknown option: $1" >&2; return 2 ;;
+        esac
+    done
+
+    lfa_wd_installed || {
+        echo "The display app is not installed. Run: lfa wd install" >&2
+        return 1
+    }
+
+    local _sock _dir _bridge
+    _sock="$(lfa_wd_socket)"
+    _dir="$(lfa_wd_socket_dir)"
+    mkdir -p "$_dir" 2>/dev/null || true
+
+    if lfa_wd_bridge_running; then
+        echo "[*] Bridge already running."
+    else
+        _bridge="$(lfa_wd_bridge_script)" || { echo "Bridge script not found." >&2; return 1; }
+        echo "[*] Starting the Termux bridge..."
+        nohup "$_bridge" "$_sock" > "$(lfa_wd_bridge_log)" 2>&1 &
+        printf '%s\n' "$!" > "$(lfa_wd_bridge_pidfile)"
+        sleep 1
+    fi
+
+    if lfa_wd_app_running; then
+        echo "[*] Display app already running."
+    else
+        echo "[*] Starting the display app..."
+        am start -n "$LFA_WD_PKG/.MainActivity" >/dev/null 2>&1 || true
+    fi
+
+    local _i=0
+    while [ "$_i" -lt 10 ]; do
+        [ -S "$_sock" ] && break
+        sleep 1
+        _i=$((_i + 1))
+    done
+
+    if [ ! -S "$_sock" ]; then
+        echo "The display socket did not appear: $_sock" >&2
+        echo "  bridge log: $(lfa_wd_bridge_log)" >&2
+        return 1
+    fi
+
+    echo "[*] Display ready."
+    echo "    guest: export XDG_RUNTIME_DIR=/tmp/lfa-wayland WAYLAND_DISPLAY=$LFA_WD_SOCKET_NAME"
+    if [ -n "$_inst" ]; then
+        echo "    session: lfa wd session -i $_inst"
+    fi
+}
+
+lfa_wd_stop() {
+    local _p=""
+    _p="$(tr -dc '0-9' < "$(lfa_wd_bridge_pidfile)" 2>/dev/null || true)"
+    if [ -n "$_p" ] && kill -0 "$_p" 2>/dev/null; then
+        kill "$_p" 2>/dev/null || true
+    fi
+    rm -f "$(lfa_wd_bridge_pidfile)" 2>/dev/null || true
+
+    _p="$(tr -dc '0-9' < "$(lfa_wd_session_pidfile)" 2>/dev/null || true)"
+    if [ -n "$_p" ] && kill -0 "$_p" 2>/dev/null; then
+        kill "$_p" 2>/dev/null || true
+    fi
+    rm -f "$(lfa_wd_session_pidfile)" 2>/dev/null || true
+
+    command -v am >/dev/null 2>&1 && am force-stop "$LFA_WD_PKG" >/dev/null 2>&1 || true
+    rm -f "$(lfa_wd_socket)" 2>/dev/null || true
+    echo "Display stopped."
+}
+
+lfa_wd_status() {
+    local _inst=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            -i|--instance) _inst="${2:-}"; shift 2 ;;
+            *) echo "Unknown option: $1" >&2; return 2 ;;
+        esac
+    done
+
+    printf 'package:     %s\n' "$LFA_WD_PKG"
+    if lfa_wd_installed; then
+        printf 'installed:   yes\n'
+    else
+        printf 'installed:   no\n'
+    fi
+    if lfa_wd_bridge_running; then
+        printf 'bridge:      running\n'
+    else
+        printf 'bridge:      stopped\n'
+    fi
+    if lfa_wd_app_running; then
+        printf 'app:         running\n'
+    else
+        printf 'app:         stopped\n'
+    fi
+    if [ -S "$(lfa_wd_socket)" ]; then
+        printf 'socket:      %s\n' "$(lfa_wd_socket)"
+    else
+        printf 'socket:      missing\n'
+    fi
+
+    if [ -n "$_inst" ] || [ -n "${CLI_INSTANCE:-}" ]; then
+        require_proot_distro || return 1
+        [ -n "$_inst" ] && CLI_INSTANCE="$_inst"
+        select_installed_instance || return 1
+        if lfa_wayland_running "$INSTANCE_NAME"; then
+            printf 'session:     running (%s)\n' "$(lfa_wayland_active)"
+        else
+            printf 'session:     stopped\n'
+        fi
+    fi
+}
+
+lfa_wd_session() {
+    local _inst="" _comp="sway" _restart=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            -i|--instance) _inst="${2:-}"; shift 2 ;;
+            --compositor) _comp="${2:-}"; shift 2 ;;
+            --restart) _restart=1; shift ;;
+            *) echo "Unknown option: $1" >&2; return 2 ;;
+        esac
+    done
+    case "$_comp" in sway|hyprland) ;; *) echo "Unknown compositor: $_comp" >&2; return 2 ;; esac
+
+    require_proot_distro || return 1
+    [ -n "$_inst" ] && CLI_INSTANCE="$_inst"
+    select_installed_instance || return 1
+    local _id="$INSTANCE_NAME" _user _p
+    _user="$(lfa_appimage_user "$_id")"
+
+    lfa_wd_bridge_running || { echo "Start the display first: lfa wd start -i $_id" >&2; return 1; }
+    [ -S "$(lfa_wd_socket)" ] || { echo "Display socket missing." >&2; return 1; }
+
+    if [ "$_restart" = "1" ]; then
+        _p="$(tr -dc '0-9' < "$(lfa_wd_session_pidfile)" 2>/dev/null || true)"
+        [ -n "$_p" ] && kill "$_p" 2>/dev/null || true
+        rm -f "$(lfa_wd_session_pidfile)" 2>/dev/null || true
+        sleep 1
+    fi
+
+    echo "[*] Starting $_comp on the display as $_user..."
+    # shellcheck disable=SC2046  # flag list, not one argument
+    nohup proot-distro login $(pd_login_flags) "$_id" --user "$_user" --shared-tmp -- \
+        env XDG_RUNTIME_DIR=/tmp/lfa-wayland WAYLAND_DISPLAY="$LFA_WD_SOCKET_NAME" \
+        WLR_BACKENDS=wayland WLR_RENDERER=pixman \
+        bash -c "if [ '$_comp' = hyprland ]; then exec Hyprland; else exec sway -c \"\$HOME/.config/lfa-wayland/sway/config\"; fi" \
+        > "$HOME/lfa-wd-session.log" 2>&1 &
+    printf '%s\n' "$!" > "$(lfa_wd_session_pidfile)"
+    sleep 4
+    echo "    log: $HOME/lfa-wd-session.log"
+}
+
+lfa_wd_doctor() {
+    echo "Display app"
+    printf '  package:   %s\n' "$LFA_WD_PKG"
+    if lfa_wd_installed; then
+        printf '  installed: %s\n' "$(pm path "$LFA_WD_PKG" 2>/dev/null | head -n1 | sed 's/^package://')"
+        local _apk _libdir
+        _apk="$(pm path "$LFA_WD_PKG" 2>/dev/null | head -n1 | sed 's/^package://')"
+        _libdir="$(dirname "$_apk")/lib/arm64"
+        [ -d "$_libdir" ] || _libdir="$(dirname "$_apk")/lib/arm64-v8a"
+        if [ -f "$_libdir/liblfabridge.so" ]; then
+            printf '  natives:   ok\n'
+        else
+            printf '  natives:   missing (%s)\n' "$_libdir"
+        fi
+    else
+        printf '  installed: no\n'
+    fi
+
+    echo "Bridge"
+    if lfa_wd_bridge_running; then
+        printf '  process:   running\n'
+    else
+        printf '  process:   stopped\n'
+    fi
+    printf '  script:    %s\n' "$(lfa_wd_bridge_script || echo missing)"
+    printf '  socket:    %s\n' "$(lfa_wd_socket)"
+    [ -S "$(lfa_wd_socket)" ] && ls -l "$(lfa_wd_socket)" 2>/dev/null | sed 's/^/             /'
+
+    echo "Android"
+    printf '  selinux:   %s\n' "$(getenforce 2>/dev/null || echo unknown)"
+    printf '  app pid:   %s\n' "$(pidof "$LFA_WD_PKG" 2>/dev/null || echo none)"
+
+    if [ -s "$(lfa_wd_bridge_log)" ]; then
+        echo "Bridge log (tail)"
+        tail -n 8 "$(lfa_wd_bridge_log)" | sed 's/^/  /'
+    fi
+}
+
+lfa_wd_cmd() {
+    local _cmd="${1:-}"
+    [ $# -gt 0 ] && shift || true
+    case "$_cmd" in
+        install) lfa_wd_install "$@" ;;
+        start) lfa_wd_start "$@" ;;
+        stop) lfa_wd_stop "$@" ;;
+        status) lfa_wd_status "$@" ;;
+        session) lfa_wd_session "$@" ;;
+        doctor) lfa_wd_doctor "$@" ;;
+        help|-h|--help|"") lfa_wd_usage ;;
+        *) echo "Unknown display command: $_cmd" >&2; lfa_wd_usage >&2; return 2 ;;
+    esac
+}
+
 
 lfa_cli_usage() {
     cat <<'HELP'
@@ -1928,6 +2248,7 @@ Usage: lfa <command> [options]
   android       inspect or enable the Termux:API bridge
   storage       Android shared storage: status, repair, run helpers
   wayland       Wayland session manager: Hyprland or Sway (alias: wl)
+  wd            dedicated Wayland display app (alias: display)
   appimage      extract and run an AppImage (alias: app)
   run           run an AppImage once without installing it
   diagnostics   write a support bundle
@@ -3793,6 +4114,7 @@ lfa_cli() {
         appimage|app) lfa_cli_appimage "$@" ;;
         storage) lfa_cli_storage "$@" ;;
         wayland|wl) lfa_wayland_cmd "$@" ;;
+        wd|display) lfa_wd_cmd "$@" ;;
         run) lfa_appimage_run "$@" ;;
         update)
             while [ $# -gt 0 ]; do case "$1" in -i|--instance) CLI_INSTANCE="${2:-}"; shift 2 ;; *) echo "Unknown option: $1" >&2; return 2 ;; esac; done

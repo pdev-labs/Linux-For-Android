@@ -1519,6 +1519,53 @@ check "Y11 bogus message" 'Unknown wayland command: bogus' "$T/y11-bogus.log"
 grep -qF 'docs/WAYLAND.md' "$REPO/README.md" && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y11 README does not link the wayland guide"; }
 grep -qF 'WAYLAND.md' "$REPO/docs/README.md" && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y11 docs index does not link the wayland guide"; }
 
+echo "===== Y12: lfa wd display app ====="
+"$LFA" help > "$T/y12-tophelp.log" 2>&1
+check "Y12 top-level help" 'dedicated Wayland display app' "$T/y12-tophelp.log"
+"$LFA" wd help > "$T/y12-help.log" 2>&1; rc=$?
+[ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y12 help exit $rc"; }
+check "Y12 help install" 'install the display APK' "$T/y12-help.log"
+check "Y12 help session" 'start Sway or Hyprland on the app display' "$T/y12-help.log"
+check "Y12 help socket" '/tmp/lfa-wayland/wayland-0' "$T/y12-help.log"
+check "Y12 help apk" '--apk PATH' "$T/y12-help.log"
+
+"$LFA" wd status -i debian > "$T/y12-status.log" 2>&1; rc=$?
+[ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y12 status exit $rc"; }
+check "Y12 status package" 'package:     io.github.pdevlabs.lfadisplay' "$T/y12-status.log"
+check "Y12 status installed" 'installed:   no' "$T/y12-status.log"
+check "Y12 status bridge" 'bridge:      stopped' "$T/y12-status.log"
+check "Y12 status socket" 'socket:      missing' "$T/y12-status.log"
+check "Y12 status session" 'session:     stopped' "$T/y12-status.log"
+
+"$LFA" wd start -i debian > "$T/y12-start.log" 2>&1; rc=$?
+[ "$rc" = "1" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y12 start without app exit $rc"; }
+check "Y12 start needs app" 'The display app is not installed.' "$T/y12-start.log"
+
+printf 'fake apk\n' > "$T/y12-fake.apk"
+"$LFA" wd install --apk "$T/y12-fake.apk" > "$T/y12-install.log" 2>&1; rc=$?
+[ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y12 install exit $rc"; }
+check "Y12 install opens installer" 'Opening the Android installer' "$T/y12-install.log"
+check "Y12 install hint" 'Confirm the install on the device' "$T/y12-install.log"
+[ -x "$T/prefix/bin/lfa-wd-bridge" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y12 bridge script not installed"; }
+check "Y12 bridge runs app_process" 'app_process' "$T/prefix/bin/lfa-wd-bridge"
+
+"$LFA" wd doctor > "$T/y12-doctor.log" 2>&1; rc=$?
+[ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y12 doctor exit $rc"; }
+check "Y12 doctor selinux" 'selinux:' "$T/y12-doctor.log"
+
+"$LFA" wd session --compositor bogus > "$T/y12-session-bad.log" 2>&1; rc=$?
+[ "$rc" = "2" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y12 bad compositor exit $rc"; }
+check "Y12 session compositor validation" 'Unknown compositor: bogus' "$T/y12-session-bad.log"
+
+"$LFA" wd bogus > "$T/y12-bogus.log" 2>&1; rc=$?
+[ "$rc" = "2" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y12 bogus exit $rc"; }
+check "Y12 bogus message" 'Unknown display command: bogus' "$T/y12-bogus.log"
+
+[ -s "$REPO/wayland-display/README.md" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y12 display README missing"; }
+grep -qF 'wayland-display/README.md' "$REPO/README.md" && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y12 README does not link the display docs"; }
+[ -s "$REPO/.github/workflows/wayland-display.yml" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y12 display workflow missing"; }
+[ -x "$REPO/wayland-display/scripts/build-native.sh" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y12 native build script missing"; }
+
 echo "===== Z: documentation links ====="
 [ -s "$REPO/docs/TROUBLESHOOTING.md" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Z troubleshooting guide missing"; }
 grep -qF 'docs/TROUBLESHOOTING.md' "$REPO/README.md" && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Z README does not link the troubleshooting guide"; }
