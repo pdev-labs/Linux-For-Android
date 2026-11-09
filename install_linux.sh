@@ -1961,18 +1961,30 @@ lfa_wd_installed() {
 
 lfa_wd_bridge_running() {
     local _p="" _c=""
-    [ -f "$(lfa_wd_bridge_pidfile)" ] || return 1
-    _p="$(tr -dc '0-9' < "$(lfa_wd_bridge_pidfile)" 2>/dev/null || true)"
+    if [ -f "$(lfa_wd_bridge_pidfile)" ]; then
+        _p="$(tr -dc '0-9' < "$(lfa_wd_bridge_pidfile)" 2>/dev/null || true)"
+        if [ -n "$_p" ] && kill -0 "$_p" 2>/dev/null; then
+            _c="$(tr '\0' ' ' < "/proc/$_p/cmdline" 2>/dev/null || true)"
+            case "$_c" in *BridgeMain*) return 0 ;; esac
+        fi
+    fi
+    # A bridge started by hand has no pidfile; look for the app_process entry.
+    command -v pgrep >/dev/null 2>&1 || return 1
+    _p="$(pgrep -f 'io\.github\.pdevlabs\.lfadisplay\.BridgeMain' 2>/dev/null | head -n1)"
     [ -n "$_p" ] || return 1
-    kill -0 "$_p" 2>/dev/null || return 1
     _c="$(tr '\0' ' ' < "/proc/$_p/cmdline" 2>/dev/null || true)"
     case "$_c" in *BridgeMain*) return 0 ;; esac
     return 1
 }
 
 lfa_wd_app_running() {
-    command -v pidof >/dev/null 2>&1 || return 1
-    pidof "$LFA_WD_PKG" >/dev/null 2>&1
+    # Android 11+ hides other apps' processes from Termux (hidepid), so pidof
+    # and pgrep usually fail even while the display is up.
+    if command -v pidof >/dev/null 2>&1 && pidof "$LFA_WD_PKG" >/dev/null 2>&1; then
+        return 0
+    fi
+    command -v pgrep >/dev/null 2>&1 || return 1
+    pgrep -f '^io\.github\.pdevlabs\.lfadisplay$' >/dev/null 2>&1
 }
 
 lfa_wd_install() {
@@ -2043,12 +2055,9 @@ lfa_wd_start() {
         sleep 1
     fi
 
-    if lfa_wd_app_running; then
-        echo "[*] Display app already running."
-    else
-        echo "[*] Starting the display app..."
-        am start -n "$LFA_WD_PKG/.MainActivity" >/dev/null 2>&1 || true
-    fi
+    # MainActivity is singleTask, so this is safe when it is already running.
+    echo "[*] Starting the display app..."
+    am start -n "$LFA_WD_PKG/.MainActivity" >/dev/null 2>&1 || true
 
     local _i=0
     while [ "$_i" -lt 10 ]; do
@@ -2078,7 +2087,8 @@ lfa_wd_stop() {
     fi
     rm -f "$(lfa_wd_bridge_pidfile)" 2>/dev/null || true
 
-    _p="$(tr -dc '0-9' < "$(lfa_wd_session_pidfile)" 2>/dev/null || true)"
+    _p=""
+    [ -f "$(lfa_wd_session_pidfile)" ] && _p="$(tr -dc '0-9' < "$(lfa_wd_session_pidfile)" 2>/dev/null || true)"
     if [ -n "$_p" ] && kill -0 "$_p" 2>/dev/null; then
         kill "$_p" 2>/dev/null || true
     fi
@@ -2111,6 +2121,8 @@ lfa_wd_status() {
     fi
     if lfa_wd_app_running; then
         printf 'app:         running\n'
+    elif lfa_wd_bridge_running && [ -S "$(lfa_wd_socket)" ]; then
+        printf 'app:         running (Android hides app processes from Termux)\n'
     else
         printf 'app:         stopped\n'
     fi
@@ -2154,7 +2166,8 @@ lfa_wd_session() {
     [ -S "$(lfa_wd_socket)" ] || { echo "Display socket missing." >&2; return 1; }
 
     if [ "$_restart" = "1" ]; then
-        _p="$(tr -dc '0-9' < "$(lfa_wd_session_pidfile)" 2>/dev/null || true)"
+        _p=""
+        [ -f "$(lfa_wd_session_pidfile)" ] && _p="$(tr -dc '0-9' < "$(lfa_wd_session_pidfile)" 2>/dev/null || true)"
         [ -n "$_p" ] && kill "$_p" 2>/dev/null || true
         rm -f "$(lfa_wd_session_pidfile)" 2>/dev/null || true
         sleep 1
