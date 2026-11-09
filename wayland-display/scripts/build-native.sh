@@ -81,7 +81,7 @@ EOF
   rm -rf wayland/build-android
   (
     export PKG_CONFIG_PATH="$WORK/libffi-install/lib/pkgconfig"
-    meson setup wayland/build-android --cross-file android-arm64.txt \
+    meson setup wayland/build-android wayland --cross-file android-arm64.txt \
       -Dlibraries=true -Dscanner=false -Dtests=false -Ddocumentation=false \
       -Ddtd_validation=false --prefix="$WORK/wayland-prefix"
     ninja -C wayland/build-android
