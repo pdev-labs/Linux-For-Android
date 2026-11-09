@@ -134,7 +134,7 @@ hardware, not simulated. Full details, root causes, and evidence are in
 | Alpine 3.18 (Android 5) | Yes | Yes | legacy VNC desktop, panel works; X11 and Both hidden | v1.7.1 |
 | Ubuntu GNOME 46 (experimental) | Yes | Yes | shell and apps run; session services missing | v1.7.0 |
 
-> The test suite runs `718` checks with 0 failures. The same suite runs on the
+> The test suite runs `721` checks with 0 failures. The same suite runs on the
 > devices (`tests/device-matrix.sh`). The table is as of v1.7.1. Ubuntu was
 > re-verified on v1.7.1, and Alpine 3.18 was re-verified on Android 5 on
 > 2026-11-04; the other rows were last verified on v1.7.0. A row is
@@ -675,11 +675,17 @@ lfa wd stop
 ```
 
 The guest connects to `/tmp/lfa-wayland/wayland-0`. A Termux-side bridge binds
-that socket and hands the listening fd to the app over Binder, so the APK does
-not need Termux's signing key. The shared-UID build creates the socket directly
-and is the faster option when the signatures match. Hyprland needs the
-Aquamarine shm patch series in `wayland-display/scripts/`; Sway works as-is
-with `WLR_BACKENDS=wayland`.
+that socket, accepts each connection, and passes the connected fd to the app
+over Binder. Android's SELinux policy lets the app use that fd but not accept
+on a socket owned by Termux, which is why the bridge does the accept. The
+shared-UID build creates the socket directly and is the faster option when the
+signatures match. Hyprland needs the Aquamarine shm patch series in
+`wayland-display/scripts/`; Sway works as-is with `WLR_BACKENDS=wayland`.
+
+On a Vivo T4x 5G running Android 16, Sway 1.12 and kitty render at the native
+1080x2408. The same APK may be rejected by an OEM package installer with
+"problem parsing the package" even though `apksigner` verifies it; `adb
+install` works.
 
 Sources, build instructions, and the patch series are in
 [wayland-display/README.md](wayland-display/README.md).
@@ -1577,7 +1583,7 @@ plus `script` from util-linux for the pty test, which is skipped if absent:
 
 ```bash
 chmod +x tests/test-all.sh
-./tests/test-all.sh   # expect: PASS=718 FAIL=0
+./tests/test-all.sh   # expect: PASS=721 FAIL=0
 ```
 
 The suite is deliberately stubbed. It cannot prove a desktop actually appears.

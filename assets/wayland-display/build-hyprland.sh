@@ -30,10 +30,9 @@ say "Installing build dependencies"
 pacman -S --needed --noconfirm \
     base-devel cmake ninja git python3 \
     aquamarine hyprlang hyprcursor hyprutils hyprgraphics hyprwayland-scanner \
-    glaze glslang libdisplay-info libdrm libinput libseat libliftoff \
+    glaze glslang libdisplay-info libdrm libinput seatd libliftoff \
     mesa libxkbcommon pixman tomlplusplus wayland wayland-protocols hwdata \
-    pugixml udis86 libxcb xcb-util-wm xcb-util-errors xcb-util-cursor \
-    >/dev/null
+    pugixml libxcb xcb-util-wm xcb-util-errors xcb-util-cursor
 
 mkdir -p "$SRC"
 cd "$SRC"

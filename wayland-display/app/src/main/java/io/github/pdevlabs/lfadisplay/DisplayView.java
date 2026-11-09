@@ -67,6 +67,7 @@ public final class DisplayView extends SurfaceView implements SurfaceHolder.Call
                 downTime = now;
                 longPressSent = false;
                 scrolling = false;
+                WaylandBridge.nativeSetCursorPhysical(lastX, lastY);
                 WaylandBridge.nativeOnPointerEvent(lastX, lastY, WaylandBridge.POINTER_ACTION_DOWN, now);
                 return true;
 
@@ -74,6 +75,7 @@ public final class DisplayView extends SurfaceView implements SurfaceHolder.Call
                 scrolling = true;
                 scrollX = event.getX(0);
                 scrollY = event.getY(0);
+                WaylandBridge.nativeSetCursorPhysical(scrollX, scrollY);
                 // release the primary button so the guest sees a scroll, not a drag
                 WaylandBridge.nativeOnPointerEvent(lastX, lastY, WaylandBridge.POINTER_ACTION_UP, now);
                 return true;
@@ -91,6 +93,7 @@ public final class DisplayView extends SurfaceView implements SurfaceHolder.Call
 
                 lastX = event.getX();
                 lastY = event.getY();
+                WaylandBridge.nativeSetCursorPhysical(lastX, lastY);
 
                 if (!longPressSent && now - downTime > LONG_PRESS_MS) {
                     longPressSent = true;

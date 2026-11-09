@@ -1,6 +1,6 @@
 # Test report for v1.7.1
 
-> Current development suite: `PASS=718 FAIL=0`.
+> Current development suite: `PASS=721 FAIL=0`.
 
 ## Fresh Arch reinstall, 2026-11-08
 
@@ -24,7 +24,7 @@ Wayland changes.
 
 | Check | Result |
 |---|---|
-| Host suite | `PASS=718 FAIL=0` |
+| Host suite | `PASS=721 FAIL=0` |
 | `lfa wayland install -i arch --resolution 2408x1080` | packages and profile installed |
 | `lfa wayland start -i arch` | Termux:X11, Sway, Waybar, SwayNC, and SwayBG started |
 | Nested output | `swaymsg` reported `2408x1080`; `grim` screenshot checked |
@@ -45,7 +45,7 @@ storage changes.
 
 | Check | Result |
 |---|---|
-| Host suite | `PASS=718 FAIL=0` |
+| Host suite | `PASS=721 FAIL=0` |
 | Thunar false X | gid 1023; folder icons normal; screenshot checked |
 | `lfa storage exec` | shell and Python scripts from `/storage/emulated/0` ran from a `/tmp` copy |
 | `lfa storage data` | adb at `127.0.0.1:5555`; `list` and `pull` worked for `Android/data` and `Android/obb`; guest read the copy |
@@ -69,7 +69,7 @@ the network during this pass, so the legacy-device rows remain pending.
 
 | Check | Result |
 |---|---|
-| Host suite (`./tests/test-all.sh`) | `PASS=718 FAIL=0` |
+| Host suite (`./tests/test-all.sh`) | `PASS=721 FAIL=0` |
 | On-device VNC scenario (`termux-e2e.sh`) | `PASS=14 FAIL=0` |
 | On-device Both → VNC/X11 switch | `PASS=22 FAIL=0` |
 | On-device X11 scenario | `PASS=14 FAIL=0` |

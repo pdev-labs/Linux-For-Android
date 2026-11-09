@@ -9,9 +9,14 @@ proves the compositor can run without a DRM render node.
 
 ## Status
 
-Stage A (host proof) is done. Nested Hyprland 0.56.2 renders clients into
+Stage A (host proof) is done: nested Hyprland 0.56.2 renders clients into
 `wl_shm` buffers at 1280x720 on a machine with no usable DRM node, and a parent
-Sway displays the result. The Android app and its CI build are next.
+Sway displays the result.
+
+Stage B is done on a Vivo T4x 5G (Android 16, arm64): the app runs the
+compositor in-process, the Termux bridge feeds it client sockets, and Sway 1.12
+plus kitty render at the phone's native 1080x2408. The CI workflow builds both
+APKs.
 
 ## Why a patch series
 
@@ -64,18 +69,24 @@ client render correctly; the readback costs a full-frame copy per frame.
 `app/` is a small Android app (minSdk 26, arm64-v8a) that runs a shm Wayland
 compositor in-process and composites the guest desktop onto a Surface.
 
-* `jni/src` is Trierarch's compositor (GPL-3.0) with two changes:
-  `compositor_create_from_fd()` adopts a listening socket instead of binding
-  its own path, and linux-dmabuf is not advertised so clients allocate shm
-  buffers.
+* `jni/src` is Trierarch's compositor (GPL-3.0) with these changes: a
+  display can be created with no socket, clients are attached with
+  `wl_client_create()` from fds passed over Binder, and linux-dmabuf is not
+  advertised so clients allocate shm buffers.
+* A toplevel gets a second `xdg_toplevel.configure` when it first attaches a
+  buffer. wlroots' Wayland backend discards the configure sent at
+  `get_toplevel` because its output is not enabled yet; without the second one
+  a nested Sway or Hyprland stays at wlroots' 1280x720 default.
 * `MainActivity` owns the surface, touch (pointer, two-finger scroll, long-press
   right click), hardware keys, a small extra-keys bar, and the IME. Committed
   text becomes key events; characters without a key mapping use the
   `Ctrl+Shift+U` codepoint sequence.
 * Two flavours:
   * `compatible` (default) has no `sharedUserId`. A Termux-side bridge binds
-    the socket and hands the listening fd to the app over Binder, so the APK
-    does not need Termux's signing key.
+    the socket, accepts each connection, and hands the *connected* fds to the
+    app over Binder, so the APK does not need Termux's signing key. The app
+    cannot accept on a socket created by Termux's SELinux domain, but read and
+    write on an fd it received are allowed.
   * `standard` runs under `com.termux` (signed with the public test key) and
     creates the socket in Termux's tmp directory directly.
 
@@ -93,6 +104,11 @@ lfa wd status -i arch
 lfa wd doctor
 lfa wd stop
 ```
+
+If the phone's package installer reports "problem parsing the package" even
+though the APK verifies, install it over adb instead:
+`adb install lfa-display-compatible.apk`. The same APK installs fine that way;
+the OEM installer is the unreliable part.
 
 The guest sees the socket at `/tmp/lfa-wayland/wayland-0` because LFA enters
 the container with `--shared-tmp`. For a manual session:
@@ -113,8 +129,8 @@ lfa wd session -i arch --compositor hyprland
 
 ## Roadmap
 
-1. **Stage B** — app displays Sway at a chosen resolution; touch, IME and extra
-   keys work.
+1. ~~**Stage B** — app displays Sway at a chosen resolution; touch, IME and
+   extra keys work.~~ Done on the Vivo.
 2. **Stage C** — Hyprland session on the app display with the host config.
 3. **Stage D** — CI release (APK, bridge daemon, patched Aquamarine), `lfa wd`
    commands, device tests, docs.

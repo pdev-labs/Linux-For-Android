@@ -1537,6 +1537,10 @@ check "Y12 status bridge" 'bridge:      stopped' "$T/y12-status.log"
 check "Y12 status socket" 'socket:      missing' "$T/y12-status.log"
 check "Y12 status session" 'session:     stopped' "$T/y12-status.log"
 
+"$LFA" wd stop > "$T/y12-stop.log" 2>&1; rc=$?
+[ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y12 stop idle exit $rc"; }
+check "Y12 stop idle" 'Display stopped.' "$T/y12-stop.log"
+
 "$LFA" wd start -i debian > "$T/y12-start.log" 2>&1; rc=$?
 [ "$rc" = "1" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y12 start without app exit $rc"; }
 check "Y12 start needs app" 'The display app is not installed.' "$T/y12-start.log"
@@ -1548,6 +1552,7 @@ check "Y12 install opens installer" 'Opening the Android installer' "$T/y12-inst
 check "Y12 install hint" 'Confirm the install on the device' "$T/y12-install.log"
 [ -x "$T/prefix/bin/lfa-wd-bridge" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y12 bridge script not installed"; }
 check "Y12 bridge runs app_process" 'app_process' "$T/prefix/bin/lfa-wd-bridge"
+check "Y12 bridge uses absolute app_process" 'app_process64' "$T/prefix/bin/lfa-wd-bridge"
 
 "$LFA" wd doctor > "$T/y12-doctor.log" 2>&1; rc=$?
 [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y12 doctor exit $rc"; }
