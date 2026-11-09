@@ -262,6 +262,10 @@ void send_toplevel_configure(struct compositor_surface *surf) {
         }
     }
 
+    LOGI("configure toplevel surf=%p app_id=%s w=%d h=%d wm_mode=%d output=%dx%d",
+            (void *)surf, surf->app_id ? surf->app_id : "?", (int)w, (int)h,
+            (int)surf->srv->wm_mode,
+            (int)surf->srv->output_width, (int)surf->srv->output_height);
     xdg_toplevel_send_configure(surf->xdg_toplevel_res, w, h, &states);
     wl_array_release(&states);
     uint32_t serial = wl_display_next_serial(surf->srv->display);
