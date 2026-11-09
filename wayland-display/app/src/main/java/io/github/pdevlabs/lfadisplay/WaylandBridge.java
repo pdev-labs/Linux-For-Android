@@ -51,6 +51,9 @@ public final class WaylandBridge {
 
     public static native void nativeOnKeyEvent(int keyCode, int metaState, boolean isDown, long timeMs);
 
+    /** Physical position of the pointer, used to draw the cursor surface. */
+    public static native void nativeSetCursorPhysical(float x, float y);
+
     public static native void nativeSetCursorVisible(boolean visible);
 
     public static native boolean nativeHasActiveClients();
