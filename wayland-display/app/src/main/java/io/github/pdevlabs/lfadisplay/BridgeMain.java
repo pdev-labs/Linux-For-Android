@@ -31,12 +31,14 @@ public final class BridgeMain {
     private static final String TAG = "LfaWdBridge";
 
     private final Context context;
+    private final String pkg;
     private final BridgeBinder binder = new BridgeBinder();
     private final Handler handler;
     private int listenFd = -1;
 
-    private BridgeMain(Context context) {
+    private BridgeMain(Context context, String pkg) {
         this.context = context;
+        this.pkg = pkg;
         this.handler = new Handler(Looper.getMainLooper());
     }
 
@@ -68,7 +70,7 @@ public final class BridgeMain {
             if (fd < 0)
                 throw new IOException("cannot bind " + path);
 
-            new BridgeMain(context).run(pkg, fd);
+            new BridgeMain(context, pkg).run(fd);
         } catch (Exception e) {
             Log.e(TAG, "bridge failed", e);
             e.printStackTrace(System.err);
@@ -76,7 +78,7 @@ public final class BridgeMain {
         }
     }
 
-    private void run(final String pkg, int fd) {
+    private void run(int fd) {
         listenFd = fd;
         Log.i(TAG, "listening on fd " + fd + " for " + pkg);
 
