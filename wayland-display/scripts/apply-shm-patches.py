@@ -464,6 +464,21 @@ def patch_wayland_output_announce(root: pathlib.Path) -> None:
         """        // The following xdg_surface.configure completes and acknowledges this size.
         waylandState.pendingSize = {w, h};""",
     )
+    # 0.15.1 announces the output from an idle callback; 0.16 defers it to
+    # the configure. Accept either starting point and end in the same place.
+    if "Start the configure handshake even when there is no other host traffic." not in wayland.read_text():
+      patch(
+        wayland,
+        """    o->self = o;
+    if (backend->ready)
+        o->swapchain = CSwapchain::create(backend->primaryAllocator, self.lock());
+    idleCallbacks.emplace_back([this, o]() { backend->events.newOutput.emit(SP<IOutput>(o)); });""",
+        """    o->self = o;
+    if (backend->ready)
+        o->swapchain = CSwapchain::create(backend->primaryAllocator, self.lock());
+    // Announcement happens on the first xdg_surface.configure, once the
+    // parent has given us a real size. See applyConfigure().""",
+    )
     patch(
         wayland,
         """    o->self = o;
@@ -475,7 +490,7 @@ def patch_wayland_output_announce(root: pathlib.Path) -> None:
     if (backend->ready)
         o->swapchain = CSwapchain::create(backend->primaryAllocator, self.lock());
     // Start the configure handshake even when there is no other host traffic.""",
-    )
+      )
     if "void Aquamarine::CWaylandOutput::applyConfigure()" not in wayland.read_text():
             patch(
                 wayland,
@@ -534,19 +549,19 @@ def patch_hyprland(root: pathlib.Path) -> None:
             patch(
                 root / "src/render/gl/GLRenderbuffer.hpp",
                 '''        void bind() override;
-            void unbind() override;
+        void unbind() override;
 
       private:
-            void*  m_image = nullptr;
-            GLuint m_rbo   = 0;''',
+        void*  m_image = nullptr;
+        GLuint m_rbo   = 0;''',
             '''        void bind() override;
-            void unbind() override;
-            void presentToShm() override;
+        void unbind() override;
+        void presentToShm() override;
 
       private:
-            void*  m_image = nullptr;
-            GLuint m_rbo   = 0;
-            bool   m_shm   = false;''',
+        void*  m_image = nullptr;
+        GLuint m_rbo   = 0;
+        bool   m_shm   = false;''',
     )
 
     patch(
