@@ -1,0 +1,73 @@
+name: wayland-display
+
+on:
+  push:
+    branches: [wayland-display]
+    paths:
+      - 'wayland-display/**'
+      - '.github/workflows/wayland-display.yml'
+  pull_request:
+    paths:
+      - 'wayland-display/**'
+      - '.github/workflows/wayland-display.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  apk:
+    name: build APKs
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Install SDK packages
+        run: sdkmanager --install "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Install host build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y meson ninja-build pkg-config libwayland-bin wayland-protocols
+
+      - uses: nttld/setup-ndk@v1
+        id: ndk
+        with:
+          ndk-version: r27c
+          add-to-path: false
+
+      - name: Build native libraries
+        env:
+          ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
+        run: |
+          chmod +x wayland-display/scripts/build-native.sh
+          wayland-display/scripts/build-native.sh
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.11.1'
+
+      - name: Build APKs
+        working-directory: wayland-display
+        run: gradle --no-daemon assembleCompatibleDebug assembleStandardDebug
+
+      - name: Collect APKs
+        run: |
+          mkdir -p out
+          cp wayland-display/app/build/outputs/apk/compatible/debug/*.apk out/lfa-display-compatible.apk
+          cp wayland-display/app/build/outputs/apk/standard/debug/*.apk out/lfa-display-standard.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lfa-display-apk
+          path: out/*.apk
+          retention-days: 14

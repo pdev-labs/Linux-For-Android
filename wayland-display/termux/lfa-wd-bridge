@@ -1,0 +1,36 @@
+#!/data/data/com.termux/files/usr/bin/sh
+# Termux-side bridge for the LFA display app.
+#
+# The display app cannot bind a Unix socket at a path Termux and the guest can
+# reach: the app's private directory is not writable by Termux and Termux's
+# directory is not writable by the app. This script runs a small Java class
+# from the installed APK with app_process (so it runs as the Termux user),
+# binds the socket there, and hands the listening fd to the app over Binder.
+#
+# Usage: lfa-wd-bridge [SOCKET_PATH]
+#   default: $TMPDIR/lfa-wayland/wayland-0
+
+set -eu
+
+PKG="${LFA_WD_PACKAGE:-io.github.pdevlabs.lfadisplay}"
+SOCK="${1:-${TMPDIR:-/data/data/com.termux/files/usr/tmp}/lfa-wayland/wayland-0}"
+
+mkdir -p "$(dirname "$SOCK")"
+rm -f "$SOCK"
+
+APK="$(pm path "$PKG" 2>/dev/null | sed -n 's/^package://p' | head -1)"
+if [ -z "$APK" ]; then
+    echo "lfa-wd-bridge: $PKG is not installed" >&2
+    exit 1
+fi
+
+LIBDIR="$(dirname "$APK")/lib/arm64"
+[ -d "$LIBDIR" ] || LIBDIR="$(dirname "$APK")/lib/arm64-v8a"
+if [ ! -f "$LIBDIR/liblfabridge.so" ]; then
+    echo "lfa-wd-bridge: native libraries missing in $LIBDIR" >&2
+    exit 1
+fi
+
+echo "lfa-wd-bridge: socket $SOCK"
+exec app_process -Djava.class.path="$APK" /system/bin \
+    io.github.pdevlabs.lfadisplay.BridgeMain "$SOCK" "$PKG" "$LIBDIR"

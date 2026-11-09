@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Shared-UID build: runs under the Termux UID so it can create the Wayland
+  socket inside Termux's tmp directory. Requires the same signing key as the
+  installed Termux (the public AOSP test key for GitHub builds). The regular
+  build uses the Termux-side bridge instead and does not need this.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    android:sharedUserId="com.termux" />
