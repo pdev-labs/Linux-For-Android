@@ -134,6 +134,9 @@ struct compositor_surface {
     int32_t wm_saved_w, wm_saved_h; /* pre-maximize size for restore (best-effort) */
     int32_t wm_req_w, wm_req_h;     /* requested toplevel size (DIRECT); 0 = let client decide */
     bool wm_resizing;              /* true while compositor-driven resize drag is active */
+    bool configured_after_buffer; /* sent the post-map configure (nested compositors
+                                  * ignore the initial one: their output is not
+                                  * enabled until after the first commit) */
     char title[256];             /* from xdg_toplevel.set_title */
     char app_id[256];            /* from xdg_toplevel.set_app_id */
 };

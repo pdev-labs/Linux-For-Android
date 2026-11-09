@@ -277,6 +277,14 @@ static void surface_commit(struct wl_client *client, struct wl_resource *resourc
         }
     }
 
+    /* Nested compositors (sway/wlroots) ignore the configure sent at get_toplevel
+     * because their output is not enabled until after this first commit. Send one
+     * more once the surface is mapped so the toplevel can adopt the output size. */
+    if (surf->xdg_toplevel_res && surf->current_buffer && !surf->configured_after_buffer) {
+        surf->configured_after_buffer = true;
+        send_toplevel_configure(surf);
+    }
+
     /* Send wl_surface.enter(output) when surface gets a buffer and hasn't yet */
     if (surf->current_buffer && !surf->entered_output) {
         struct wl_client *cl = wl_resource_get_client(surf->resource);
