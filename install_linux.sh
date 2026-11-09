@@ -1961,6 +1961,7 @@ lfa_wd_installed() {
 
 lfa_wd_bridge_running() {
     local _p="" _c=""
+    [ -f "$(lfa_wd_bridge_pidfile)" ] || return 1
     _p="$(tr -dc '0-9' < "$(lfa_wd_bridge_pidfile)" 2>/dev/null || true)"
     [ -n "$_p" ] || return 1
     kill -0 "$_p" 2>/dev/null || return 1

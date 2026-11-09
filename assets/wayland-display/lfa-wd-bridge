@@ -31,6 +31,9 @@ if [ ! -f "$LIBDIR/liblfabridge.so" ]; then
     exit 1
 fi
 
+APP_PROCESS=/system/bin/app_process64
+[ -x "$APP_PROCESS" ] || APP_PROCESS=/system/bin/app_process
+
 echo "lfa-wd-bridge: socket $SOCK"
-exec app_process -Djava.class.path="$APK" /system/bin \
+exec "$APP_PROCESS" -Djava.class.path="$APK" /system/bin \
     io.github.pdevlabs.lfadisplay.BridgeMain "$SOCK" "$PKG" "$LIBDIR"

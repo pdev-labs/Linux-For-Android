@@ -56,7 +56,8 @@ static void client_created_notify(struct wl_listener *listener, void *data) {
 
 static wayland_server_t *compositor_create_impl(const char *runtime_dir, const char *socket_name, int listen_fd) {
     if (!runtime_dir) return NULL;
-    if (listen_fd < 0 && (!socket_name || socket_name[0] == '\0')) return NULL;
+    /* listen_fd == -2 means "no socket": clients are attached later. */
+    if (listen_fd == -1 && (!socket_name || socket_name[0] == '\0')) return NULL;
     struct wayland_server *srv = calloc(1, sizeof(*srv));
     if (!srv) return NULL;
     srv->runtime_dir = strdup(runtime_dir);
