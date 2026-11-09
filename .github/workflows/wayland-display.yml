@@ -34,8 +34,10 @@ jobs:
           ANDROID_HOME: /usr/local/lib/android/sdk
           ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
         run: |
-          yes | sdkmanager --licenses >/dev/null || true
-          sdkmanager --install "platforms;android-35" "build-tools;35.0.0"
+          SDKM="$(ls /usr/local/lib/android/sdk/cmdline-tools/*/bin/sdkmanager 2>/dev/null | head -n1)"
+          [ -n "$SDKM" ] || { echo "sdkmanager not found" >&2; exit 1; }
+          yes | "$SDKM" --licenses >/dev/null || true
+          "$SDKM" --install "platforms;android-35" "build-tools;35.0.0"
 
       - name: Install host build tools
         run: |
