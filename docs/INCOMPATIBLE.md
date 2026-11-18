@@ -124,7 +124,7 @@ It is not a kernel or root bridge.
 | Clipboard, notifications, vibrate, torch, share | yes | Android-side actions |
 | Wi-Fi information | yes | connection/scan data, not full control |
 | Telephony / SMS / contacts | yes, with permissions | Android APIs |
-| USB | partial | `termux-usb` file descriptor + libusb, not `/dev/bus/usb` |
+| USB | partial, implemented | `lfa usb` lists real devices, maps the Termux:API descriptor to `/dev/bus/usb` and `/dev/ttyUSB0` with a preload, and runs esptool in the guest; kernel drivers still do not attach (see [USB.md](USB.md)) |
 | Bluetooth | partial / version dependent | some Android APIs, not BlueZ HCI |
 | Kernel modules, `mount`, namespaces, cgroups | no | unavailable |
 | Raw sockets, TUN/TAP, iptables | no | unavailable |
@@ -135,6 +135,12 @@ Use `lfa android status`, `lfa android test`, and `lfa android install` to see
 what this device actually provides. The bridge writes files into
 `$PREFIX/tmp`, which the guest sees as `/tmp` because LFA launches proot with
 `--shared-tmp`.
+
+`lfa usb` uses the same bridge for USB. It shows the real device list from
+`termux-usb -l`, reads descriptors after Android grants permission, and maps
+the real descriptor into guest sessions (`lfa usb attach`, `lfa usb tty`).
+libusb and serial tools work against the real device; kernel USB drivers
+(`usb-storage`, `usbhid`, USB audio) still do not attach. See [USB.md](USB.md).
 
 ## Emulator-verified vs device-verified
 

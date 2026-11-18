@@ -507,17 +507,34 @@ echo "===== L2: arrow-key UI over a real pty ====="
 fresh_env
 if command -v script >/dev/null 2>&1; then
     # Typing "3" + Enter opens the manager; "13" + Enter exits.
-    printf '3\n13\n' | TERM=xterm-256color timeout 15 script -qec "bash '$REPO/install_linux.sh'" /dev/null > "$T/tty-digits.log" 2>&1
+    printf '3\n13\n' | TERM=xterm-256color timeout 30 script -qec "bash '$REPO/install_linux.sh'" /dev/null > "$T/tty-digits.log" 2>&1
     rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: L2 pty digit ui exit $rc"; }
     check "L2 digit menu" 'Linux for Termux Manager' "$T/tty-digits.log"
     # Two Down arrows + Enter pick "Manager"; q goes back and exits.
-    printf '\033[B\033[B\nq' | TERM=xterm-256color timeout 15 script -qec "bash '$REPO/install_linux.sh'" /dev/null > "$T/tty-arrows.log" 2>&1
+    printf '\033[B\033[B\nq' | TERM=xterm-256color timeout 30 script -qec "bash '$REPO/install_linux.sh'" /dev/null > "$T/tty-arrows.log" 2>&1
     rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: L2 pty arrow ui exit $rc"; }
     check "L2 arrows navigate" 'Bye.' "$T/tty-arrows.log"
     grep -q $'\033\[' "$T/tty-arrows.log" && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: L2 no ANSI colours"; }
 else
     echo "SKIP: L2 (no 'script' for pty test)"; pass=$((pass+4))
 fi
+
+echo "===== L3: a failing update check does not abort the UI ====="
+fresh_env
+cat > "$T/fakebin/curl" <<'EOF'
+#!/bin/sh
+exit 28
+EOF
+chmod +x "$T/fakebin/curl"
+if command -v script >/dev/null 2>&1; then
+    # curl 28 is a timeout; the advisory check must not kill the installer.
+    printf '3\n13\n' | TERM=xterm-256color timeout 30 script -qec "bash '$REPO/install_linux.sh'" /dev/null > "$T/tty-curl.log" 2>&1
+    rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: L3 curl failure aborted the UI (exit $rc)"; }
+    check "L3 menu survives a failing update check" 'Linux for Termux Manager' "$T/tty-curl.log"
+else
+    echo "SKIP: L3 (no 'script' for pty test)"; pass=$((pass+2))
+fi
+rm -f "$T/fakebin/curl"
 
 echo "===== M: dpkg statoverride shim ====="
 fresh_env
@@ -1428,6 +1445,491 @@ check "Y10 remove needs -y" 'Refusing to remove without -y' "$T/y10-rm-no.log"
     || { fail=$((fail+1)); echo "FAIL: Y10 AppImage directory survived remove"; }
 check "Y10 env marker added" 'APPIMAGE_EXTRACT_AND_RUN=1' "$Y10ROOT/etc/profile.d/zz-lfa-env.sh"
 check "Y10 env marker exported" 'export APPIMAGE_EXTRACT_AND_RUN' "$Y10ROOT/etc/profile.d/zz-lfa-env.sh"
+
+echo "===== Y11: lfa usb (Termux:API bridge) ====="
+fresh_env
+export GETPROP_SDK=36
+printf '%s\n' 1 '' 13 | bash "$REPO/install_linux.sh" > "$T/y11-base.log" 2>&1
+LFA="$T/prefix/bin/lfa"
+UROOT="$T/prefix/var/lib/proot-distro/installed-rootfs/debian"
+mkdir -p "$UROOT/etc" "$UROOT/usr" "$UROOT/home/user" "$UROOT/run"
+# A real ELF at bin/sh lets the installer detect the guest architecture.
+mkdir -p "$UROOT/bin" "$UROOT/dev"
+[ -r /bin/sh ] && cp /bin/sh "$UROOT/bin/sh" 2>/dev/null || true
+printf 'DISTRO="debian"\nUSER_NAME="user"\nDE="xfce4"\n' \
+    > "$UROOT/etc/termux-linux-manager.conf"
+
+"$LFA" help > "$T/y11-help.log" 2>&1
+check "Y11 top-level help" 'usb           real USB devices' "$T/y11-help.log"
+"$LFA" usb help > "$T/y11-usbhelp.log" 2>&1; rc=$?
+[ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y11 usb help exit $rc"; }
+check "Y11 usb help exec" 'exec DEV -- COMMAND' "$T/y11-usbhelp.log"
+check "Y11 usb help attach" 'attach [DEV]' "$T/y11-usbhelp.log"
+check "Y11 usb help honesty" 'proot still cannot create device nodes' "$T/y11-usbhelp.log"
+
+# Termux:API stubs: two devices; scan writes the shared files that the real
+# guest-side descriptor reader would write; exec runs the LFA callback.
+cat > "$T/fakebin/termux-usb" <<'FAKETU'
+#!/bin/bash
+echo "termux-usb $*" >> "$HOME/tu.log"
+case " $* " in
+    *" -l "*)
+        if [ "${TU_EMPTY:-0}" = "1" ]; then
+            printf '[]\n'
+            exit 0
+        fi
+        printf '["/dev/bus/usb/001/002","/dev/bus/usb/001/003"]\n' ;;
+    *" -h "*)
+        echo "  -E           transfer file descriptor as TERMUX_USB_FD env var"
+        echo "  -e command   execute the specified command"
+        exit 0 ;;
+    *)
+        if [ "${LFA_USB_MODE:-}" = "prep" ]; then
+            d="${LFA_USB_OUT#/tmp/}"; t="${LFA_USB_TSV#/tmp/}"
+            b="${LFA_USB_BLOB#/tmp/}"; s="${LFA_USB_SYSFS_OUT#/tmp/}"
+            mkdir -p "$PREFIX/tmp/$(dirname "$d")" "$PREFIX/tmp/$(dirname "$b")"
+            printf '{"bus":"%s","dev":"%s","vid":"1d6b","pid":"0002"}\n' \
+                "$LFA_USB_BUS" "$LFA_USB_DEV" > "$PREFIX/tmp/$d"
+            printf '%s\t%s\t%s\t1d6b\t0002\t2.00\t09\t00\t00\tFake Inc\tFake Hub\tSN-%s\t0:09:00:00:0\tscan\n' \
+                "$LFA_USB_BUS" "$LFA_USB_DEV" "$LFA_USB_PATH" "$LFA_USB_DEV" \
+                > "$PREFIX/tmp/$t"
+            printf 'BLOBDATA' > "$PREFIX/tmp/$b"
+            mkdir -p "$PREFIX/tmp/$s/1-2"
+            printf '1\n' > "$PREFIX/tmp/$s/1-2/busnum"
+            printf '2\n' > "$PREFIX/tmp/$s/1-2/devnum"
+            printf '1d6b\n' > "$PREFIX/tmp/$s/1-2/idVendor"
+            printf '0002\n' > "$PREFIX/tmp/$s/1-2/idProduct"
+            printf 'devicedescriptors' > "$PREFIX/tmp/$s/1-2/descriptors"
+            exit 0
+        fi
+        if [ "${LFA_USB_MODE:-}" = "exec" ]; then
+            {
+                echo "MODE=exec"
+                echo "MAP=${LFA_USB_MAP:-}"
+                echo "BIND=${LFA_USB_BIND:-}"
+                echo "PRELOAD=${LFA_USB_PRELOAD:-}"
+            } >> "$HOME/tu-session.log"
+            if [ -n "${LFA_USB_RUN_SCRIPT:-}" ]; then
+                cp "$PREFIX/tmp/${LFA_USB_RUN_SCRIPT#/tmp/}" "$HOME/last-run.sh" 2>/dev/null || true
+            fi
+            for _f in "$PREFIX/tmp/lfa-usb"/esptool-*.sh; do
+                [ -f "$_f" ] && cp "$_f" "$HOME/last-esptool.sh" || true
+            done
+            cb=""; prev=""
+            for a in "$@"; do
+                [ "$prev" = "-e" ] && cb="$a"
+                prev="$a"
+            done
+            [ -n "$cb" ] || exit 1
+            TERMUX_USB_FD=9 "$cb"
+            exit $?
+        fi
+        if [ "${LFA_USB_MODE:-}" = "scan" ]; then
+            case "${LFA_USB_OUT:-}" in /tmp/lfa-usb/*) ;; *) exit 9 ;; esac
+            d="${LFA_USB_OUT#/tmp/}"
+            t="${LFA_USB_TSV#/tmp/}"
+            mkdir -p "$PREFIX/tmp/$(dirname "$d")"
+            printf '{"bus":"%s","dev":"%s","vid":"1d6b","pid":"0002"}\n' \
+                "$LFA_USB_BUS" "$LFA_USB_DEV" > "$PREFIX/tmp/$d"
+            printf '%s\t%s\t%s\t1d6b\t0002\t2.00\t09\t00\t00\tFake Inc\tFake Hub\tSN-%s\t0:09:00:00:0\tscan\n' \
+                "$LFA_USB_BUS" "$LFA_USB_DEV" "$LFA_USB_PATH" "$LFA_USB_DEV" \
+                > "$PREFIX/tmp/$t"
+            exit 0
+        fi
+        cb=""; prev=""
+        for a in "$@"; do
+            [ "$prev" = "-e" ] && cb="$a"
+            prev="$a"
+        done
+        [ -n "$cb" ] || exit 1
+        TERMUX_USB_FD=9 "$cb"
+        ;;
+esac
+FAKETU
+chmod +x "$T/fakebin/termux-usb"
+cat > "$T/fakebin/pm" <<'FAKEPM'
+#!/bin/sh
+case "$*" in
+    *features*) echo "feature:android.hardware.usb.host" ;;
+    *packages*) echo "package:com.termux.api" ;;
+esac
+FAKEPM
+chmod +x "$T/fakebin/pm"
+
+"$LFA" usb status > "$T/y11-status0.log" 2>&1; rc=$?
+[ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y11 status exit $rc"; }
+check "Y11 status termux-api" 'termux-api package: installed' "$T/y11-status0.log"
+check "Y11 status app" 'Termux:API app:     installed' "$T/y11-status0.log"
+check "Y11 status host" 'USB host feature:   yes' "$T/y11-status0.log"
+check "Y11 status devices" 'devices visible:    2' "$T/y11-status0.log"
+check "Y11 status honest" 'preload that duplicates the descriptor' "$T/y11-status0.log"
+
+"$LFA" usb list > "$T/y11-list0.log" 2>&1; rc=$?
+[ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y11 list exit $rc"; }
+check "Y11 list bus 1" 'Bus 001 Device 002' "$T/y11-list0.log"
+check "Y11 list bus 3" 'Bus 001 Device 003' "$T/y11-list0.log"
+check "Y11 list unknown" 'ID ----:---- Unknown device' "$T/y11-list0.log"
+check "Y11 list scan hint" 'lfa usb scan' "$T/y11-list0.log"
+
+"$LFA" usb list --json > "$T/y11-json.log" 2>&1
+check "Y11 json bus" '"bus":"001"' "$T/y11-json.log"
+check "Y11 json source" '"source":"enum"' "$T/y11-json.log"
+
+TU_EMPTY=1 "$LFA" usb list > "$T/y11-empty.log" 2>&1; rc=$?
+[ "$rc" = "1" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y11 no devices exit $rc"; }
+check "Y11 no devices message" 'No USB devices are visible' "$T/y11-empty.log"
+
+"$LFA" usb refresh > "$T/y11-refresh.log" 2>&1; rc=$?
+[ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y11 refresh exit $rc"; }
+check "Y11 refresh count" 'USB bridge updated: 2 device(s)' "$T/y11-refresh.log"
+check "Y11 bridge tsv" '001	002	/dev/bus/usb/001/002' "$T/prefix/tmp/lfa-usb/devices.tsv"
+check "Y11 bridge raw json" '/dev/bus/usb/001/002' "$T/prefix/tmp/lfa-usb/devices.json"
+check "Y11 bridge readme" 'lfa usb attach DEV -- COMMAND' "$T/prefix/tmp/lfa-usb/README"
+[ -f "$T/prefix/tmp/lfa-usb/sys/001-002/busnum" ] && [ -f "$T/prefix/tmp/lfa-usb/sys/001-002/idVendor" ] \
+    && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y11 sysfs view missing"; }
+
+"$LFA" usb scan -i debian > "$T/y11-scan.log" 2>&1; rc=$?
+[ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y11 scan exit $rc"; }
+check "Y11 scan summary" 'Scanned: 2 succeeded, 0 failed' "$T/y11-scan.log"
+check "Y11 scan real id" 'Bus 001 Device 002: ID 1d6b:0002 Fake Inc Fake Hub' "$T/y11-scan.log"
+[ -f "$T/home/.cache/linux-for-android/usb/dev-001-002.tsv" ] && pass=$((pass+1)) \
+    || { fail=$((fail+1)); echo "FAIL: Y11 descriptor cache missing"; }
+[ -f "$T/prefix/tmp/lfa-usb/scan-001-002.json" ] && pass=$((pass+1)) \
+    || { fail=$((fail+1)); echo "FAIL: Y11 scan JSON missing"; }
+"$LFA" usb scan -i debian --json > "$T/y11-scanjson.log" 2>&1; rc=$?
+[ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y11 scan --json exit $rc"; }
+if python3 - "$T/y11-scanjson.log" <<'PY'
+import json, sys
+data = json.load(open(sys.argv[1]))
+assert isinstance(data, list) and len(data) == 2, data
+assert any(item.get("vid") == "1d6b" for item in data)
+PY
+then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: Y11 scan --json is not a JSON array"; fi
+
+"$LFA" usb list > "$T/y11-list1.log" 2>&1
+check "Y11 list described id" 'ID 1d6b:0002 Fake Inc Fake Hub' "$T/y11-list1.log"
+
+"$LFA" usb enable -i debian > "$T/y11-enable.log" 2>&1; rc=$?
+[ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y11 enable exit $rc"; }
+check "Y11 enable reports" 'USB helpers installed in debian' "$T/y11-enable.log"
+for _f in usr/local/bin/lsusb usr/local/bin/lfa-usb usr/local/libexec/lfa-usb-desc.py; do
+    [ -f "$UROOT/$_f" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y11 missing $_f"; }
+done
+sh -n "$UROOT/usr/local/bin/lsusb" && sh -n "$UROOT/usr/local/bin/lfa-usb" \
+    && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y11 guest shim syntax"; }
+bash -n "$T/prefix/bin/lfa-usb-callback" && pass=$((pass+1)) \
+    || { fail=$((fail+1)); echo "FAIL: Y11 callback syntax"; }
+check "Y11 callback fd" 'TERMUX_USB_FD' "$T/prefix/bin/lfa-usb-callback"
+check "Y11 callback login" 'login $FLAGS' "$T/prefix/bin/lfa-usb-callback"
+[ "$(readlink "$UROOT/run/lfa-usb" 2>/dev/null)" = "/tmp/lfa-usb" ] && pass=$((pass+1)) \
+    || { fail=$((fail+1)); echo "FAIL: Y11 /run/lfa-usb symlink missing"; }
+PYTHONDONTWRITEBYTECODE=1 python3 "$UROOT/usr/local/libexec/lfa-usb-desc.py" --selftest > "$T/y11-desc.log" 2>&1
+check "Y11 descriptor selftest" 'selftest: ok' "$T/y11-desc.log"
+PYTHONDONTWRITEBYTECODE=1 python3 "$REPO/lib/usb-desc.py" --fd 0 --json \
+    --out "$T/y11-desc-err.json" > "$T/y11-desc-err.log" 2>&1; rc=$?
+[ "$rc" = "2" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y11 ioctl error exit $rc"; }
+check "Y11 ioctl error json" 'USBDEVFS_CONTROL failed' "$T/y11-desc-err.json"
+check_absent "Y11 ioctl no traceback" 'Traceback' "$T/y11-desc-err.log"
+
+UBR="$T/prefix/tmp/lfa-usb"
+LFA_USB_BRIDGE="$UBR" sh "$UROOT/usr/local/bin/lsusb" > "$T/y11-lsusb.log" 2>&1; rc=$?
+[ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y11 guest lsusb exit $rc"; }
+check "Y11 guest lsusb" 'Bus 001 Device 002: ID 1d6b:0002 Fake Inc Fake Hub' "$T/y11-lsusb.log"
+LFA_USB_BRIDGE="$UBR" sh "$UROOT/usr/local/bin/lsusb" -d 1d6b:0002 > "$T/y11-d.log" 2>&1
+check "Y11 lsusb -d" 'Fake Hub' "$T/y11-d.log"
+LFA_USB_BRIDGE="$UBR" sh "$UROOT/usr/local/bin/lsusb" -d dead:beef > "$T/y11-dno.log" 2>&1; rc=$?
+[ "$rc" = "1" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y11 lsusb -d no match exit $rc"; }
+LFA_USB_BRIDGE="$UBR" sh "$UROOT/usr/local/bin/lsusb" -s 001:003 > "$T/y11-s.log" 2>&1
+check "Y11 lsusb -s" 'Device 003' "$T/y11-s.log"
+LFA_USB_BRIDGE="$UBR" sh "$UROOT/usr/local/bin/lsusb" -t > "$T/y11-t.log" 2>&1
+check "Y11 lsusb -t" 'Class=Hub' "$T/y11-t.log"
+LFA_USB_BRIDGE="$UBR" sh "$UROOT/usr/local/bin/lsusb" -v > "$T/y11-v.log" 2>&1
+check "Y11 lsusb -v" 'bcdUSB        2.00' "$T/y11-v.log"
+check "Y11 lsusb -v serial" 'iSerial       SN-002' "$T/y11-v.log"
+LFA_USB_BRIDGE="$UBR" sh "$UROOT/usr/local/bin/lsusb" -V > "$T/y11-vv.log" 2>&1
+check "Y11 lsusb version" 'LFA USB bridge' "$T/y11-vv.log"
+LFA_USB_BRIDGE="$T/no-such-bridge" sh "$UROOT/usr/local/bin/lsusb" > "$T/y11-nodb.log" 2>&1; rc=$?
+[ "$rc" = "1" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y11 lsusb no bridge exit $rc"; }
+check "Y11 lsusb no bridge" 'the USB bridge has no data' "$T/y11-nodb.log"
+
+LFA_USB_BRIDGE="$UBR" LFA_USB_DESC="$UROOT/usr/local/libexec/lfa-usb-desc.py" \
+    sh "$UROOT/usr/local/bin/lfa-usb" status > "$T/y11-gstatus.log" 2>&1
+check "Y11 guest status" 'devices:          2' "$T/y11-gstatus.log"
+check "Y11 guest status fd" 'USB fd:           none' "$T/y11-gstatus.log"
+LFA_USB_BRIDGE="$UBR" sh "$UROOT/usr/local/bin/lfa-usb" fd > "$T/y11-fd0.log" 2>&1; rc=$?
+[ "$rc" = "1" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y11 fd without session exit $rc"; }
+LFA_USB_BRIDGE="$UBR" TERMUX_USB_FD=7 sh "$UROOT/usr/local/bin/lfa-usb" fd > "$T/y11-fd1.log" 2>&1
+check "Y11 fd prints" '7' "$T/y11-fd1.log"
+LFA_USB_BRIDGE="$UBR" sh "$UROOT/usr/local/bin/lfa-usb" info 001 002 > "$T/y11-info.log" 2>&1
+check "Y11 info manufacturer" 'Fake Inc' "$T/y11-info.log"
+check "Y11 info descriptor" 'Full descriptor' "$T/y11-info.log"
+LFA_USB_BRIDGE="$UBR" sh "$UROOT/usr/local/bin/lfa-usb" path 1 2 > "$T/y11-path.log" 2>&1
+check "Y11 path" '/dev/bus/usb/001/002' "$T/y11-path.log"
+LFA_USB_BRIDGE="$UBR" LFA_USB_DESC="$UROOT/usr/local/libexec/lfa-usb-desc.py" \
+    sh "$UROOT/usr/local/bin/lfa-usb" desc --selftest > "$T/y11-gdesc.log" 2>&1
+check "Y11 guest desc" 'selftest: ok' "$T/y11-gdesc.log"
+
+"$LFA" usb exec 001/002 -i debian -- lfa-usb status > "$T/y11-exec.log" 2>&1; rc=$?
+[ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y11 exec exit $rc"; }
+check "Y11 exec asks permission" '-r -E -e' "$T/home/tu.log"
+check "Y11 exec enters guest" 'login' "$T/home/pd-calls.log"
+check "Y11 exec shared tmp" '--shared-tmp' "$T/home/pd-calls.log"
+if ls "$T/prefix/tmp/lfa-usb"/run-*.sh >/dev/null 2>&1; then
+    fail=$((fail+1)); echo "FAIL: Y11 exec run script survived"
+else
+    pass=$((pass+1))
+fi
+"$LFA" usb exec --no-permission 001/002 -i debian -- true > "$T/y11-exec2.log" 2>&1
+if tail -n1 "$T/home/tu.log" | grep -q -- '-r '; then
+    fail=$((fail+1)); echo "FAIL: Y11 --no-permission still used -r"
+else
+    pass=$((pass+1))
+fi
+
+"$LFA" usb watch --interval 0 --count 1 > "$T/y11-watch.log" 2>&1; rc=$?
+[ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y11 watch exit $rc"; }
+check "Y11 watch starts" 'Watching USB devices' "$T/y11-watch.log"
+check "Y11 watch event" '[+] Bus 001 Device 002' "$T/y11-watch.log"
+
+"$LFA" usb disable -i debian > "$T/y11-disable.log" 2>&1; rc=$?
+[ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y11 disable exit $rc"; }
+[ ! -e "$UROOT/usr/local/bin/lsusb" ] && [ ! -e "$UROOT/usr/local/bin/lfa-usb" ] \
+    && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y11 disable left shims"; }
+[ ! -e "$UROOT/run/lfa-usb" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y11 disable left symlink"; }
+"$LFA" usb status > "$T/y11-status1.log" 2>&1
+check "Y11 status disabled" 'guest helpers:      not enabled' "$T/y11-status1.log"
+
+# Never overwrite a foreign /usr/local/bin/lsusb.
+printf '#!/bin/sh\necho custom lsusb\n' > "$UROOT/usr/local/bin/lsusb"
+"$LFA" usb enable -i debian > "$T/y11-foreign.log" 2>&1; rc=$?
+[ "$rc" = "1" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y11 foreign shim exit $rc"; }
+check "Y11 foreign shim refused" 'was not created by LFA' "$T/y11-foreign.log"
+rm -f "$UROOT/usr/local/bin/lsusb" "$UROOT/usr/local/bin/lfa-usb"
+
+"$LFA" usb bogus > "$T/y11-bogus.log" 2>&1; rc=$?
+[ "$rc" = "2" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y11 bogus exit $rc"; }
+check "Y11 bogus message" 'Unknown usb command: bogus' "$T/y11-bogus.log"
+
+# Readable host sysfs means IDs work without an Android permission dialog.
+# Most phones hide this tree; the fallback is the descriptor scan above.
+rm -rf "$T/home/.cache/linux-for-android/usb"
+SYS="$T/fakesys"
+mkdir -p "$SYS/1-1" "$SYS/1-1:1.0"
+printf '1\n' > "$SYS/1-1/busnum"
+printf '2\n' > "$SYS/1-1/devnum"
+printf 'abcd\n' > "$SYS/1-1/idVendor"
+printf '1234\n' > "$SYS/1-1/idProduct"
+printf '2.10\n' > "$SYS/1-1/version"
+printf 'ff\n' > "$SYS/1-1/bDeviceClass"
+printf '00\n' > "$SYS/1-1/bDeviceSubClass"
+printf '00\n' > "$SYS/1-1/bDeviceProtocol"
+printf 'SysVendor\n' > "$SYS/1-1/manufacturer"
+printf 'SysGadget\n' > "$SYS/1-1/product"
+printf 'SYS-1\n' > "$SYS/1-1/serial"
+printf '00\n' > "$SYS/1-1:1.0/bInterfaceNumber"
+printf 'ff\n' > "$SYS/1-1:1.0/bInterfaceClass"
+printf '00\n' > "$SYS/1-1:1.0/bInterfaceSubClass"
+printf '00\n' > "$SYS/1-1:1.0/bInterfaceProtocol"
+LFA_USB_SYSFS="$SYS" "$LFA" usb refresh > "$T/y11-sysfs.log" 2>&1
+LFA_USB_SYSFS="$SYS" "$LFA" usb list > "$T/y11-sysfs-list.log" 2>&1
+check "Y11 sysfs vendor" 'ID abcd:1234 SysVendor SysGadget' "$T/y11-sysfs-list.log"
+check "Y11 sysfs source" 'sysfs' "$T/prefix/tmp/lfa-usb/devices.tsv"
+check "Y11 sysfs interface" '0:ff:00:00:0' "$T/prefix/tmp/lfa-usb/devices.tsv"
+
+# DEV shortcuts are normalised before Termux:API sees them.
+"$LFA" usb exec 001:002 -i debian --root -- true > "$T/y11-exec3.log" 2>&1; rc=$?
+[ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y11 colon exec exit $rc"; }
+check "Y11 colon path" '/dev/bus/usb/001/002' "$T/home/tu.log"
+check "Y11 root user" '--user root' "$T/home/pd-calls.log"
+
+# A termux-api without -E cannot export a descriptor; say so before running.
+mv "$T/fakebin/termux-usb" "$T/fakebin/termux-usb.good"
+cat > "$T/fakebin/termux-usb" <<'OLDTU'
+#!/bin/sh
+case "$1" in
+    -l) echo '["/dev/bus/usb/001/002"]' ;;
+    -h) echo "Usage: termux-usb [-l | [-r] [-e command] device]" ;;
+    *) exit 1 ;;
+esac
+OLDTU
+chmod +x "$T/fakebin/termux-usb"
+"$LFA" usb exec 001/002 -i debian -- true > "$T/y11-oldapi.log" 2>&1; rc=$?
+[ "$rc" = "1" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y11 old termux-api exit $rc"; }
+check "Y11 old termux-api" 'cannot export a USB descriptor' "$T/y11-oldapi.log"
+mv -f "$T/fakebin/termux-usb.good" "$T/fakebin/termux-usb"
+
+# Missing client and malformed output are reported, not guessed.
+mv "$T/fakebin/termux-usb" "$T/fakebin/termux-usb.off"
+"$LFA" usb list > "$T/y11-noapi.log" 2>&1; rc=$?
+[ "$rc" = "1" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y11 no termux-usb exit $rc"; }
+check "Y11 no client" 'termux-usb is not installed' "$T/y11-noapi.log"
+printf '#!/bin/sh\necho "Permission denied."\n' > "$T/fakebin/termux-usb"
+chmod +x "$T/fakebin/termux-usb"
+"$LFA" usb refresh > "$T/y11-badapi.log" 2>&1; rc=$?
+[ "$rc" = "1" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y11 malformed output exit $rc"; }
+check "Y11 malformed output" 'did not return a device list' "$T/y11-badapi.log"
+mv -f "$T/fakebin/termux-usb.off" "$T/fakebin/termux-usb"
+rm -f "$T/fakebin/pm"
+
+# Attach: real usbfs node + synthetic sysfs, both from the real descriptor.
+rm -f "$T/home/tu-session.log" "$T/home/last-run.sh"
+"$LFA" usb attach 001/002 -i debian -- lsusb > "$T/y11-attach.log" 2>&1; rc=$?
+[ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y11 attach exit $rc"; }
+check "Y11 attach node" '/dev/bus/usb/001/002' "$T/y11-attach.log"
+check "Y11 attach session map" '001/002=9' "$T/home/pd-calls.log"
+check "Y11 attach preload" 'PRELOAD=/usr/local/lib/lfa-usb-node.so' "$T/home/tu-session.log"
+check "Y11 attach sysfs bind" '--bind ' "$T/home/pd-calls.log"
+check "Y11 attach bind path" '/sys/bus/usb/devices' "$T/home/pd-calls.log"
+check "Y11 attach command" 'lsusb' "$T/home/last-run.sh"
+[ -f "$UROOT/usr/local/lib/lfa-usb-node.so" ] && pass=$((pass+1)) \
+    || { fail=$((fail+1)); echo "FAIL: Y11 attach did not stage the preload"; }
+[ -f "$UROOT/dev/bus/usb/001/002" ] && pass=$((pass+1)) \
+    || { fail=$((fail+1)); echo "FAIL: Y11 attach did not create the node"; }
+[ -f "$UROOT/usr/local/libexec/lfa-usb-tty.py" ] && pass=$((pass+1)) \
+    || { fail=$((fail+1)); echo "FAIL: Y11 attach did not stage the tty bridge"; }
+readelf -h "$UROOT/usr/local/lib/lfa-usb-node.so" 2>/dev/null | grep -q 'Shared object' \
+    && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y11 preload is not an ELF object"; }
+if readelf -d "$UROOT/usr/local/lib/lfa-usb-node.so" 2>/dev/null | grep -q NEEDED; then
+    fail=$((fail+1)); echo "FAIL: Y11 preload has a DT_NEEDED entry"
+else
+    pass=$((pass+1))
+fi
+printf 'shim-payload\n' > "$T/shim-fd"
+if ( exec 7<>"$T/shim-fd"
+     export LD_PRELOAD="$UROOT/usr/local/lib/lfa-usb-node.so"
+     export LFA_USB_MAP="099/098=7"
+     python3 - "$T/shim-fd" <<'PY'
+import os, sys
+fd = os.open("/dev/bus/usb/099/098", os.O_RDWR)
+target = os.readlink("/proc/self/fd/%d" % fd)
+assert target == sys.argv[1], "%s != %s" % (target, sys.argv[1])
+os.lseek(fd, 0, 0)
+assert os.read(fd, 99) == b"shim-payload\n"
+os.lseek(fd, 0, 0)
+os.write(fd, b"shim-wrote\n")
+PY
+   ); then
+    pass=$((pass+1))
+else
+    fail=$((fail+1)); echo "FAIL: Y11 preload did not map the node to the inherited fd"
+fi
+grep -q '^shim-wrote' "$T/shim-fd" && pass=$((pass+1)) \
+    || { fail=$((fail+1)); echo "FAIL: Y11 preload writes did not reach the fd"; }
+if ( exec 8<>"$T/shim-fd"
+     export LD_PRELOAD="$UROOT/usr/local/lib/lfa-usb-node.so"
+     export LFA_USB_MAP="003/004=8"
+     python3 -c 'import os
+try:
+    os.open("/dev/bus/usb/099/098", os.O_RDWR)
+except OSError:
+    raise SystemExit(0)
+raise SystemExit(1)' ); then
+    pass=$((pass+1))
+else
+    fail=$((fail+1)); echo "FAIL: Y11 preload mapped an unmapped node"
+fi
+printf 'x' > "$T/tty-plain"
+if ( exec 6<>"$T/tty-plain" 7>"$T/ctl-out"
+     export LD_PRELOAD="$UROOT/usr/local/lib/lfa-usb-node.so"
+     export LFA_USB_TTY="/dev/ttyUSB0" LFA_USB_TTY_FD=6 LFA_USB_TTY_CTL=7
+     python3 -c 'import fcntl, os, struct, termios
+fd = os.open("/dev/ttyUSB0", os.O_RDWR)
+fcntl.ioctl(fd, termios.TIOCMBIS, struct.pack("i", termios.TIOCM_DTR))
+fcntl.ioctl(fd, termios.TIOCMBIC, struct.pack("i", termios.TIOCM_RTS))
+fcntl.ioctl(fd, termios.TIOCMSET, struct.pack("i", termios.TIOCM_DTR))'
+   ); then
+    pass=$((pass+1))
+else
+    fail=$((fail+1)); echo "FAIL: Y11 preload rejected DTR/RTS ioctls"
+fi
+[ "$(od -An -c "$T/ctl-out" | tr -d ' \n')" = "s002\\0\\0\\0c004\\0\\0\\0m002\\0\\0\\0" ] \
+    && pass=$((pass+1)) \
+    || { fail=$((fail+1)); echo "FAIL: Y11 preload did not forward DTR/RTS to the bridge"; }
+python3 "$UROOT/usr/local/libexec/lfa-usb-tty.py" --selftest > "$T/y11-tty-self.log" 2>&1
+check "Y11 tty selftest" 'selftest: ok' "$T/y11-tty-self.log"
+timeout 60 python3 "$REPO/tests/usb-tty-plumbing.py" > "$T/y11-tty-plumb.log" 2>&1; rc=$?
+[ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y11 tty plumbing exit $rc"; }
+check "Y11 tty plumbing relay" 'plumbing: ok' "$T/y11-tty-plumb.log"
+
+# The sysfs tree must carry the interface and endpoint directories that
+# libusb walks, not just the device files.
+python3 - "$REPO/lib/usb-desc.py" "$T/usb-sysfs" > "$T/y11-sysfs-build.log" 2>&1 <<'PY'; rc=$?
+import importlib.util, struct, sys
+spec = importlib.util.spec_from_file_location("desc", sys.argv[1])
+desc = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(desc)
+device = struct.pack("<BBHBBBBHHHBBBB", 18, 1, 0x0200, 9, 0, 0, 64,
+                     0x1d6b, 0x0200, 0x0100, 1, 2, 3, 1)
+interface = struct.pack("<BBBBBBBBB", 9, 4, 0, 0, 1, 0x0a, 0, 0, 0)
+endpoint = struct.pack("<BBBBHB", 7, 5, 0x81, 0x03, 4, 12)
+config = struct.pack("<BBHBBBBB", 9, 2, 9 + len(interface) + len(endpoint),
+                     1, 1, 0, 0xE0, 0) + interface + endpoint
+result = desc.parse_device_descriptor(device)
+result.update({"bus": "001", "dev": "002", "path": "/dev/bus/usb/001/002",
+               "manufacturer": "Fake", "product": "Serial", "serial": "SN1",
+               "num_configurations": 1,
+               "configurations": [desc.parse_config_descriptor(config)],
+               "_raw_device": device.hex(), "_raw_configs": [config.hex()]})
+sys.stdout.write(desc.write_sysfs(sys.argv[2], result, 480) + "\n")
+PY
+[ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y11 sysfs build exit $rc"; }
+[ -f "$T/usb-sysfs/1-2:0.0/ep_81/wMaxPacketSize" ] && pass=$((pass+1)) \
+    || { fail=$((fail+1)); echo "FAIL: Y11 sysfs interface/endpoint dirs missing"; }
+check "Y11 sysfs config attrs" '0a' "$T/usb-sysfs/1-2:0.0/bInterfaceClass"
+"$LFA" usb attach --no-sysfs 001/002 -i debian -- true > "$T/y11-attach-nosys.log" 2>&1; rc=$?
+[ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y11 attach --no-sysfs exit $rc"; }
+check "Y11 attach no sysfs" 'sysfs:   not available' "$T/y11-attach-nosys.log"
+
+# Serial bridge: /dev/ttyUSB0 is a pty fed by the real bulk endpoints.
+"$LFA" usb tty 001/002 -i debian --baud 460800 -- picocom -b 460800 /dev/ttyUSB0 \
+    > "$T/y11-tty.log" 2>&1; rc=$?
+[ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y11 tty exit $rc"; }
+check "Y11 tty node" '/dev/ttyUSB0' "$T/y11-tty.log"
+check "Y11 tty baud" 'baud:   460800' "$T/y11-tty.log"
+check "Y11 tty bridge script" 'lfa-usb-tty.py' "$T/home/last-run.sh"
+check "Y11 tty bridge baud" '--baud 460800' "$T/home/last-run.sh"
+check "Y11 tty forwards command" 'picocom' "$T/home/last-run.sh"
+[ -f "$UROOT/dev/ttyUSB0" ] && pass=$((pass+1)) \
+    || { fail=$((fail+1)); echo "FAIL: Y11 tty placeholder missing"; }
+
+# ESP32 flashing runs esptool in the guest through /dev/ttyUSB0 (not nrflash).
+"$LFA" usb flash > "$T/y11-flash-help.log" 2>&1; rc=$?
+[ "$rc" = "1" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y11 flash usage exit $rc"; }
+check "Y11 flash usage esptool" 'esptool inside' "$T/y11-flash-help.log"
+check "Y11 flash usage tty" '/dev/ttyUSB0' "$T/y11-flash-help.log"
+"$LFA" usb flash --help > "$T/y11-flash-help2.log" 2>&1; rc=$?
+[ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y11 flash --help exit $rc"; }
+check "Y11 flash help write" 'write ARGS' "$T/y11-flash-help2.log"
+"$LFA" usb flash --install > "$T/y11-flash-install.log" 2>&1; rc=$?
+[ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y11 flash --install exit $rc"; }
+check "Y11 flash installs esptool" 'Installing esptool in debian' "$T/y11-flash-install.log"
+"$LFA" usb flash --device 001/002 probe > "$T/y11-flash-probe.log" 2>&1; rc=$?
+[ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y11 flash probe exit $rc"; }
+check "Y11 flash probe mapping" 'probe|id) _first=' "$T/home/last-esptool.sh"
+check "Y11 flash version-aware separator" '_sep=-' "$T/home/last-esptool.sh"
+check "Y11 flash write mapping" 'write) _first=' "$T/home/last-esptool.sh"
+check "Y11 flash esptool detection" 'command -v esptool.py' "$T/home/last-esptool.sh"
+"$LFA" usb flash --device 001/002 --baud 921600 write 0x0 /sdcard/app.bin \
+    > "$T/y11-flash-write.log" 2>&1; rc=$?
+[ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y11 flash write exit $rc"; }
+check "Y11 flash wrapper port" '--port /dev/ttyUSB0' "$T/home/last-esptool.sh"
+check "Y11 flash wrapper baud" '--baud 921600' "$T/home/last-esptool.sh"
+check "Y11 flash wrapper args" '0x0 /sdcard/app.bin' "$T/home/last-run.sh"
+"$LFA" usb flash --device 001/002 write 0x0 /sdcard/late.bin --baud 460800 \
+    > "$T/y11-flash-late.log" 2>&1; rc=$?
+[ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y11 flash late baud exit $rc"; }
+check "Y11 flash late baud in bridge" '--baud 460800' "$T/home/last-run.sh"
+check "Y11 flash late baud in esptool" '--baud 460800' "$T/home/last-esptool.sh"
+
+echo "===== Y11b: USB documentation ====="
+[ -s "$REPO/docs/USB.md" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y11b USB guide missing"; }
+check "Y11b guide bridge" 'termux-usb -l' "$REPO/docs/USB.md"
+check "Y11b guide fd" 'TERMUX_USB_FD' "$REPO/docs/USB.md"
+check "Y11b guide honesty" 'cannot create device nodes' "$REPO/docs/USB.md"
+check "Y11b README link" 'docs/USB.md' "$REPO/README.md"
+check "Y11b README command" 'lfa usb' "$REPO/README.md"
+check "Y11b docs index" 'USB.md' "$REPO/docs/README.md"
+check "Y11b incompatible points to guide" 'USB.md' "$REPO/docs/INCOMPATIBLE.md"
 
 echo ""
 echo "===== Z: documentation links ====="

@@ -7,7 +7,7 @@ Status values:
 
 | Status | Meaning |
 |---|---|
-| `done` | code changed, suite green (`PASS=627 FAIL=0`), lint clean |
+| `done` | code changed, suite green (`PASS=784 FAIL=0`), lint clean |
 | `partial` | the main risk is addressed; a documented remainder is listed |
 | `deferred` | deliberately not fixed in this pass, with the reason recorded |
 | `device` | also exercised on the Vivo V2437 |
@@ -53,7 +53,7 @@ Lint: `shellcheck -S warning` clean, `bash -n` clean, CI workflow added.
 | Android 5/6 refusal | `done` | explicit explanation, `--remove-old` warning, VNC restore command |
 | `start-linux` notice | `done` | stderr, interactive classic runs only; `lfa notice`, `--no-notice`, `LFA_NO_NOTICE` |
 | Boot script ownership | `done` | switching a non-autostart instance no longer hijacks another instance's boot script |
-| Host suite | `done` | `PASS=627 FAIL=0`; Y1-Y10 cover CLI, switch, removal, guard, `-i`, legacy, SDK 24/25, compat/android, matrix, AppImage |
+| Host suite | `done` | `PASS=784 FAIL=0`; Y1-Y11 cover CLI, switch, removal, guard, `-i`, legacy, SDK 24/25, compat/android, matrix, AppImage, USB bridge (attach/tty/flash) |
 | Device verification | `done` | Vivo V2437 (SDK 36): VNC `PASS=14`, Both switch `PASS=22`, X11 `PASS=14`, VirGL fallback, shims, bridge, `--software`; Oppo SDK 22 pending (off network) |
 
 ## Android CI and compatibility layers (2026-11-05)
@@ -72,6 +72,17 @@ Lint: `shellcheck -S warning` clean, `bash -n` clean, CI workflow added.
 | Emulator run | `pending` | workflow has not run on GitHub Actions yet |
 | Device run | `done` | Vivo V2437 (SDK 36): VNC, Both switch, X11, VirGL→llvmpipe fallback, shims, Android bridge, software install/probe |
 | Legacy device run | `pending` | Oppo A37fw (SDK 22) was off the network; repeat refusal/VNC checks when reachable |
+
+## USB port through Termux:API (2026-11-18)
+
+| Item | Status | Notes |
+|---|---|---|
+| usbfs node | `done` | `lib/lfa-usb-node.c` preload duplicates the inherited `TERMUX_USB_FD` on `open("/dev/bus/usb/BBB/DDD")`; real ioctls and transfers afterwards; `-nostdlib` build, aarch64 prebuilt bundled |
+| sysfs view | `done` | `lib/usb-desc.py --sysfs` writes device, configuration, interface and endpoint files from the real descriptors; `attach` binds it over `/sys/bus/usb/devices`; preload reports `SYSFS_MAGIC` and stubs the udev monitor |
+| libusb enumeration | `done` | host `lsusb`/libusb 1.0.27 enumerated the synthetic tree with strings, interface class, endpoint and packet size; `lsusb -t` stays empty without a root hub |
+| serial bridge | `done` | `lib/lfa-usb-tty.py` bridges bulk endpoints to a pty; CDC-ACM/CP210x/CH340 baud, DTR/RTS, and line-state merging; fake-device plumbing test relays bytes both ways |
+| flashing | `done` | `lfa usb flash` installs and runs `esptool` inside the guest; `probe`/`write`/... map to v4 `write_flash` or v5 `write-flash` |
+| real hardware | `pending` | needs a phone with OTG: `lfa usb attach` + `lsusb -v`, `lfa usb tty`, then a board flash |
 
 ## Security
 
@@ -105,6 +116,7 @@ Lint: `shellcheck -S warning` clean, `bash -n` clean, CI workflow added.
 | 21 | VNC password truncated to 8 characters | `done` | Warned at the password prompt with the exact 8 characters VNC will use; the README states it |
 | 22 | SDK 0 treated as modern | `done` | One explicit warning per run |
 | 23 | No password confirmation | `done` | `setup_confirm_secret` asks twice on a terminal |
+| 24 | Advisory update check aborted the UI | `done` | A failing `curl` (timeout 28, DNS error) exited the installer through `set -e` before the menu; the check is now guarded and a stub-curl regression test covers it |
 
 ## Architecture and maintainability
 

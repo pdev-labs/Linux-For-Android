@@ -30,6 +30,26 @@ tag names, define the order. See the table at the bottom.
   `Android/obb` folders through adb into shared storage. Android blocks both
   folders for apps, including Termux, so direct access is not possible without
   shell access.
+- `lfa usb` exposes real USB devices through Termux:API. `status`, `list`, and
+  `refresh` read `termux-usb -l`; `scan` requests Android permission and reads
+  real descriptors; `enable` installs the guest helpers.
+- `lfa usb attach` opens a guest session with a real `/dev/bus/usb/BBB/DDD`
+  and a `/sys/bus/usb/devices` tree built from the device's descriptors.
+  `lib/lfa-usb-node.c`, preloaded for the session, duplicates the usbfs
+  descriptor that Termux:API opened, reports sysfs magic for libudev, and
+  stubs the hotplug monitor, so unmodified `lsusb`, PyUSB, dfu-util and other
+  libusb tools work with real ioctls and transfers. The preload is built for
+  the guest architecture with clang/cc and falls back to
+  `lib/prebuilt/lfa-usb-node-<arch>.so` (aarch64 bundled).
+- `lfa usb tty` bridges the device's bulk endpoints to a pty and exposes
+  `/dev/ttyUSB0` for serial tools. CDC-ACM, CP210x and CH340 are supported;
+  baud changes and DTR/RTS are forwarded to the chip, so esptool's reset
+  sequence works. `lfa usb flash` installs and runs `esptool` inside the
+  distribution instead of delegating to nrflash.
+- `lfa usb exec DEV -- CMD` still forwards the raw descriptor as
+  `TERMUX_USB_FD` for guests where the preload cannot be built. proot still
+  cannot create device nodes; the node is a preload over the real descriptor.
+  See `docs/USB.md`.
 - Guest sessions now export `APPIMAGE_EXTRACT_AND_RUN=1`, because proot does
   not expose `/dev/fuse` and an AppImage cannot self-mount. A direct
   `./Foo.AppImage`, a file-manager double-click, and a menu entry all work.
