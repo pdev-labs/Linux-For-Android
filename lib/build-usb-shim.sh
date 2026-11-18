@@ -15,7 +15,7 @@
 #
 set -eu
 
-here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+here=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 src="$here/lfa-usb-node.c"
 out_dir="$here/prebuilt"
 arch=${1:-}

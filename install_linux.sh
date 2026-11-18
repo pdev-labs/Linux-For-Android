@@ -301,9 +301,9 @@ ui_multi() {
                 IFS='|' read -r _k _l _d <<< "${_items[$_sel]}"
                 case " ${_chosen[*]} " in
                     *" $_k "*)
-                        local -a _new=()
-                        for _c in "${_chosen[@]}"; do [ "$_c" != "$_k" ] && _new+=("$_c"); done
-                        _chosen=("${_new[@]}")
+                        local -a _next=()
+                        for _c in "${_chosen[@]}"; do [ "$_c" != "$_k" ] && _next+=("$_c"); done
+                        _chosen=("${_next[@]}")
                         ;;
                     *) _chosen+=("$_k") ;;
                 esac
@@ -3786,7 +3786,7 @@ lfa_usb_install_esptool() {  # $1 = optional instance
     _user="$(lfa_appimage_user "$_id")"
     _root="$(pd_rootfs "$_id")"
     echo "[*] Installing esptool in $_id (pip)..."
-    # shellcheck disable=SC2086  # pd_login_flags is a word list
+    # shellcheck disable=SC2046,SC2086  # pd_login_flags is a word list
     proot-distro login $(pd_login_flags) "$_id" --user "$_user" --shared-tmp -- \
         /bin/sh -c '
             if command -v esptool.py >/dev/null 2>&1 || command -v esptool >/dev/null 2>&1; then
@@ -3916,7 +3916,8 @@ lfa_usb_attach() {
             export LFA_USB_MODE=prep
             export LFA_USB_INSTANCE="$_id"
             export LFA_USB_USER="$_user"
-            export LFA_USB_PD_FLAGS="$(pd_login_flags)"
+            LFA_USB_PD_FLAGS="$(pd_login_flags)"
+            export LFA_USB_PD_FLAGS
             export LFA_USB_OUT="/tmp/lfa-usb/prep-$_bus-$_devn.json"
             export LFA_USB_TSV="/tmp/lfa-usb/prep-$_bus-$_devn.tsv"
             export LFA_USB_BLOB="/tmp/lfa-usb/prep-$_bus-$_devn.bin"
@@ -3962,7 +3963,8 @@ lfa_usb_attach() {
         export LFA_USB_MODE=exec
         export LFA_USB_INSTANCE="$_id"
         export LFA_USB_USER="$_user"
-        export LFA_USB_PD_FLAGS="$(pd_login_flags)"
+        LFA_USB_PD_FLAGS="$(pd_login_flags)"
+        export LFA_USB_PD_FLAGS
         export LFA_USB_RUN_SCRIPT="$_script_guest"
         export LFA_USB_CWD="$_cwd"
         export LFA_USB_PATH="$_dev"
@@ -4093,7 +4095,8 @@ lfa_usb_tty() {
         export LFA_USB_MODE=exec
         export LFA_USB_INSTANCE="$_id"
         export LFA_USB_USER="$_user"
-        export LFA_USB_PD_FLAGS="$(pd_login_flags)"
+        LFA_USB_PD_FLAGS="$(pd_login_flags)"
+        export LFA_USB_PD_FLAGS
         export LFA_USB_RUN_SCRIPT="$_script_guest"
         export LFA_USB_CWD="$_cwd"
         export LFA_USB_PATH="$_dev"
