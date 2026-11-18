@@ -54,6 +54,9 @@ tag names, define the order. See the table at the bottom.
   packages` cannot see other apps (Android 11 and newer); a working
   `termux-usb -l` counts as proof, and host mode is reported as
   "not advertised" rather than "no".
+- USB commands fall back to the instance remembered by `lfa usb enable`, so
+  `lfa usb scan` works with several distros installed, and an unusable or
+  missing instance is reported instead of exiting silently.
 - Guest sessions now export `APPIMAGE_EXTRACT_AND_RUN=1`, because proot does
   not expose `/dev/fuse` and an AppImage cannot self-mount. A direct
   `./Foo.AppImage`, a file-manager double-click, and a menu entry all work.

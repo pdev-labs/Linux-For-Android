@@ -2499,8 +2499,11 @@ lfa_usb_conf_set() {  # $1 = key, $2 = value
 }
 
 lfa_usb_write_callback() {
-    mkdir -p "$PREFIX/bin" 2>/dev/null || return 1
-    cat > "$LFA_USB_CALLBACK" <<'USBCALLBACK'
+    if ! mkdir -p "$PREFIX/bin" 2>/dev/null; then
+        echo "[!] Could not create $PREFIX/bin." >&2
+        return 1
+    fi
+    if ! cat > "$LFA_USB_CALLBACK" <<'USBCALLBACK'
 #!/bin/bash
 # LFA USB bridge callback. Started by `termux-usb -E -e`, which puts the
 # real usbdevfs descriptor in TERMUX_USB_FD. Forward it into the guest.
@@ -2602,6 +2605,10 @@ case "$MODE" in
         ;;
 esac
 USBCALLBACK
+    then
+        echo "[!] Could not write $LFA_USB_CALLBACK." >&2
+        return 1
+    fi
     chmod 755 "$LFA_USB_CALLBACK" 2>/dev/null || true
 }
 
@@ -2612,8 +2619,14 @@ lfa_usb_stage_desc() {  # $1 = guest rootfs
         echo "[!] lib/usb-desc.py is missing; run menu 12 or reinstall." >&2
         return 1
     fi
-    mkdir -p "$(dirname "$_dst")" 2>/dev/null || return 1
-    cp -f "$_src" "$_dst" 2>/dev/null || return 1
+    if ! mkdir -p "$(dirname "$_dst")" 2>/dev/null; then
+        echo "[!] Could not create $(dirname "$_dst") in the guest rootfs." >&2
+        return 1
+    fi
+    if ! cp -f "$_src" "$_dst" 2>/dev/null; then
+        echo "[!] Could not copy lib/usb-desc.py to $_dst." >&2
+        return 1
+    fi
     chmod 755 "$_dst" 2>/dev/null || true
 }
 
@@ -2628,14 +2641,25 @@ lfa_usb_guest_python_ok() {  # $1 = instance
 }
 
 lfa_usb_pick_instance() {  # $1 = optional instance name; sets INSTANCE_NAME
-    local _want="${1:-}" _root _name
+    local _want="${1:-}" _root _name _saved=""
     if [ -n "$_want" ]; then
         CLI_INSTANCE="$_want"
+    elif [ -z "${CLI_INSTANCE:-}" ]; then
+        # Fall back to the instance `lfa usb enable` remembered, so plain
+        # `lfa usb scan` keeps working when more than one distro is installed.
+        _saved="$(lfa_usb_conf_instance)"
+        [ -n "$_saved" ] && CLI_INSTANCE="$_saved"
     fi
     _root="$(lfa_shim_rootfs 2>/dev/null)" || _root=""
     if [ -z "$_root" ]; then
         if [ -n "$_want" ]; then
             echo "No installed distribution named '$_want'." >&2
+        elif [ -n "$_saved" ]; then
+            echo "[!] The saved USB instance '$_saved' is not installed." >&2
+            echo "    Pick another with: lfa usb <command> -i NAME" >&2
+        else
+            echo "[!] Choose a distribution: lfa usb <command> -i NAME" >&2
+            echo "    Installed: $(pd_instances 2>/dev/null | tr '\n' ' ')" >&2
         fi
         return 1
     fi
@@ -2647,7 +2671,11 @@ lfa_usb_pick_instance() {  # $1 = optional instance name; sets INSTANCE_NAME
             break
         fi
     done < <(pd_instances)
-    [ -n "$INSTANCE_NAME" ] || return 1
+    if [ -z "$INSTANCE_NAME" ]; then
+        echo "[!] Could not match the rootfs to an installed instance." >&2
+        echo "    Pass -i NAME (see: proot-distro list)." >&2
+        return 1
+    fi
     CONF_FILE="$(pd_conf "$INSTANCE_NAME")"
     if [ -f "$CONF_FILE" ]; then
         # shellcheck disable=SC1090  # instance config path is computed at runtime
@@ -3076,7 +3104,6 @@ lfa_usb_enable() {
             echo "      lfa usb enable -i $_inst"
             return 0
         fi
-        echo "[!] Choose a distribution with -i NAME." >&2
         return 1
     fi
     _id="$INSTANCE_NAME"

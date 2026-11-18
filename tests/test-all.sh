@@ -1646,6 +1646,15 @@ check "Y11 callback fd" 'TERMUX_USB_FD' "$T/prefix/bin/lfa-usb-callback"
 check "Y11 callback login" 'login $FLAGS' "$T/prefix/bin/lfa-usb-callback"
 [ "$(readlink "$UROOT/run/lfa-usb" 2>/dev/null)" = "/tmp/lfa-usb" ] && pass=$((pass+1)) \
     || { fail=$((fail+1)); echo "FAIL: Y11 /run/lfa-usb symlink missing"; }
+# A usb command with an unusable saved instance must say why, never exit
+# silently, and a normal command must reuse the instance `enable` saved.
+"$LFA" usb enable -i ghostdistro > "$T/y11-ghost-enable.log" 2>&1
+"$LFA" usb scan > "$T/y11-ghost-scan.log" 2>&1; rc=$?
+[ "$rc" = "1" ] && pass=$((pass+1)) \
+    || { fail=$((fail+1)); echo "FAIL: Y11 scan with unknown saved instance exit $rc"; }
+check "Y11 scan unknown instance hint" "saved USB instance 'ghostdistro'" "$T/y11-ghost-scan.log"
+check "Y11 scan unknown instance command" 'lfa usb <command> -i NAME' "$T/y11-ghost-scan.log"
+"$LFA" usb enable -i debian > /dev/null 2>&1
 PYTHONDONTWRITEBYTECODE=1 python3 "$UROOT/usr/local/libexec/lfa-usb-desc.py" --selftest > "$T/y11-desc.log" 2>&1
 check "Y11 descriptor selftest" 'selftest: ok' "$T/y11-desc.log"
 PYTHONDONTWRITEBYTECODE=1 python3 "$REPO/lib/usb-desc.py" --fd 0 --json \

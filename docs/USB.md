@@ -117,6 +117,11 @@ Sessions accept `-i NAME`, `--user NAME`, `--root`, `--cwd DIR`,
 `--no-permission`, and (for `attach`) `--no-sysfs`. `tty` and `flash` also
 accept `--baud N` and `--device DEV`.
 
+`lfa usb enable -i NAME` remembers that instance, so later `scan`, `attach`,
+`tty` and `flash` work without repeating `-i` even when several distributions
+are installed. If the remembered instance no longer exists, they print the
+exact `-i NAME` form instead of exiting quietly.
+
 ## How the node works
 
 `termux-usb -E -e COMMAND` opens the device and puts the real usbfs file
