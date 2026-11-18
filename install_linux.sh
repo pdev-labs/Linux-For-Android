@@ -2228,7 +2228,8 @@ lfa_usb_host_feature() {
     _features="$(lfa_android_timeout 5 pm list features 2>/dev/null || true)"
     case "$_features" in
         *android.hardware.usb.host*) echo yes ;;
-        *) echo no ;;
+        '') echo unknown ;;
+        *) echo "not advertised" ;;
     esac
 }
 
@@ -2828,6 +2829,11 @@ lfa_usb_status() {
     if lfa_usb_api_ok; then
         lfa_usb_refresh >/dev/null 2>&1 && _refresh="yes"
     fi
+    # `pm list packages` cannot see other apps on some Android 11+ builds, so
+    # a working `termux-usb -l` is the better proof that the app is present.
+    if [ "$_app" = "not detected" ] && [ "$_refresh" = "yes" ]; then
+        _app="installed (pm cannot list it)"
+    fi
     _count="$(lfa_usb_count)"
     _described="$(lfa_usb_described_count)"
     _inst="$(lfa_usb_conf_instance)"
@@ -2886,10 +2892,10 @@ lfa_usb_status() {
         echo "[!] This termux-api cannot export a descriptor (-E)."
         echo "    Update it: pkg upgrade termux-api"
     fi
-    if [ "$_host" = "no" ]; then
+    if [ "$_host" = "not advertised" ]; then
         echo ""
-        echo "[!] This device reports no USB host support in its Android features."
-        echo "    A USB-C OTG adapter is still worth trying; powered hubs help."
+        echo "[!] Android does not advertise USB host support in its feature list."
+        echo "    Many phones still work with an OTG adapter; powered hubs help."
     fi
 }
 
@@ -3095,8 +3101,13 @@ if [ -n "${LFA_USB_MAP:-}" ]; then
         [ -x "$_real" ] && exec "$_real" "$@"
     done
 fi
-BR="${LFA_USB_BRIDGE:-/tmp/lfa-usb}"
-[ -f "$BR/devices.tsv" ] || BR=/tmp/lfa-usb
+# An explicit LFA_USB_BRIDGE always wins; the /tmp fallback is only for a
+# guest where the session did not export one (proot shares /tmp).
+if [ -n "${LFA_USB_BRIDGE:-}" ]; then
+    BR="$LFA_USB_BRIDGE"
+else
+    BR=/tmp/lfa-usb
+fi
 DB="$BR/devices.tsv"
 VERSION="1.0"
 
@@ -3236,8 +3247,13 @@ LSUSB
     cat <<'LFAUSB' | lfa_shim_write "$_root" "usr/local/bin/lfa-usb"
 #!/bin/sh
 # LFA USB bridge helper inside the guest.
-BR="${LFA_USB_BRIDGE:-/tmp/lfa-usb}"
-[ -f "$BR/devices.tsv" ] || BR=/tmp/lfa-usb
+# An explicit LFA_USB_BRIDGE always wins; the /tmp fallback is only for a
+# guest where the session did not export one (proot shares /tmp).
+if [ -n "${LFA_USB_BRIDGE:-}" ]; then
+    BR="$LFA_USB_BRIDGE"
+else
+    BR=/tmp/lfa-usb
+fi
 
 usage() {
     cat <<'HELP'

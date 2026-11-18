@@ -53,9 +53,14 @@ Check the device side first:
 lfa usb status
 ```
 
-`USB host feature: no` means Android's feature list does not advertise host
-mode. Some phones still work with an OTG adapter; a powered hub helps with
-devices that draw more than a few milliamps.
+`USB host feature: not advertised` means Android's feature list has no
+`android.hardware.usb.host` entry. Many phones still work with an OTG
+adapter, so try it; a powered hub helps with devices that draw more than a
+few milliamps.
+
+`Termux:API app: installed (pm cannot list it)` is normal on Android 11 and
+newer: `pm list packages` cannot see other apps, so LFA treats a working
+`termux-usb -l` as proof that the app is present.
 
 ## Quick start
 

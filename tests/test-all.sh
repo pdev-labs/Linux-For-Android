@@ -1564,6 +1564,29 @@ check "Y11 status host" 'USB host feature:   yes' "$T/y11-status0.log"
 check "Y11 status devices" 'devices visible:    2' "$T/y11-status0.log"
 check "Y11 status honest" 'preload that duplicates the descriptor' "$T/y11-status0.log"
 
+# Android 11+ hides other packages from `pm list packages`. A working
+# termux-usb must not make LFA tell the user to install an app it has.
+cat > "$T/fakebin/pm" <<'FAKEPM2'
+#!/bin/sh
+case "$*" in
+    *features*) echo "feature:android.hardware.camera" ;;
+    *packages*) echo "package:com.example.other" ;;
+esac
+FAKEPM2
+chmod +x "$T/fakebin/pm"
+"$LFA" usb status > "$T/y11-status-nopm.log" 2>&1
+check "Y11 status app with hidden pm" 'installed (pm cannot list it)' "$T/y11-status-nopm.log"
+check "Y11 status host not advertised" 'USB host feature:   not advertised' "$T/y11-status-nopm.log"
+check_absent "Y11 status app hint with hidden pm" 'Install the Termux:API app' "$T/y11-status-nopm.log"
+cat > "$T/fakebin/pm" <<'FAKEPM'
+#!/bin/sh
+case "$*" in
+    *features*) echo "feature:android.hardware.usb.host" ;;
+    *packages*) echo "package:com.termux.api" ;;
+esac
+FAKEPM
+chmod +x "$T/fakebin/pm"
+
 "$LFA" usb list > "$T/y11-list0.log" 2>&1; rc=$?
 [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y11 list exit $rc"; }
 check "Y11 list bus 1" 'Bus 001 Device 002' "$T/y11-list0.log"

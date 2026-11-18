@@ -50,6 +50,10 @@ tag names, define the order. See the table at the bottom.
   `TERMUX_USB_FD` for guests where the preload cannot be built. proot still
   cannot create device nodes; the node is a preload over the real descriptor.
   See `docs/USB.md`.
+- `lfa usb status` no longer asks you to install Termux:API when `pm list
+  packages` cannot see other apps (Android 11 and newer); a working
+  `termux-usb -l` counts as proof, and host mode is reported as
+  "not advertised" rather than "no".
 - Guest sessions now export `APPIMAGE_EXTRACT_AND_RUN=1`, because proot does
   not expose `/dev/fuse` and an AppImage cannot self-mount. A direct
   `./Foo.AppImage`, a file-manager double-click, and a menu entry all work.

@@ -1,6 +1,6 @@
 # Test report for v1.7.1
 
-> Current development suite: `PASS=784 FAIL=0`.
+> Current development suite: `PASS=787 FAIL=0`.
 
 ## USB bridge, 2026-11-18
 
@@ -11,7 +11,7 @@ phone with an OTG adapter; do not claim them before that run.
 
 | Check | Result |
 |---|---|
-| Host suite (`./tests/test-all.sh`) | `PASS=784 FAIL=0` |
+| Host suite (`./tests/test-all.sh`) | `PASS=787 FAIL=0` |
 | Descriptor parser (`python3 lib/usb-desc.py --selftest`) | device and configuration descriptors parsed; sysfs blob built |
 | Serial bridge (`python3 lib/lfa-usb-tty.py --selftest`) | CH340 divisor encoding, CDC/CP210x detection, endpoint selection |
 | Preload build | `lib/lfa-usb-node.c` built for the guest architecture, no `DT_NEEDED`; aarch64 prebuilt bundled |
@@ -25,6 +25,7 @@ phone with an OTG adapter; do not claim them before that run.
 | TTY | `/dev/ttyUSB0` session forwarded baud and the client command to `lfa-usb-tty.py`; a fake-device harness relayed bytes through the pty in both directions |
 | ESP32 flashing | `--install`, `probe` -> `flash_id`, and `write` wrapper checked for `--port /dev/ttyUSB0` and the requested baud; a real board is not run |
 | Hotplug | `lfa usb watch --count 1` printed the initial add event |
+| Status honesty | a working `termux-usb -l` counts as proof that Termux:API is installed when `pm` cannot list packages, and a feature list without `usb.host` reads "not advertised" |
 | Failure paths | missing client, non-JSON `termux-usb` output, and old `termux-api` without `-E` reported honestly |
 | Real USB hardware | **not yet run** |
 
