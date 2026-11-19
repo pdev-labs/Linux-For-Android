@@ -1868,6 +1868,10 @@ check "Y11 attach bind path" '/sys/bus/usb/devices' "$T/home/pd-calls.log"
 check "Y11 attach dev bind" 'dev/bus/usb:/dev/bus/usb' "$T/home/pd-calls.log"
 check "Y11 attach dev bind env" 'DEVBIND='"$T/prefix/tmp/lfa-usb"'/dev/bus/usb:/dev/bus/usb' "$T/home/tu-session.log"
 check "Y11 attach command" 'lsusb' "$T/home/last-run.sh"
+# proot-distro v5 drops LD_PRELOAD from the host environment, so the guest
+# script must set it after proot has started.
+check "Y11 attach preload in script" \
+    'export LD_PRELOAD=/usr/local/lib/lfa-usb-node.so' "$T/home/last-run.sh"
 [ -f "$UROOT/usr/local/lib/lfa-usb-node.so" ] && pass=$((pass+1)) \
     || { fail=$((fail+1)); echo "FAIL: Y11 attach did not stage the preload"; }
 [ -f "$UROOT/dev/bus/usb/001/002" ] && pass=$((pass+1)) \
@@ -1977,6 +1981,7 @@ check "Y11 attach no sysfs" 'sysfs:   not available' "$T/y11-attach-nosys.log"
 check "Y11 tty node" '/dev/ttyUSB0' "$T/y11-tty.log"
 check "Y11 tty baud" 'baud:   460800' "$T/y11-tty.log"
 check "Y11 tty bridge script" 'lfa-usb-tty.py' "$T/home/last-run.sh"
+check "Y11 tty preload in script" 'export LD_PRELOAD=' "$T/home/last-run.sh"
 check "Y11 tty bridge baud" '--baud 460800' "$T/home/last-run.sh"
 check "Y11 tty forwards command" 'picocom' "$T/home/last-run.sh"
 check "Y11 tty dev bind" 'dev/bus/usb:/dev/bus/usb' "$T/home/pd-calls.log"

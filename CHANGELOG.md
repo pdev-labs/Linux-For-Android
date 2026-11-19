@@ -66,6 +66,10 @@ tag names, define the order. See the table at the bottom.
   the session ended; the callback now points stdout at the terminal when
   stderr is still a tty. Redirecting both streams (`> log 2>&1`) still
   captures the session.
+- The usbfs preload is set inside the guest script. proot-distro v5 removes
+  `LD_PRELOAD` from the environment it passes to proot, so libusb started
+  without the udev stubs and failed with `unable to initialize libusb: -99`.
+  The generated session scripts export it after proot has started.
 - `/dev/bus/usb/BBB/DDD` is visible inside the guest. proot-distro binds the
   host `/dev` over the rootfs, which hid the placeholder node; the node is now
   also kept in a Termux-side shadow tree and bound over `/dev/bus/usb`, so
