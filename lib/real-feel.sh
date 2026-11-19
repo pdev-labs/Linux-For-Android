@@ -47,10 +47,16 @@ WELCOME
 cat > "$R/etc/profile.d/zz-lfa-env.sh" <<'CLEAN'
 #!/bin/sh
 # Make `env` look like a normal Linux box.
-for _v in $(env 2>/dev/null | sed -n 's/^\(TERMUX[^=]*\|ANDROID[^=]*\|EXTERNAL_STORAGE\|PREFIX\|LD_PRELOAD\|TMPDIR\)=.*/\1/p'); do
+for _v in $(env 2>/dev/null | sed -n 's/^\(TERMUX[^=]*\|ANDROID[^=]*\|EXTERNAL_STORAGE\|PREFIX\|TMPDIR\)=.*/\1/p'); do
     unset "$_v" 2>/dev/null || true
 done
 unset _v
+# A USB session sets LD_PRELOAD on purpose: the usbfs shim that maps the
+# inherited descriptor. Any other LD_PRELOAD came from Termux and points at
+# a bionic object the guest cannot load, so drop that one.
+if [ -z "${LFA_USB_MAP:-}" ]; then
+    unset LD_PRELOAD 2>/dev/null || true
+fi
 case "${SHELL:-}" in /data/data/*) SHELL=/bin/bash; export SHELL ;; esac
 case "${TERM:-}" in xterm-ghostty|xterm-kitty|alacritty) TERM=xterm-256color; export TERM ;; esac
 # Do not let an uninstalled guest command fall through to a Termux binary

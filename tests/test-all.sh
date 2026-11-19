@@ -834,6 +834,16 @@ check "N etc hostname synced" 'oldphone' "$NROOT/etc/hostname"
 check "N welcome banner" 'Welcome to' "$NROOT/etc/profile.d/00-lfa-welcome.sh"
 check "N env cleanup" 'TERMUX' "$NROOT/etc/profile.d/zz-lfa-env.sh"
 check "N appimage env" 'APPIMAGE_EXTRACT_AND_RUN=1' "$NROOT/etc/profile.d/zz-lfa-env.sh"
+# The login profile hides Termux variables but must keep the USB session's
+# own preload, or libusb starts without the udev stubs (-99).
+_envtest() { env -i PATH=/usr/bin:/bin "$@" sh -c \
+    '. "$1"; printf %s "${LD_PRELOAD:-unset}"' _ "$NROOT/etc/profile.d/zz-lfa-env.sh" 2>/dev/null; }
+_keep="$(_envtest LFA_USB_MAP=001/002=7 LD_PRELOAD=/usr/local/lib/lfa-usb-node.so)"
+[ "$_keep" = "/usr/local/lib/lfa-usb-node.so" ] && pass=$((pass+1)) \
+    || { fail=$((fail+1)); echo "FAIL: N usb session keeps LD_PRELOAD (got $_keep)"; }
+_drop="$(_envtest LD_PRELOAD=/nonexistent/lfa-termux-preload.so)"
+[ "$_drop" = "unset" ] && pass=$((pass+1)) \
+    || { fail=$((fail+1)); echo "FAIL: N login drops a Termux LD_PRELOAD (got $_drop)"; }
 check "N login profile" 'linux-for-android profile' "$NROOT/home/user/.profile"
 check "N cursor helper" 'Gtk/CursorThemeName' "$NROOT/usr/local/bin/lfa-set-cursor"
 check "N gpgconf guard" 'gpg-connect-agent' "$NROOT/usr/local/bin/gpgconf"

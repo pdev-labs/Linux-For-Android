@@ -66,6 +66,11 @@ tag names, define the order. See the table at the bottom.
   the session ended; the callback now points stdout at the terminal when
   stderr is still a tty. Redirecting both streams (`> log 2>&1`) still
   captures the session.
+- The guest login profile keeps the USB session's `LD_PRELOAD`. The
+  "make env look normal" cleanup unset every `LD_PRELOAD`, including the
+  usbfs shim a `bash -l` session needs, so libusb still failed with `-99`.
+  It now removes only a Termux/bionic preload, recognised by the absence of
+  `LFA_USB_MAP`.
 - The usbfs preload is set inside the guest script. proot-distro v5 removes
   `LD_PRELOAD` from the environment it passes to proot, so libusb started
   without the udev stubs and failed with `unable to initialize libusb: -99`.
