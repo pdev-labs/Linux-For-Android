@@ -57,6 +57,10 @@ tag names, define the order. See the table at the bottom.
 - USB commands fall back to the instance remembered by `lfa usb enable`, so
   `lfa usb scan` works with several distros installed, and an unusable or
   missing instance is reported instead of exiting silently.
+- `lfa usb attach`, `lfa usb tty` and `lfa usb exec` keep the terminal:
+  a zero-second timeout no longer wraps the session in GNU `timeout`, which
+  put the guest shell in a background process group so reads stopped with
+  SIGTTIN (or failed with EIO).
 - Guest sessions now export `APPIMAGE_EXTRACT_AND_RUN=1`, because proot does
   not expose `/dev/fuse` and an AppImage cannot self-mount. A direct
   `./Foo.AppImage`, a file-manager double-click, and a menu entry all work.

@@ -1,6 +1,6 @@
 # Test report for v1.7.1
 
-> Current development suite: `PASS=790 FAIL=0`.
+> Current development suite: `PASS=792 FAIL=0`.
 
 ## USB bridge, 2026-11-18
 
@@ -11,7 +11,7 @@ phone with an OTG adapter; do not claim them before that run.
 
 | Check | Result |
 |---|---|
-| Host suite (`./tests/test-all.sh`) | `PASS=790 FAIL=0` |
+| Host suite (`./tests/test-all.sh`) | `PASS=792 FAIL=0` |
 | Descriptor parser (`python3 lib/usb-desc.py --selftest`) | device and configuration descriptors parsed; sysfs blob built |
 | Serial bridge (`python3 lib/lfa-usb-tty.py --selftest`) | CH340 divisor encoding, CDC/CP210x detection, endpoint selection |
 | Preload build | `lib/lfa-usb-node.c` built for the guest architecture, no `DT_NEEDED`; aarch64 prebuilt bundled |

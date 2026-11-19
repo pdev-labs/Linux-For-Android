@@ -536,6 +536,24 @@ else
 fi
 rm -f "$T/fakebin/curl"
 
+echo "===== L4: a zero timeout keeps the terminal foreground ====="
+cat > "$T/fakebin/timeout" <<'EOF'
+#!/bin/sh
+echo "timeout called" >&2
+exit 99
+EOF
+chmod +x "$T/fakebin/timeout"
+sed -n '/^lfa_android_timeout() {/,/^}/p' "$REPO/install_linux.sh" > "$T/ao.sh"
+_ao_zero="$(PATH="$T/fakebin:/usr/bin:/bin" bash -c '. "$1"; lfa_android_timeout 0 echo zero-ok' _ "$T/ao.sh" 2>&1)"
+[ "$_ao_zero" = "zero-ok" ] && pass=$((pass+1)) \
+    || { fail=$((fail+1)); echo "FAIL: L4 zero timeout still wraps the command (got: $_ao_zero)"; }
+_ao_five="$(PATH="$T/fakebin:/usr/bin:/bin" bash -c '. "$1"; lfa_android_timeout 5 echo five-ok' _ "$T/ao.sh" 2>&1)"
+case "$_ao_five" in
+    *"timeout called"*) pass=$((pass+1)) ;;
+    *) fail=$((fail+1)); echo "FAIL: L4 a real timeout no longer uses timeout" ;;
+esac
+rm -f "$T/fakebin/timeout"
+
 echo "===== M: dpkg statoverride shim ====="
 fresh_env
 printf '%s\n' 1 '' 13 | bash "$REPO/install_linux.sh" > "$T/m.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: run m exit $rc"; }

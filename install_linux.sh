@@ -1939,6 +1939,14 @@ lfa_android_pm_has() {  # $1 = package name
 lfa_android_timeout() {  # $1 = seconds, rest = command
     local _secs="$1"
     shift
+    # 0 means "no limit". Do not wrap it in timeout: GNU timeout puts the
+    # child in its own process group, so an interactive guest shell would
+    # become a background job and lose the terminal (reads stop with
+    # SIGTTIN, or fail with EIO).
+    if [ "$_secs" = "0" ]; then
+        "$@"
+        return $?
+    fi
     if command -v timeout >/dev/null 2>&1; then
         timeout "$_secs" "$@"
     else
