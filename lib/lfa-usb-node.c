@@ -266,10 +266,7 @@ static int lfa_dup(int fd, int cloexec)
     long r;
     if (!lfa_tty_parsed) lfa_parse_tty();
     r = syscall(LFA_NR_dup, fd);
-    if (r < 0) {
-        *__errno_location() = LFA_EBADF;
-        return -1;
-    }
+    if (r < 0) return -1;   /* errno from dup(): do not mask it */
     if (cloexec)
         syscall(LFA_NR_fcntl, r, 2 /* F_SETFD */, 1 /* FD_CLOEXEC */);
     if (fd >= 0 && fd == lfa_tty_fd)

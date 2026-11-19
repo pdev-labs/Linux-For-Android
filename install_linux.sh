@@ -3847,6 +3847,16 @@ lfa_usb_write_script() {  # $1 = host path, $2 = preload (may be empty), rest = 
         if [ -n "$_preload" ]; then
             printf 'export LD_PRELOAD=%q\n' "$_preload"
         fi
+        # The inherited descriptor can carry FD_CLOEXEC, which would close it
+        # in every child (lsusb, python, esptool). Duplicate it here, without
+        # the flag, and point the map at the new number.
+        printf 'if [ -n "${TERMUX_USB_FD:-}" ] && [ -e "/proc/self/fd/$TERMUX_USB_FD" ]; then\n'
+        printf '    exec {LFA_USB_FD_SAFE}<&"$TERMUX_USB_FD"\n'
+        printf '    TERMUX_USB_FD="$LFA_USB_FD_SAFE"; export TERMUX_USB_FD\n'
+        printf '    if [ -n "${LFA_USB_MAP:-}" ]; then\n'
+        printf '        LFA_USB_MAP="${LFA_USB_MAP%%=*}=$TERMUX_USB_FD"; export LFA_USB_MAP\n'
+        printf '    fi\n'
+        printf 'fi\n'
         printf 'exec'
         printf ' %q' "$@"
         printf '\n'
@@ -4181,6 +4191,10 @@ lfa_usb_tty() {
         # proot-distro v5 drops LD_PRELOAD from the environment; set it in
         # the guest so the tty node map and DTR/RTS forwarding work.
         [ -n "$_preload" ] && printf 'export LD_PRELOAD=%q\n' "$_preload"
+        printf 'if [ -n "${TERMUX_USB_FD:-}" ] && [ -e "/proc/self/fd/$TERMUX_USB_FD" ]; then\n'
+        printf '    exec {LFA_USB_FD_SAFE}<&"$TERMUX_USB_FD"\n'
+        printf '    TERMUX_USB_FD="$LFA_USB_FD_SAFE"; export TERMUX_USB_FD\n'
+        printf 'fi\n'
         printf 'exec python3 %q --fd "$TERMUX_USB_FD" --node /dev/ttyUSB0 --baud %q --' \
             "$LFA_USB_TTY_GUEST" "$_baud"
         [ ${#_cmd[@]} -gt 0 ] && printf ' %q' "${_cmd[@]}"

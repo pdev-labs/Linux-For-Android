@@ -47,13 +47,18 @@ WELCOME
 cat > "$R/etc/profile.d/zz-lfa-env.sh" <<'CLEAN'
 #!/bin/sh
 # Make `env` look like a normal Linux box.
+_usb_session="${LFA_USB_MAP:-}"
 for _v in $(env 2>/dev/null | sed -n 's/^\(TERMUX[^=]*\|ANDROID[^=]*\|EXTERNAL_STORAGE\|PREFIX\|TMPDIR\)=.*/\1/p'); do
+    # A USB session needs its descriptor and the usbfs shim; both are set by
+    # LFA, not inherited from Termux, and would otherwise point at nothing.
+    if [ -n "$_usb_session" ] && { [ "$_v" = TERMUX_USB_FD ] || [ "$_v" = LD_PRELOAD ]; }; then
+        continue
+    fi
     unset "$_v" 2>/dev/null || true
 done
-unset _v
-# A USB session sets LD_PRELOAD on purpose: the usbfs shim that maps the
-# inherited descriptor. Any other LD_PRELOAD came from Termux and points at
-# a bionic object the guest cannot load, so drop that one.
+unset _v _usb_session
+# Any remaining LD_PRELOAD came from Termux and points at a bionic object the
+# guest cannot load, so drop that one.
 if [ -z "${LFA_USB_MAP:-}" ]; then
     unset LD_PRELOAD 2>/dev/null || true
 fi

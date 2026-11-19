@@ -73,6 +73,12 @@ tag names, define the order. See the table at the bottom.
   session now binds a small readable `/sys/bus` (containing our
   `usb/devices` tree) and an empty `/sys/class`, and the synthetic
   `subsystem` links are absolute so proot cannot resolve them out of `/sys`.
+- The inherited USB descriptor survives into child processes. Termux:API can
+  hand it over with `FD_CLOEXEC`, so `lsusb`, `python3` and `esptool` started
+  without it (`os.dup(7)` returned `EBADF`, control transfers `ENOTTY`) while
+  descriptors still came from sysfs. The generated session script now
+  duplicates the descriptor without the flag and rewrites `LFA_USB_MAP`, and
+  the login profile keeps `TERMUX_USB_FD` in a USB session.
 - The guest login profile keeps the USB session's `LD_PRELOAD`. The
   "make env look normal" cleanup unset every `LD_PRELOAD`, including the
   usbfs shim a `bash -l` session needs, so libusb still failed with `-99`.

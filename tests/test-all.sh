@@ -837,13 +837,14 @@ check "N appimage env" 'APPIMAGE_EXTRACT_AND_RUN=1' "$NROOT/etc/profile.d/zz-lfa
 # The login profile hides Termux variables but must keep the USB session's
 # own preload, or libusb starts without the udev stubs (-99).
 _envtest() { env -i PATH=/usr/bin:/bin "$@" sh -c \
-    '. "$1"; printf %s "${LD_PRELOAD:-unset}"' _ "$NROOT/etc/profile.d/zz-lfa-env.sh" 2>/dev/null; }
-_keep="$(_envtest LFA_USB_MAP=001/002=7 LD_PRELOAD=/usr/local/lib/lfa-usb-node.so)"
-[ "$_keep" = "/usr/local/lib/lfa-usb-node.so" ] && pass=$((pass+1)) \
-    || { fail=$((fail+1)); echo "FAIL: N usb session keeps LD_PRELOAD (got $_keep)"; }
-_drop="$(_envtest LD_PRELOAD=/nonexistent/lfa-termux-preload.so)"
-[ "$_drop" = "unset" ] && pass=$((pass+1)) \
-    || { fail=$((fail+1)); echo "FAIL: N login drops a Termux LD_PRELOAD (got $_drop)"; }
+    '. "$1"; printf "%s|%s" "${LD_PRELOAD:-unset}" "${TERMUX_USB_FD:-unset}"' _ \
+    "$NROOT/etc/profile.d/zz-lfa-env.sh" 2>/dev/null; }
+_keep="$(_envtest LFA_USB_MAP=001/002=7 LD_PRELOAD=/usr/local/lib/lfa-usb-node.so TERMUX_USB_FD=7)"
+[ "$_keep" = "/usr/local/lib/lfa-usb-node.so|7" ] && pass=$((pass+1)) \
+    || { fail=$((fail+1)); echo "FAIL: N usb session keeps its preload and fd (got $_keep)"; }
+_drop="$(_envtest LD_PRELOAD=/nonexistent/lfa-termux-preload.so TERMUX_USB_FD=7)"
+[ "$_drop" = "unset|unset" ] && pass=$((pass+1)) \
+    || { fail=$((fail+1)); echo "FAIL: N login drops Termux preload/fd (got $_drop)"; }
 check "N login profile" 'linux-for-android profile' "$NROOT/home/user/.profile"
 check "N cursor helper" 'Gtk/CursorThemeName' "$NROOT/usr/local/bin/lfa-set-cursor"
 check "N gpgconf guard" 'gpg-connect-agent' "$NROOT/usr/local/bin/gpgconf"
@@ -1885,6 +1886,9 @@ check "Y11 attach command" 'lsusb' "$T/home/last-run.sh"
 # script must set it after proot has started.
 check "Y11 attach preload in script" \
     'export LD_PRELOAD=/usr/local/lib/lfa-usb-node.so' "$T/home/last-run.sh"
+# The inherited fd can be FD_CLOEXEC; the script re-dups it so children keep it.
+check "Y11 attach fd re-dup" 'exec {LFA_USB_FD_SAFE}<&"$TERMUX_USB_FD"' "$T/home/last-run.sh"
+check "Y11 attach map rewrite" 'LFA_USB_MAP="${LFA_USB_MAP%%=*}=$TERMUX_USB_FD"' "$T/home/last-run.sh"
 [ -f "$UROOT/usr/local/lib/lfa-usb-node.so" ] && pass=$((pass+1)) \
     || { fail=$((fail+1)); echo "FAIL: Y11 attach did not stage the preload"; }
 [ -f "$UROOT/dev/bus/usb/001/002" ] && pass=$((pass+1)) \
@@ -2001,6 +2005,7 @@ check "Y11 tty node" '/dev/ttyUSB0' "$T/y11-tty.log"
 check "Y11 tty baud" 'baud:   460800' "$T/y11-tty.log"
 check "Y11 tty bridge script" 'lfa-usb-tty.py' "$T/home/last-run.sh"
 check "Y11 tty preload in script" 'export LD_PRELOAD=' "$T/home/last-run.sh"
+check "Y11 tty fd re-dup" 'exec {LFA_USB_FD_SAFE}<&' "$T/home/last-run.sh"
 check "Y11 tty bridge baud" '--baud 460800' "$T/home/last-run.sh"
 check "Y11 tty forwards command" 'picocom' "$T/home/last-run.sh"
 check "Y11 tty dev bind" 'dev/bus/usb:/dev/bus/usb' "$T/home/pd-calls.log"
