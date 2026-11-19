@@ -66,6 +66,13 @@ tag names, define the order. See the table at the bottom.
   the session ended; the callback now points stdout at the terminal when
   stderr is still a tty. Redirecting both streams (`> log 2>&1`) still
   captures the session.
+- USB enumeration works in real usbutils/libusb. libudev scans `/sys/bus`
+  and `/sys/class` before `/sys/bus/usb/devices`, and Android's `/sys` is not
+  readable for an app, so `udev_enumerate_scan_devices()` failed with `EACCES`
+  and `lsusb` listed nothing even though the device tree was bound. The
+  session now binds a small readable `/sys/bus` (containing our
+  `usb/devices` tree) and an empty `/sys/class`, and the synthetic
+  `subsystem` links are absolute so proot cannot resolve them out of `/sys`.
 - The guest login profile keeps the USB session's `LD_PRELOAD`. The
   "make env look normal" cleanup unset every `LD_PRELOAD`, including the
   usbfs shim a `bash -l` session needs, so libusb still failed with `-99`.

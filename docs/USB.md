@@ -21,7 +21,7 @@ the real kernel object.
 | Descriptors, strings, interfaces, endpoints | real, read with `USBDEVFS_CONTROL` |
 | `/dev/bus/usb/BBB/DDD` | a real device path (shadow tree bound over `/dev/bus/usb`) plus a preload that opens the inherited descriptor; proot cannot mknod |
 | Data transfers, control/bulk/interrupt requests | real, straight to the kernel driver |
-| `/sys/bus/usb/devices` | synthetic files, but filled with the **real** descriptors |
+| `/sys/bus/usb/devices` | synthetic files filled with the **real** descriptors; a session binds a minimal readable `/sys/bus` and `/sys/class` so libudev can scan them |
 | `/dev/ttyUSB0` | pty bridged to the device's real bulk endpoints |
 | Hotplug events | polled with `lfa usb watch`; Termux:API has no event stream |
 | Kernel drivers (`usbhid`, `usb-storage`, ALSA USB audio) | not attached; userspace access only |

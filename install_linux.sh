@@ -3994,7 +3994,7 @@ lfa_usb_attach() {
     case "$_speed" in ''|*[!0-9]*) _speed=480 ;; esac
 
     if [ "$_sysfs" = 1 ] && [ -n "$_preload" ]; then
-        rm -rf "$LFA_USB_BRIDGE/session-sys" 2>/dev/null || true
+        rm -rf "$LFA_USB_BRIDGE/sysroot" 2>/dev/null || true
         rm -f "$LFA_USB_BRIDGE/prep-$_bus-$_devn.json" \
               "$LFA_USB_BRIDGE/prep-$_bus-$_devn.tsv" \
               "$LFA_USB_BRIDGE/prep-$_bus-$_devn.bin" 2>/dev/null || true
@@ -4007,22 +4007,32 @@ lfa_usb_attach() {
             export LFA_USB_OUT="/tmp/lfa-usb/prep-$_bus-$_devn.json"
             export LFA_USB_TSV="/tmp/lfa-usb/prep-$_bus-$_devn.tsv"
             export LFA_USB_BLOB="/tmp/lfa-usb/prep-$_bus-$_devn.bin"
-            export LFA_USB_SYSFS_OUT="/tmp/lfa-usb/session-sys"
+            export LFA_USB_SYSFS_OUT="/tmp/lfa-usb/sysroot/bus/usb/devices"
             export LFA_USB_BUS="$_bus"
             export LFA_USB_DEV="$_devn"
             export LFA_USB_PATH="$_dev"
             export LFA_USB_SPEED="$_speed"
             lfa_android_timeout 120 termux-usb -r -E -e "$LFA_USB_CALLBACK" "$_dev"
         ) > "$LFA_USB_BRIDGE/prep.log" 2>&1 || _prep_rc=$?
-        if [ -d "$LFA_USB_BRIDGE/session-sys" ] && \
-           [ -n "$(ls -A "$LFA_USB_BRIDGE/session-sys" 2>/dev/null)" ]; then
-            _bind="$LFA_USB_BRIDGE/session-sys:/sys/bus/usb/devices"
+        # libudev enumerates /sys/bus and /sys/class before it looks at
+        # /sys/bus/usb/devices, and Android's /sys is not readable for an
+        # app, so a bind of the devices dir alone fails with EACCES. Bind a
+        # small readable /sys/bus (which contains our usb/devices tree) and
+        # an empty /sys/class instead.
+        if [ -d "$LFA_USB_BRIDGE/sysroot/bus/usb/devices" ] && \
+           [ -n "$(ls -A "$LFA_USB_BRIDGE/sysroot/bus/usb/devices" 2>/dev/null)" ]; then
+            mkdir -p "$LFA_USB_BRIDGE/sysroot/class" 2>/dev/null || true
+            _bind="$LFA_USB_BRIDGE/sysroot/bus:/sys/bus"
         else
             echo "[!] Descriptors could not be read; libusb will not see the device." >&2
             if [ -s "$LFA_USB_BRIDGE/prep.log" ]; then
                 sed 's/^/    /' "$LFA_USB_BRIDGE/prep.log" >&2
             fi
         fi
+    fi
+
+    if [ -n "$_bind" ] && [ -d "$LFA_USB_BRIDGE/sysroot/class" ]; then
+        _devbind="${_devbind:+$_devbind;}$LFA_USB_BRIDGE/sysroot/class:/sys/class"
     fi
 
     if [ ${#_cmd[@]} -eq 0 ]; then

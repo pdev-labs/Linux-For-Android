@@ -1872,7 +1872,8 @@ check "Y11 attach node" '/dev/bus/usb/001/002' "$T/y11-attach.log"
 check "Y11 attach session map" '001/002=9' "$T/home/pd-calls.log"
 check "Y11 attach preload" 'PRELOAD=/usr/local/lib/lfa-usb-node.so' "$T/home/tu-session.log"
 check "Y11 attach sysfs bind" '--bind ' "$T/home/pd-calls.log"
-check "Y11 attach bind path" '/sys/bus/usb/devices' "$T/home/pd-calls.log"
+check "Y11 attach bind path" '/sys/bus:/sys/bus' "$T/home/pd-calls.log"
+check "Y11 attach class bind" '/sys/class:/sys/class' "$T/home/pd-calls.log"
 # proot-distro binds the host /dev over /dev, so the node must also live in a
 # shadow tree that is bound over /dev/bus/usb; otherwise `ls` and stat() fail.
 check "Y11 attach dev bind" 'dev/bus/usb:/dev/bus/usb' "$T/home/pd-calls.log"
@@ -1979,6 +1980,12 @@ PY
 [ -f "$T/usb-sysfs/1-2:0.0/ep_81/wMaxPacketSize" ] && pass=$((pass+1)) \
     || { fail=$((fail+1)); echo "FAIL: Y11 sysfs interface/endpoint dirs missing"; }
 check "Y11 sysfs config attrs" '0a' "$T/usb-sysfs/1-2:0.0/bInterfaceClass"
+# Absolute links survive proot's path translation; relative ".." climbs the
+# host path of the bind and dangles.
+[ "$(readlink "$T/usb-sysfs/1-2/subsystem" 2>/dev/null)" = "/sys/bus/usb" ] && pass=$((pass+1)) \
+    || { fail=$((fail+1)); echo "FAIL: Y11 sysfs device subsystem link is not absolute"; }
+[ "$(readlink "$T/usb-sysfs/1-2:0.0/subsystem" 2>/dev/null)" = "/sys/bus/usb" ] && pass=$((pass+1)) \
+    || { fail=$((fail+1)); echo "FAIL: Y11 sysfs interface subsystem link is not absolute"; }
 "$LFA" usb attach --no-sysfs 001/002 -i debian -- true > "$T/y11-attach-nosys.log" 2>&1; rc=$?
 [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y11 attach --no-sysfs exit $rc"; }
 check "Y11 attach no sysfs" 'sysfs:   not available' "$T/y11-attach-nosys.log"

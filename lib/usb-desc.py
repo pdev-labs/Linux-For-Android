@@ -307,6 +307,10 @@ def _write_interfaces(directory: str, sysname: str,
             _write_text(idir, "bInterfaceSubClass", isub)
             _write_text(idir, "bInterfaceProtocol", iproto)
             _write_text(idir, "bNumEndpoints", "%d" % len(endpoints))
+            isubsys = os.path.join(idir, "subsystem")
+            if os.path.lexists(isubsys):
+                os.unlink(isubsys)
+            os.symlink("/sys/bus/usb", isubsys)
             _write_text(idir, "uevent", "\n".join([
                 "DEVTYPE=usb_interface",
                 "INTERFACE=%s/%s/%s" % (iclass, isub, iproto),
@@ -429,7 +433,11 @@ def write_sysfs(tree: str, result: Dict[str, Any], speed: int = 480) -> str:
     subsystem = os.path.join(directory, "subsystem")
     if os.path.lexists(subsystem):
         os.unlink(subsystem)
-    os.symlink("../../../../bus/usb", subsystem)
+    # Absolute, not "../../../../bus/usb": proot resolves a relative link
+    # against the host path of the bind source, so ".." would climb out of
+    # the guest /sys and the link would dangle. Absolute paths are
+    # translated by proot like any other guest path.
+    os.symlink("/sys/bus/usb", subsystem)
 
     with open(os.path.join(directory, "descriptors"), "wb") as handle:
         handle.write(blob)
