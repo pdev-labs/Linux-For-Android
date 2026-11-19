@@ -2537,6 +2537,14 @@ fi
 USER_NAME="${LFA_USB_USER:-user}"
 FLAGS="${LFA_USB_PD_FLAGS:-}"
 MODE="${LFA_USB_MODE:-exec}"
+# `termux-usb` runs this callback inside `OUTPUT="$(...)"`, so the guest's
+# stdout would be swallowed by a command substitution and only printed when
+# the session ends. When stdout is a pipe but stderr is still the terminal,
+# point stdout at the terminal so output is live and the guest sees a tty.
+# `cmd > file 2>&1` still redirects both and captures everything.
+if [ ! -t 1 ] && [ -t 2 ]; then
+    exec >&2
+fi
 # shellcheck disable=SC2086  # flags are a word list such as --no-sysvipc
 run_guest() {
     local _bind=()

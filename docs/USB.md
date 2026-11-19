@@ -310,7 +310,8 @@ Termux shells if you need two devices; `lfa usb watch` still shows all of them.
 | `No USB devices are visible` | No OTG adapter, device is charge-only, or Android did not enumerate it. Try a powered hub |
 | `ID ----:----` in `lsusb` | Live list works, descriptors are not cached. Run `lfa usb scan` |
 | `usbfs preload could not be built` | `pkg install clang`, then `lfa usb enable -i NAME` again, or use `lfa usb exec` |
-| `lsusb` prints nothing in a session | `/sys` bind or preload missing. Check `lfa usb status`; run `lfa usb attach` without `--no-sysfs` |
+| `lsusb` prints nothing in a session | the command ran outside `lfa usb attach`, or the preload/sysfs is missing. Check `lfa usb status` |
+| Saving session output | redirect both streams, e.g. `lfa usb attach -- lsusb > log 2>&1`; Termux:API captures stdout in a pipe, so a session keeps it on the terminal unless both are redirected |
 | `lsusb -t` is empty | there is no root hub in the synthetic tree; use `lsusb` or `lsusb -v` |
 | `interface N is already claimed by a kernel driver` | Android bound `cdc_acm`/`usb-storage`. Unplug, use the native USB bootloader port, or a board without that driver |
 | `esptool: command not found` | `lfa usb flash --install` |

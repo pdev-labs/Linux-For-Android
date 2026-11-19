@@ -61,6 +61,11 @@ tag names, define the order. See the table at the bottom.
   a zero-second timeout no longer wraps the session in GNU `timeout`, which
   put the guest shell in a background process group so reads stopped with
   SIGTTIN (or failed with EIO).
+- USB sessions show output live. `termux-usb` runs its callback inside
+  `OUTPUT="$(...)"`, so the guest's stdout was captured and only printed when
+  the session ended; the callback now points stdout at the terminal when
+  stderr is still a tty. Redirecting both streams (`> log 2>&1`) still
+  captures the session.
 - Guest sessions now export `APPIMAGE_EXTRACT_AND_RUN=1`, because proot does
   not expose `/dev/fuse` and an AppImage cannot self-mount. A direct
   `./Foo.AppImage`, a file-manager double-click, and a menu entry all work.

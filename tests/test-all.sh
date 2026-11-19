@@ -1662,6 +1662,38 @@ bash -n "$T/prefix/bin/lfa-usb-callback" && pass=$((pass+1)) \
     || { fail=$((fail+1)); echo "FAIL: Y11 callback syntax"; }
 check "Y11 callback fd" 'TERMUX_USB_FD' "$T/prefix/bin/lfa-usb-callback"
 check "Y11 callback login" 'login $FLAGS' "$T/prefix/bin/lfa-usb-callback"
+# `termux-usb` runs the callback inside OUTPUT="$(...)", so a guest shell
+# would lose its stdout and look dead. With a terminal on stderr the
+# callback must hand stdout to it; with both streams redirected it must
+# still capture normally.
+mkdir -p "$T/cbfake"
+cat > "$T/cbfake/proot-distro" <<'FAKEPD'
+#!/bin/sh
+echo "GUEST-STDOUT"
+echo "GUEST-STDERR" >&2
+FAKEPD
+chmod +x "$T/cbfake/proot-distro"
+cat > "$T/cb-session.sh" <<CBENV
+#!/bin/sh
+export TERMUX_USB_FD=9 LFA_USB_INSTANCE=test LFA_USB_MODE=exec
+export LFA_USB_RUN_SCRIPT=/tmp/lfa-usb/run.sh
+export PATH="$T/cbfake:/usr/bin:/bin"
+exec "$T/prefix/bin/lfa-usb-callback"
+CBENV
+chmod +x "$T/cb-session.sh"
+if command -v script >/dev/null 2>&1; then
+    _cb_pty="$(script -qec "$T/cb-session.sh > $T/cb-captured.out" /dev/null 2>&1)"
+    [ ! -s "$T/cb-captured.out" ] && pass=$((pass+1)) \
+        || { fail=$((fail+1)); echo "FAIL: Y11 callback wrote to the captured stdout pipe"; }
+    case "$_cb_pty" in
+        *GUEST-STDOUT*) pass=$((pass+1)) ;;
+        *) fail=$((fail+1)); echo "FAIL: Y11 callback did not move stdout to the terminal";;
+    esac
+fi
+"$T/cb-session.sh" > "$T/cb-pipe.out" 2> "$T/cb-pipe.err"
+check "Y11 callback still capturable" 'GUEST-STDOUT' "$T/cb-pipe.out"
+rm -rf "$T/cb-session.sh" "$T/cb-captured.out" "$T/cb-pipe.out" \
+    "$T/cb-pipe.err" "$T/cbfake"
 [ "$(readlink "$UROOT/run/lfa-usb" 2>/dev/null)" = "/tmp/lfa-usb" ] && pass=$((pass+1)) \
     || { fail=$((fail+1)); echo "FAIL: Y11 /run/lfa-usb symlink missing"; }
 # A usb command with an unusable saved instance must say why, never exit
