@@ -19,7 +19,7 @@ the real kernel object.
 |---|---|
 | Device list (`Bus`, `Device`, path) | real, from `termux-usb -l` |
 | Descriptors, strings, interfaces, endpoints | real, read with `USBDEVFS_CONTROL` |
-| `/dev/bus/usb/BBB/DDD` | real descriptor exposed by a preload; proot cannot mknod |
+| `/dev/bus/usb/BBB/DDD` | a real device path (shadow tree bound over `/dev/bus/usb`) plus a preload that opens the inherited descriptor; proot cannot mknod |
 | Data transfers, control/bulk/interrupt requests | real, straight to the kernel driver |
 | `/sys/bus/usb/devices` | synthetic files, but filled with the **real** descriptors |
 | `/dev/ttyUSB0` | pty bridged to the device's real bulk endpoints |

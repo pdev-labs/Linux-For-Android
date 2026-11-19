@@ -1525,6 +1525,7 @@ case " $* " in
                 echo "MODE=exec"
                 echo "MAP=${LFA_USB_MAP:-}"
                 echo "BIND=${LFA_USB_BIND:-}"
+                echo "DEVBIND=${LFA_USB_DEVBIND:-}"
                 echo "PRELOAD=${LFA_USB_PRELOAD:-}"
             } >> "$HOME/tu-session.log"
             if [ -n "${LFA_USB_RUN_SCRIPT:-}" ]; then
@@ -1862,11 +1863,17 @@ check "Y11 attach session map" '001/002=9' "$T/home/pd-calls.log"
 check "Y11 attach preload" 'PRELOAD=/usr/local/lib/lfa-usb-node.so' "$T/home/tu-session.log"
 check "Y11 attach sysfs bind" '--bind ' "$T/home/pd-calls.log"
 check "Y11 attach bind path" '/sys/bus/usb/devices' "$T/home/pd-calls.log"
+# proot-distro binds the host /dev over /dev, so the node must also live in a
+# shadow tree that is bound over /dev/bus/usb; otherwise `ls` and stat() fail.
+check "Y11 attach dev bind" 'dev/bus/usb:/dev/bus/usb' "$T/home/pd-calls.log"
+check "Y11 attach dev bind env" 'DEVBIND='"$T/prefix/tmp/lfa-usb"'/dev/bus/usb:/dev/bus/usb' "$T/home/tu-session.log"
 check "Y11 attach command" 'lsusb' "$T/home/last-run.sh"
 [ -f "$UROOT/usr/local/lib/lfa-usb-node.so" ] && pass=$((pass+1)) \
     || { fail=$((fail+1)); echo "FAIL: Y11 attach did not stage the preload"; }
 [ -f "$UROOT/dev/bus/usb/001/002" ] && pass=$((pass+1)) \
     || { fail=$((fail+1)); echo "FAIL: Y11 attach did not create the node"; }
+[ -f "$T/prefix/tmp/lfa-usb/dev/bus/usb/001/002" ] && pass=$((pass+1)) \
+    || { fail=$((fail+1)); echo "FAIL: Y11 attach did not create the shadow node"; }
 [ -f "$UROOT/usr/local/libexec/lfa-usb-tty.py" ] && pass=$((pass+1)) \
     || { fail=$((fail+1)); echo "FAIL: Y11 attach did not stage the tty bridge"; }
 readelf -h "$UROOT/usr/local/lib/lfa-usb-node.so" 2>/dev/null | grep -q 'Shared object' \
@@ -1963,6 +1970,7 @@ check "Y11 sysfs config attrs" '0a' "$T/usb-sysfs/1-2:0.0/bInterfaceClass"
 check "Y11 attach no sysfs" 'sysfs:   not available' "$T/y11-attach-nosys.log"
 
 # Serial bridge: /dev/ttyUSB0 is a pty fed by the real bulk endpoints.
+: > "$T/home/pd-calls.log"
 "$LFA" usb tty 001/002 -i debian --baud 460800 -- picocom -b 460800 /dev/ttyUSB0 \
     > "$T/y11-tty.log" 2>&1; rc=$?
 [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y11 tty exit $rc"; }
@@ -1971,6 +1979,7 @@ check "Y11 tty baud" 'baud:   460800' "$T/y11-tty.log"
 check "Y11 tty bridge script" 'lfa-usb-tty.py' "$T/home/last-run.sh"
 check "Y11 tty bridge baud" '--baud 460800' "$T/home/last-run.sh"
 check "Y11 tty forwards command" 'picocom' "$T/home/last-run.sh"
+check "Y11 tty dev bind" 'dev/bus/usb:/dev/bus/usb' "$T/home/pd-calls.log"
 [ -f "$UROOT/dev/ttyUSB0" ] && pass=$((pass+1)) \
     || { fail=$((fail+1)); echo "FAIL: Y11 tty placeholder missing"; }
 

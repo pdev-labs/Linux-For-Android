@@ -2547,8 +2547,19 @@ if [ ! -t 1 ] && [ -t 2 ]; then
 fi
 # shellcheck disable=SC2086  # flags are a word list such as --no-sysvipc
 run_guest() {
-    local _bind=()
+    local _bind=() _oldifs _d
     [ -n "${LFA_USB_BIND:-}" ] && _bind=(--bind "$LFA_USB_BIND")
+    # proot-distro binds the host /dev over the guest /dev, which hides any
+    # node stored in the rootfs. The host tree passed here restores the
+    # device path so `ls` and stat() see it as well as open().
+    if [ -n "${LFA_USB_DEVBIND:-}" ]; then
+        _oldifs="$IFS"; IFS=';'
+        # shellcheck disable=SC2086  # ';' separates the specs, not spaces
+        for _d in $LFA_USB_DEVBIND; do
+            [ -n "$_d" ] && _bind+=(--bind "$_d")
+        done
+        IFS="$_oldifs"
+    fi
     exec "$PD" login $FLAGS "${_bind[@]}" "$INST" --user "$USER_NAME" \
         --shared-tmp -- "$@"
 }
@@ -3804,6 +3815,13 @@ lfa_usb_prepare_nodes() {  # $1 rootfs, $2 bus, $3 dev, $4 tty(0/1)
             printf '/dev/bus/usb/%s/%s\n' "$_bus" "$_dev" >> "$_manifest" 2>/dev/null || true
         fi
     fi
+    # proot-distro v5+ binds the host /dev over the guest /dev, hiding the
+    # placeholder above. Keep the same node in a Termux-side shadow tree and
+    # bind `<shadow>/bus/usb` over /dev/bus/usb, which wins over that bind.
+    _shadow="$LFA_USB_BRIDGE/dev/bus/usb/$_bus"
+    if mkdir -p "$_shadow" 2>/dev/null && : > "$_shadow/$_dev" 2>/dev/null; then
+        chmod 666 "$_shadow/$_dev" 2>/dev/null || true
+    fi
     if [ "$_tty" = 1 ]; then
         _ttynode="$_root/dev/ttyUSB0"
         if [ ! -e "$_ttynode" ] && [ ! -L "$_ttynode" ]; then
@@ -3871,6 +3889,7 @@ lfa_usb_install_esptool() {  # $1 = optional instance
 
 lfa_usb_attach() {
     local _inst="" _user="" _root _id _dev="" _cwd="" _perm=1 _sysfs=1 _rc=0
+    local _devbind=""
     local _bd _bus _devn _speed _shim _preload="" _bind="" _prep_rc=0
     local _script_host _script_guest
     local -a _cmd=()
@@ -3962,6 +3981,8 @@ lfa_usb_attach() {
     lfa_usb_write_callback || return 1
     mkdir -p "$LFA_USB_BRIDGE" 2>/dev/null || true
     lfa_usb_prepare_nodes "$_root" "$_bus" "$_devn" 0
+    [ -f "$LFA_USB_BRIDGE/dev/bus/usb/$_bus/$_devn" ] && \
+        _devbind="$LFA_USB_BRIDGE/dev/bus/usb:/dev/bus/usb"
 
     _speed="$(cat "$LFA_USB_BRIDGE/sys/${_bus}-${_devn}/speed" 2>/dev/null || true)"
     case "$_speed" in ''|*[!0-9]*) _speed=480 ;; esac
@@ -4031,6 +4052,7 @@ lfa_usb_attach() {
         export LFA_USB_DEV="$_devn"
         export LFA_USB_PRELOAD="$_preload"
         export LFA_USB_BIND="$_bind"
+        export LFA_USB_DEVBIND="$_devbind"
         if [ "$_perm" = "1" ] && { [ -z "$_bind" ] || [ "$_prep_rc" -ne 0 ]; }; then
             lfa_android_timeout 0 termux-usb -r -E -e "$LFA_USB_CALLBACK" "$_dev"
         else
@@ -4043,6 +4065,7 @@ lfa_usb_attach() {
 
 lfa_usb_tty() {
     local _inst="" _user="" _root _id _dev="" _cwd="" _perm=1 _baud=115200 _rc=0
+    local _devbind=""
     local _bd _bus _devn _shim _preload="" _script_host _script_guest
     local -a _cmd=()
     while [ $# -gt 0 ]; do
@@ -4131,6 +4154,8 @@ lfa_usb_tty() {
     lfa_usb_write_callback || return 1
     mkdir -p "$LFA_USB_BRIDGE" 2>/dev/null || true
     lfa_usb_prepare_nodes "$_root" "$_bus" "$_devn" 1
+    [ -f "$LFA_USB_BRIDGE/dev/bus/usb/$_bus/$_devn" ] && \
+        _devbind="$LFA_USB_BRIDGE/dev/bus/usb:/dev/bus/usb"
 
     _script_host="$LFA_USB_BRIDGE/tty-$$.sh"
     _script_guest="/tmp/lfa-usb/tty-$$.sh"
@@ -4162,6 +4187,7 @@ lfa_usb_tty() {
         export LFA_USB_BUS="$_bus"
         export LFA_USB_DEV="$_devn"
         export LFA_USB_PRELOAD="$_preload"
+        export LFA_USB_DEVBIND="$_devbind"
         if [ "$_perm" = "1" ]; then
             lfa_android_timeout 0 termux-usb -r -E -e "$LFA_USB_CALLBACK" "$_dev"
         else

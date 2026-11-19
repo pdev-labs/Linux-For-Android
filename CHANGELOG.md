@@ -66,6 +66,10 @@ tag names, define the order. See the table at the bottom.
   the session ended; the callback now points stdout at the terminal when
   stderr is still a tty. Redirecting both streams (`> log 2>&1`) still
   captures the session.
+- `/dev/bus/usb/BBB/DDD` is visible inside the guest. proot-distro binds the
+  host `/dev` over the rootfs, which hid the placeholder node; the node is now
+  also kept in a Termux-side shadow tree and bound over `/dev/bus/usb`, so
+  `ls`, `stat()` and tools that check the path before opening it work.
 - Guest sessions now export `APPIMAGE_EXTRACT_AND_RUN=1`, because proot does
   not expose `/dev/fuse` and an AppImage cannot self-mount. A direct
   `./Foo.AppImage`, a file-manager double-click, and a menu entry all work.
