@@ -1888,7 +1888,7 @@ check "Y11 attach preload in script" \
     'export LD_PRELOAD=/usr/local/lib/lfa-usb-node.so' "$T/home/last-run.sh"
 # The inherited fd can be FD_CLOEXEC; the script re-dups it so children keep it.
 check "Y11 attach fd re-dup" 'exec {LFA_USB_FD_SAFE}<&"$TERMUX_USB_FD"' "$T/home/last-run.sh"
-check "Y11 attach map rewrite" 'LFA_USB_MAP="${LFA_USB_MAP%%=*}=$TERMUX_USB_FD"' "$T/home/last-run.sh"
+check "Y11 attach map rewrite" 'LFA_USB_MAP="${LFA_USB_MAP%=*}=$TERMUX_USB_FD"' "$T/home/last-run.sh"
 [ -f "$UROOT/usr/local/lib/lfa-usb-node.so" ] && pass=$((pass+1)) \
     || { fail=$((fail+1)); echo "FAIL: Y11 attach did not stage the preload"; }
 [ -f "$UROOT/dev/bus/usb/001/002" ] && pass=$((pass+1)) \
