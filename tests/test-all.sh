@@ -1872,8 +1872,10 @@ check "Y11 attach node" '/dev/bus/usb/001/002' "$T/y11-attach.log"
 check "Y11 attach session map" '001/002=9' "$T/home/pd-calls.log"
 check "Y11 attach preload" 'PRELOAD=/usr/local/lib/lfa-usb-node.so' "$T/home/tu-session.log"
 check "Y11 attach sysfs bind" '--bind ' "$T/home/pd-calls.log"
-check "Y11 attach bind path" '/sys/bus:/sys/bus' "$T/home/pd-calls.log"
-check "Y11 attach class bind" '/sys/class:/sys/class' "$T/home/pd-calls.log"
+# The attach log carries the fake proot-distro's own argv echo, so this is
+# what the callback really passed, not just what was exported.
+check "Y11 attach bind path" '/sysroot/bus:/sys/bus' "$T/y11-attach.log"
+check "Y11 attach class bind" '/sysroot/class:/sys/class' "$T/y11-attach.log"
 # proot-distro binds the host /dev over /dev, so the node must also live in a
 # shadow tree that is bound over /dev/bus/usb; otherwise `ls` and stat() fail.
 check "Y11 attach dev bind" 'dev/bus/usb:/dev/bus/usb' "$T/home/pd-calls.log"
