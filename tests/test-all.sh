@@ -1974,6 +1974,32 @@ timeout 60 python3 "$REPO/tests/usb-tty-plumbing.py" > "$T/y11-tty-plumb.log" 2>
 [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y11 tty plumbing exit $rc"; }
 check "Y11 tty plumbing relay" 'plumbing: ok' "$T/y11-tty-plumb.log"
 
+# Automatic mode: `lfa usb enable` is enough; the launchers ask for the
+# device themselves and inject the binds.
+"$LFA" usb enable -i debian > "$T/y11-auto-enable.log" 2>&1; rc=$?
+[ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y11 auto enable exit $rc"; }
+check "Y11 auto conf" 'USB_AUTO="1"' "$T/home/.config/linux-for-android/usb.conf"
+[ -x "$T/prefix/bin/lfa-usb-auto" ] && pass=$((pass+1)) \
+    || { fail=$((fail+1)); echo "FAIL: Y11 auto wrapper not installed"; }
+"$LFA" usb auto -- sh -c 'echo "bind=${LFA_USB_BIND:-}"; echo "devbind=${LFA_USB_DEVBIND:-}"; echo "map=${LFA_USB_MAP:-}"; echo "preload=${LFA_USB_PRELOAD:-}"' \
+    > "$T/y11-auto.log" 2>&1; rc=$?
+[ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y11 auto exit $rc"; }
+check "Y11 auto announced" 'available in this session (auto mode)' "$T/y11-auto.log"
+check "Y11 auto sysfs bind" '/lfa-usb/sysroot/bus:/sys/bus' "$T/y11-auto.log"
+check "Y11 auto dev bind" 'dev/bus/usb:/dev/bus/usb' "$T/y11-auto.log"
+# The fake termux-usb sets TERMUX_USB_FD=9 without opening it, so the map
+# keeps that number; a real session re-dups to a free fd first.
+check "Y11 auto map" 'map=001/002=9' "$T/y11-auto.log"
+check "Y11 auto preload" 'preload=/usr/local/lib/lfa-usb-node.so' "$T/y11-auto.log"
+check "Y11 auto terminal hook" 'lfa-usb-auto' "$T/prefix/bin/terminal-linux"
+check "Y11 auto terminal binds" 'USB_BIND+=(--bind "$LFA_USB_BIND")' "$T/prefix/bin/terminal-linux"
+check "Y11 auto desktop helper" 'pd_login() { proot-distro login "${USB_BIND[@]}" "$@"' "$T/prefix/bin/start-linux"
+check "Y11 auto desktop wrap" '${USB_WRAP}mkdir' "$T/prefix/bin/start-linux"
+"$LFA" usb disable -i debian > "$T/y11-auto-disable.log" 2>&1
+check "Y11 auto off" 'USB_AUTO="0"' "$T/home/.config/linux-for-android/usb.conf"
+[ ! -e "$T/prefix/bin/lfa-usb-auto" ] && pass=$((pass+1)) \
+    || { fail=$((fail+1)); echo "FAIL: Y11 auto wrapper survived disable"; }
+
 # The sysfs tree must carry the interface and endpoint directories that
 # libusb walks, not just the device files.
 python3 - "$REPO/lib/usb-desc.py" "$T/usb-sysfs" > "$T/y11-sysfs-build.log" 2>&1 <<'PY'; rc=$?

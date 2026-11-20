@@ -93,6 +93,39 @@ lfa usb flash write 0x0 /sdcard/firmware.bin
 shell) inside the guest. `lfa usb list` still works without any session: it
 reads the published bridge and needs no permission dialog.
 
+## Automatic mode: enable once
+
+`lfa usb enable -i NAME` also turns on automatic mode. After that, every
+session LFA starts — `lfa shell`, `lfa desktop` (and the Terminal shortcut,
+which use the same launchers) — is opened with the device already inside:
+no `lfa usb attach`, no `lfa usb scan`, no environment variables.
+
+```bash
+lfa usb enable -i ubuntu-5623     # once
+lfa desktop -i ubuntu-5623        # lsusb, PyUSB, esptool: already there
+lfa shell   -i ubuntu-5623        # same
+```
+
+How it works: the launchers call `lfa-usb-auto`, which asks Termux:API for
+the descriptor, prepares the synthetic sysfs tree once per device (it is
+reused by later sessions), and re-runs the launcher with `--bind` flags and
+the guest preload exported. If no device is plugged in, the session starts
+normally. GUI programs inherit the same view, so a serial tool opened from
+the desktop menu sees `/dev/bus/usb/...` like any other process in that
+session.
+
+Limits of automatic mode:
+
+- Android still asks for permission per device and connection. Tick "always
+  allow for this app" to stop the repeat dialogs; LFA cannot bypass them.
+- Only sessions started through LFA get the view. A bare
+  `proot-distro login` is untouched.
+- One device per session, as everywhere else in this bridge. Automatic
+  mode follows the instance you enabled; a session for a different distro
+  starts without it.
+- `lfa usb disable -i NAME` turns automatic mode off again and removes
+  `lfa-usb-auto`.
+
 ## Commands
 
 ```
@@ -101,7 +134,7 @@ lfa usb list [--json]          live devices; descriptors when already cached
 lfa usb refresh                re-read `termux-usb -l` and rewrite the guest view
 lfa usb scan [DEV...]          request permission and read real descriptors
 lfa usb watch [--interval N]   poll for hotplug, print add/remove events
-lfa usb enable [-i NAME]       install helpers, preload, and the tty bridge
+lfa usb enable [-i NAME]       install helpers, preload, tty bridge, auto mode
 lfa usb disable [-i NAME]      remove those helpers
 lfa usb attach [DEV] [-- CMD]  session with /dev/bus/usb/BBB/DDD and sysfs
 lfa usb tty [DEV] [-- CMD]     session with /dev/ttyUSB0

@@ -2752,7 +2752,7 @@ Usage: lfa usb <command> [options]
   scan [DEV...]            request permission and read real descriptors
   watch [--interval N] [--count N]
                            poll for hotplug and print add/remove events
-  enable [-i NAME]         install the guest helpers, libusb preload, tty bridge
+  enable [-i NAME]         install helpers, preload, tty bridge, auto mode
   disable [-i NAME]        remove those guest helpers
   attach [DEV] [-- CMD...] open a guest session with /dev/bus/usb/BBB/DDD
   tty [DEV] [-- CMD...]    open a session with /dev/ttyUSB0 (serial bridge)
@@ -2767,7 +2767,8 @@ Examples:
   lfa usb status
   lfa usb refresh
   lfa usb scan
-  lfa usb enable -i ubuntu
+  lfa usb enable -i ubuntu        # once: helpers and automatic mode
+  lfa desktop -i ubuntu-5623      # USB already inside; no attach needed
   lfa usb attach                  # shell with a real /dev/bus/usb + sysfs
   lfa usb attach 001/002 -- lsusb -v
   lfa usb tty                     # shell with /dev/ttyUSB0
@@ -2918,6 +2919,7 @@ lfa_usb_status() {
     echo "  live refresh:       $_refresh"
     echo "  bridge directory:   $LFA_USB_BRIDGE"
     echo "  guest helpers:      $_shims"
+    echo "  automatic mode:     $(lfa_usb_conf_get USB_AUTO | grep -qx 1 && echo "on (sessions get the device)" || echo "off")"
     echo "  libusb preload:     $_preload"
     echo "  last scan:          $_last"
     echo "  USB fd in this shell: $_fd_now"
@@ -3139,6 +3141,8 @@ lfa_usb_enable() {
         echo "[!] Rootfs missing for $_id." >&2
         return 1
     fi
+    lfa_usb_conf_set USB_AUTO "1"
+    lfa_usb_write_auto_wrapper || true
     mkdir -p "$_root/usr/local/bin" "$_root/usr/local/libexec" 2>/dev/null || true
     lfa_usb_shim_safe "$_root/usr/local/bin/lsusb" || return 1
     lfa_usb_shim_safe "$_root/usr/local/bin/lfa-usb" || return 1
@@ -3488,6 +3492,10 @@ LFAUSB
     echo "    Serial:  lfa usb tty             (real /dev/ttyUSB0)"
     echo "    Flash:   lfa usb flash --install"
     echo "    Raw fd:  lfa usb exec 001/002 -- lfa-usb desc"
+    echo ""
+    echo "[*] Automatic mode is on: lfa shell and lfa desktop now start with"
+    echo "    the plugged-in device already inside. Plug it in, then open a"
+    echo "    session; no lfa usb attach needed. Off: lfa usb disable -i $_id"
 }
 
 lfa_usb_disable() {
@@ -3504,6 +3512,8 @@ lfa_usb_disable() {
         return 1
     fi
     _id="$INSTANCE_NAME"
+    lfa_usb_conf_set USB_AUTO "0"
+    rm -f "$PREFIX/bin/lfa-usb-auto" 2>/dev/null || true
     _root="$(pd_rootfs "$_id")"
     for _f in "usr/local/bin/lsusb" "usr/local/bin/lfa-usb"; do
         if [ -f "$_root/$_f" ] && grep -q 'LFA USB bridge' "$_root/$_f" 2>/dev/null; then
@@ -3932,6 +3942,144 @@ lfa_usb_install_esptool() {  # $1 = optional instance
     return 0
 }
 
+lfa_usb_sys_bind() {  # print the /sys/bus bind spec when the tree is ready
+    if [ -d "$LFA_USB_BRIDGE/sysroot/bus/usb/devices" ] && \
+       [ -n "$(ls -A "$LFA_USB_BRIDGE/sysroot/bus/usb/devices" 2>/dev/null)" ]; then
+        mkdir -p "$LFA_USB_BRIDGE/sysroot/class" 2>/dev/null || true
+        printf '%s/bus:/sys/bus\n' "$LFA_USB_BRIDGE/sysroot"
+    fi
+}
+
+lfa_usb_prep_sysfs() {  # instance user bus dev path speed
+    local _id="$1" _user="$2" _bus="$3" _devn="$4" _dev="$5" _speed="$6"
+    local _prep_rc=0
+    rm -rf "$LFA_USB_BRIDGE/sysroot" 2>/dev/null || true
+    rm -f "$LFA_USB_BRIDGE/prep-$_bus-$_devn.json" \
+          "$LFA_USB_BRIDGE/prep-$_bus-$_devn.tsv" \
+          "$LFA_USB_BRIDGE/prep-$_bus-$_devn.bin" 2>/dev/null || true
+    (
+        export LFA_USB_MODE=prep
+        export LFA_USB_INSTANCE="$_id"
+        export LFA_USB_USER="$_user"
+        LFA_USB_PD_FLAGS="$(pd_login_flags)"
+        export LFA_USB_PD_FLAGS
+        export LFA_USB_OUT="/tmp/lfa-usb/prep-$_bus-$_devn.json"
+        export LFA_USB_TSV="/tmp/lfa-usb/prep-$_bus-$_devn.tsv"
+        export LFA_USB_BLOB="/tmp/lfa-usb/prep-$_bus-$_devn.bin"
+        export LFA_USB_SYSFS_OUT="/tmp/lfa-usb/sysroot/bus/usb/devices"
+        export LFA_USB_BUS="$_bus"
+        export LFA_USB_DEV="$_devn"
+        export LFA_USB_PATH="$_dev"
+        export LFA_USB_SPEED="$_speed"
+        lfa_android_timeout 120 termux-usb -r -E -e "$LFA_USB_CALLBACK" "$_dev"
+    ) > "$LFA_USB_BRIDGE/prep.log" 2>&1 || _prep_rc=$?
+    [ -n "$(lfa_usb_sys_bind)" ] && return 0
+    echo "[!] Descriptors could not be read; libusb will not see the device." >&2
+    if [ -s "$LFA_USB_BRIDGE/prep.log" ]; then
+        sed 's/^/    /' "$LFA_USB_BRIDGE/prep.log" >&2
+    fi
+    return 1
+}
+
+lfa_usb_write_auto_wrapper() {
+    mkdir -p "$PREFIX/bin" 2>/dev/null || return 1
+    cat > "$PREFIX/bin/lfa-usb-auto" <<AUTO
+#!/bin/bash
+# Installed by \`lfa usb enable\`. Runs a launcher with the USB view injected
+# when USB auto mode is on; otherwise it just runs the launcher.
+exec "$PREFIX/lib/linux-for-android/install_linux.sh" --cli usb auto -- "\$@"
+AUTO
+    chmod 755 "$PREFIX/bin/lfa-usb-auto" 2>/dev/null || true
+}
+
+lfa_usb_write_auto_script() {  # dst preload bind devbind BBB/DDD -- command...
+    local _dst="$1" _preload="$2" _bind="$3" _devbind="$4" _map="$5"
+    shift 5
+    [ $# -gt 0 ] || return 1
+    {
+        printf '#!/bin/bash\n'
+        printf '# Generated by lfa usb auto; deleted when the session ends.\n'
+        # termux-usb captures the callback's stdout, so keep the session on
+        # the terminal unless both streams are redirected by the caller.
+        printf 'if [ ! -t 1 ] && [ -t 2 ]; then exec >&2; fi\n'
+        printf 'export LFA_USB_AUTO_DONE=1\n'
+        lfa_usb_fd_prelude
+        printf 'export LFA_USB_MAP="%s=$TERMUX_USB_FD"\n' "$_map"
+        [ -n "$_preload" ] && printf 'export LFA_USB_PRELOAD=%q\n' "$_preload"
+        [ -n "$_bind" ] && printf 'export LFA_USB_BIND=%q\n' "$_bind"
+        [ -n "$_devbind" ] && printf 'export LFA_USB_DEVBIND=%q\n' "$_devbind"
+        printf 'exec'
+        printf ' %q' "$@"
+        printf '\n'
+    } > "$_dst" 2>/dev/null || return 1
+    chmod 700 "$_dst" 2>/dev/null || true
+}
+
+lfa_usb_auto() {  # -- COMMAND... : session entrypoint used by the launchers
+    local _inst _dev _bd _bus _devn _root _user _shim _preload="" _speed
+    local _bind="" _devbind="" _script_host
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            -h|--help) echo "Usage: lfa usb auto -- COMMAND..." >&2; return 0 ;;
+            --) shift; break ;;
+            *) break ;;
+        esac
+    done
+    [ $# -gt 0 ] || return 2
+    # Anything that cannot be prepared must still start the session: a
+    # missing device is not an error for a desktop or a shell.
+    if [ "${LFA_USB_AUTO_DONE:-}" = "1" ] || \
+       [ "$(lfa_usb_conf_get USB_AUTO)" != "1" ]; then
+        LFA_USB_AUTO_DONE=1 exec "$@"
+    fi
+    _inst="$(lfa_usb_conf_instance)"
+    _dev="$(lfa_usb_default_dev)"
+    if [ -z "$_inst" ] || [ -z "$_dev" ] || ! lfa_usb_api_ok || ! lfa_usb_export_ok; then
+        LFA_USB_AUTO_DONE=1 exec "$@"
+    fi
+    _dev="$(lfa_usb_normalize_dev "$_dev")"
+    _bd="$(lfa_usb_bus_dev "$_dev")"
+    _root="$(pd_rootfs "$_inst" 2>/dev/null || true)"
+    if [ -z "$_bd" ] || [ -z "$_root" ] || [ ! -d "$_root" ]; then
+        LFA_USB_AUTO_DONE=1 exec "$@"
+    fi
+    _bus="$(lfa_usb_pad3 "${_bd%% *}")"
+    _devn="$(lfa_usb_pad3 "${_bd##* }")"
+    _user="$(lfa_appimage_user "$_inst" 2>/dev/null || echo user)"
+    lfa_usb_stage_desc "$_root" 2>/dev/null || true
+    lfa_usb_stage_tty "$_root" 2>/dev/null || true
+    _shim="$(lfa_usb_build_shim "$_root" 2>/dev/null || true)"
+    if [ -n "$_shim" ] && lfa_usb_stage_shim "$_root" "$_shim"; then
+        _preload="$LFA_USB_SHIM_GUEST"
+    fi
+    lfa_usb_write_callback 2>/dev/null || true
+    mkdir -p "$LFA_USB_BRIDGE" 2>/dev/null || true
+    lfa_usb_prepare_nodes "$_root" "$_bus" "$_devn" 0
+    [ -f "$LFA_USB_BRIDGE/dev/bus/usb/$_bus/$_devn" ] && \
+        _devbind="$LFA_USB_BRIDGE/dev/bus/usb:/dev/bus/usb"
+    _speed="$(cat "$LFA_USB_BRIDGE/sys/${_bus}-${_devn}/speed" 2>/dev/null || true)"
+    case "$_speed" in ''|*[!0-9]*) _speed=480 ;; esac
+    if [ -n "$_preload" ]; then
+        # Reuse the tree from an earlier session when it already describes
+        # this device: the descriptor prep costs a whole guest login.
+        if [ -d "$LFA_USB_BRIDGE/sysroot/bus/usb/devices/$_bus-$_devn" ]; then
+            _bind="$(lfa_usb_sys_bind)"
+        elif lfa_usb_prep_sysfs "$_inst" "$_user" "$_bus" "$_devn" "$_dev" "$_speed"; then
+            _bind="$(lfa_usb_sys_bind)"
+        fi
+        [ -n "$_bind" ] && \
+            _devbind="${_devbind:+$_devbind;}$LFA_USB_BRIDGE/sysroot/class:/sys/class"
+    fi
+    if [ -z "$_preload" ] || [ -z "$_bind" ]; then
+        LFA_USB_AUTO_DONE=1 exec "$@"
+    fi
+    _script_host="$LFA_USB_BRIDGE/auto-$$.sh"
+    lfa_usb_write_auto_script "$_script_host" "$_preload" "$_bind" "$_devbind" \
+        "$_bus/$_devn" "$@" || { LFA_USB_AUTO_DONE=1 exec "$@"; }
+    echo "[*] USB: $_bus/$_devn available in this session (auto mode)"
+    exec termux-usb -r -E -e "$_script_host" "$_dev"
+}
+
 lfa_usb_attach() {
     local _inst="" _user="" _root _id _dev="" _cwd="" _perm=1 _sysfs=1 _rc=0
     local _devbind=""
@@ -4033,41 +4181,8 @@ lfa_usb_attach() {
     case "$_speed" in ''|*[!0-9]*) _speed=480 ;; esac
 
     if [ "$_sysfs" = 1 ] && [ -n "$_preload" ]; then
-        rm -rf "$LFA_USB_BRIDGE/sysroot" 2>/dev/null || true
-        rm -f "$LFA_USB_BRIDGE/prep-$_bus-$_devn.json" \
-              "$LFA_USB_BRIDGE/prep-$_bus-$_devn.tsv" \
-              "$LFA_USB_BRIDGE/prep-$_bus-$_devn.bin" 2>/dev/null || true
-        (
-            export LFA_USB_MODE=prep
-            export LFA_USB_INSTANCE="$_id"
-            export LFA_USB_USER="$_user"
-            LFA_USB_PD_FLAGS="$(pd_login_flags)"
-            export LFA_USB_PD_FLAGS
-            export LFA_USB_OUT="/tmp/lfa-usb/prep-$_bus-$_devn.json"
-            export LFA_USB_TSV="/tmp/lfa-usb/prep-$_bus-$_devn.tsv"
-            export LFA_USB_BLOB="/tmp/lfa-usb/prep-$_bus-$_devn.bin"
-            export LFA_USB_SYSFS_OUT="/tmp/lfa-usb/sysroot/bus/usb/devices"
-            export LFA_USB_BUS="$_bus"
-            export LFA_USB_DEV="$_devn"
-            export LFA_USB_PATH="$_dev"
-            export LFA_USB_SPEED="$_speed"
-            lfa_android_timeout 120 termux-usb -r -E -e "$LFA_USB_CALLBACK" "$_dev"
-        ) > "$LFA_USB_BRIDGE/prep.log" 2>&1 || _prep_rc=$?
-        # libudev enumerates /sys/bus and /sys/class before it looks at
-        # /sys/bus/usb/devices, and Android's /sys is not readable for an
-        # app, so a bind of the devices dir alone fails with EACCES. Bind a
-        # small readable /sys/bus (which contains our usb/devices tree) and
-        # an empty /sys/class instead.
-        if [ -d "$LFA_USB_BRIDGE/sysroot/bus/usb/devices" ] && \
-           [ -n "$(ls -A "$LFA_USB_BRIDGE/sysroot/bus/usb/devices" 2>/dev/null)" ]; then
-            mkdir -p "$LFA_USB_BRIDGE/sysroot/class" 2>/dev/null || true
-            _bind="$LFA_USB_BRIDGE/sysroot/bus:/sys/bus"
-        else
-            echo "[!] Descriptors could not be read; libusb will not see the device." >&2
-            if [ -s "$LFA_USB_BRIDGE/prep.log" ]; then
-                sed 's/^/    /' "$LFA_USB_BRIDGE/prep.log" >&2
-            fi
-        fi
+        lfa_usb_prep_sysfs "$_id" "$_user" "$_bus" "$_devn" "$_dev" "$_speed" || true
+        _bind="$(lfa_usb_sys_bind)"
     fi
 
     if [ -n "$_bind" ] && [ -d "$LFA_USB_BRIDGE/sysroot/class" ]; then
@@ -4386,6 +4501,7 @@ lfa_cli_usb() {
         watch|monitor) lfa_usb_watch "$@" ;;
         enable|install) lfa_usb_enable "$@" ;;
         disable|remove) lfa_usb_disable "$@" ;;
+        auto) lfa_usb_auto "$@" ;;
         exec|run) lfa_usb_exec "$@" ;;
         attach|shell) lfa_usb_attach "$@" ;;
         tty|serial) lfa_usb_tty "$@" ;;
@@ -7291,6 +7407,26 @@ if ! proot --help 2>&1 | grep -q "sysvipc"; then
     fi
 fi
 
+# USB auto mode: `lfa usb enable` is enough. When it is on, lfa-usb-auto
+# prepares the device view and re-runs this launcher with the bindings
+# exported; without a device it just runs the launcher.
+if [ "${LFA_USB_AUTO_DONE:-}" != "1" ] && [ -x "$PREFIX/bin/lfa-usb-auto" ]; then
+    exec "$PREFIX/bin/lfa-usb-auto" -- "$0" "$@"
+fi
+USB_BIND=()
+[ -n "${LFA_USB_BIND:-}" ] && USB_BIND+=(--bind "$LFA_USB_BIND")
+if [ -n "${LFA_USB_DEVBIND:-}" ]; then
+    _ub_ifs="$IFS"; IFS=';'
+    for _ub in $LFA_USB_DEVBIND; do [ -n "$_ub" ] && USB_BIND+=(--bind "$_ub"); done
+    IFS="$_ub_ifs"; unset _ub_ifs _ub
+fi
+USB_WRAP=""
+if [ -n "${LFA_USB_PRELOAD:-}" ] && [ -n "${LFA_USB_MAP:-}" ]; then
+    USB_WRAP="export LD_PRELOAD=$LFA_USB_PRELOAD; export LFA_USB_MAP=$LFA_USB_MAP; "
+fi
+
+pd_login() { proot-distro login "${USB_BIND[@]}" "$@"; }
+
 # GUI installs can boot the full desktop or drop straight to a shell.
 # CLI-only installs go directly to a root terminal.
 LAST_SERVER_FILE="$HOME/.config/linux-for-android/last-server-$INSTANCE_NAME"
@@ -7401,10 +7537,10 @@ if [ "$SERVER_MODE" = "both" ] && [ "$MODE" == "desktop" ]; then
 fi
 
 if [ "$MODE" == "root" ]; then
-    proot-distro login $NO_SYSVIPC $DISTRO --shared-tmp -- /bin/bash -l
+    pd_login $NO_SYSVIPC $DISTRO --shared-tmp -- /bin/bash -l
     exit 0
 elif [ "$MODE" == "user" ]; then
-    proot-distro login $NO_SYSVIPC $DISTRO --user "$X11_USER" --shared-tmp -- /bin/bash -l
+    pd_login $NO_SYSVIPC $DISTRO --user "$X11_USER" --shared-tmp -- /bin/bash -l
     exit 0
 fi
 
@@ -7498,15 +7634,15 @@ if [ "$SERVER" == "x11" ]; then
     # visible instead of hidden.
     echo "Starting $DISTRO desktop as '$X11_USER' (session log: ~/start-linux-session.log)..."
     if [ "$DE" == "xfce4" ]; then
-        nohup proot-distro login $NO_SYSVIPC $DISTRO --user "$X11_USER" --shared-tmp -- bash -c "mkdir -p /tmp/.X11-unix; chmod 1777 /tmp/.X11-unix; export XDG_RUNTIME_DIR=/tmp/xdg-\$USER-$DISTRO; mkdir -p "\$XDG_RUNTIME_DIR"; chmod 700 "\$XDG_RUNTIME_DIR"; export LANG=\${LANG:-C.UTF-8}; export PULSE_SERVER=127.0.0.1; export DISPLAY=:1; export XCURSOR_THEME=Adwaita; export XCURSOR_SIZE=24; $VIRGL_ENV if command -v dbus-run-session >/dev/null 2>&1; then dbus-run-session -- startxfce4 > \$HOME/start-linux-session.log 2>&1; elif command -v dbus-launch >/dev/null 2>&1; then dbus-launch --exit-with-session startxfce4 > \$HOME/start-linux-session.log 2>&1; else startxfce4 > \$HOME/start-linux-session.log 2>&1; fi" &
+        nohup pd_login $NO_SYSVIPC $DISTRO --user "$X11_USER" --shared-tmp -- bash -c "${USB_WRAP}mkdir -p /tmp/.X11-unix; chmod 1777 /tmp/.X11-unix; export XDG_RUNTIME_DIR=/tmp/xdg-\$USER-$DISTRO; mkdir -p "\$XDG_RUNTIME_DIR"; chmod 700 "\$XDG_RUNTIME_DIR"; export LANG=\${LANG:-C.UTF-8}; export PULSE_SERVER=127.0.0.1; export DISPLAY=:1; export XCURSOR_THEME=Adwaita; export XCURSOR_SIZE=24; $VIRGL_ENV if command -v dbus-run-session >/dev/null 2>&1; then dbus-run-session -- startxfce4 > \$HOME/start-linux-session.log 2>&1; elif command -v dbus-launch >/dev/null 2>&1; then dbus-launch --exit-with-session startxfce4 > \$HOME/start-linux-session.log 2>&1; else startxfce4 > \$HOME/start-linux-session.log 2>&1; fi" &
     elif [ "$DE" == "lxde" ]; then
-        nohup proot-distro login $NO_SYSVIPC $DISTRO --user "$X11_USER" --shared-tmp -- bash -c "mkdir -p /tmp/.X11-unix; chmod 1777 /tmp/.X11-unix; export XDG_RUNTIME_DIR=/tmp/xdg-\$USER-$DISTRO; mkdir -p "\$XDG_RUNTIME_DIR"; chmod 700 "\$XDG_RUNTIME_DIR"; export LANG=\${LANG:-C.UTF-8}; export PULSE_SERVER=127.0.0.1; export DISPLAY=:1; export XCURSOR_THEME=Adwaita; export XCURSOR_SIZE=24; $VIRGL_ENV if command -v dbus-run-session >/dev/null 2>&1; then dbus-run-session -- startlxde > \$HOME/start-linux-session.log 2>&1; elif command -v dbus-launch >/dev/null 2>&1; then dbus-launch --exit-with-session startlxde > \$HOME/start-linux-session.log 2>&1; else startlxde > \$HOME/start-linux-session.log 2>&1; fi" &
+        nohup pd_login $NO_SYSVIPC $DISTRO --user "$X11_USER" --shared-tmp -- bash -c "${USB_WRAP}mkdir -p /tmp/.X11-unix; chmod 1777 /tmp/.X11-unix; export XDG_RUNTIME_DIR=/tmp/xdg-\$USER-$DISTRO; mkdir -p "\$XDG_RUNTIME_DIR"; chmod 700 "\$XDG_RUNTIME_DIR"; export LANG=\${LANG:-C.UTF-8}; export PULSE_SERVER=127.0.0.1; export DISPLAY=:1; export XCURSOR_THEME=Adwaita; export XCURSOR_SIZE=24; $VIRGL_ENV if command -v dbus-run-session >/dev/null 2>&1; then dbus-run-session -- startlxde > \$HOME/start-linux-session.log 2>&1; elif command -v dbus-launch >/dev/null 2>&1; then dbus-launch --exit-with-session startlxde > \$HOME/start-linux-session.log 2>&1; else startlxde > \$HOME/start-linux-session.log 2>&1; fi" &
     elif [ "$DE" == "mate" ]; then
-        nohup proot-distro login $NO_SYSVIPC $DISTRO --user "$X11_USER" --shared-tmp -- bash -c "mkdir -p /tmp/.X11-unix; chmod 1777 /tmp/.X11-unix; export XDG_RUNTIME_DIR=/tmp/xdg-\$USER-$DISTRO; mkdir -p "\$XDG_RUNTIME_DIR"; chmod 700 "\$XDG_RUNTIME_DIR"; export LANG=\${LANG:-C.UTF-8}; export PULSE_SERVER=127.0.0.1; export DISPLAY=:1; export XCURSOR_THEME=Adwaita; export XCURSOR_SIZE=24; $VIRGL_ENV if command -v dbus-run-session >/dev/null 2>&1; then dbus-run-session -- mate-session > \$HOME/start-linux-session.log 2>&1; elif command -v dbus-launch >/dev/null 2>&1; then dbus-launch --exit-with-session mate-session > \$HOME/start-linux-session.log 2>&1; else mate-session > \$HOME/start-linux-session.log 2>&1; fi" &
+        nohup pd_login $NO_SYSVIPC $DISTRO --user "$X11_USER" --shared-tmp -- bash -c "${USB_WRAP}mkdir -p /tmp/.X11-unix; chmod 1777 /tmp/.X11-unix; export XDG_RUNTIME_DIR=/tmp/xdg-\$USER-$DISTRO; mkdir -p "\$XDG_RUNTIME_DIR"; chmod 700 "\$XDG_RUNTIME_DIR"; export LANG=\${LANG:-C.UTF-8}; export PULSE_SERVER=127.0.0.1; export DISPLAY=:1; export XCURSOR_THEME=Adwaita; export XCURSOR_SIZE=24; $VIRGL_ENV if command -v dbus-run-session >/dev/null 2>&1; then dbus-run-session -- mate-session > \$HOME/start-linux-session.log 2>&1; elif command -v dbus-launch >/dev/null 2>&1; then dbus-launch --exit-with-session mate-session > \$HOME/start-linux-session.log 2>&1; else mate-session > \$HOME/start-linux-session.log 2>&1; fi" &
     elif [ "$DE" == "gnome" ]; then
         # Experimental: gnome-session is skipped (no systemd/logind in proot);
         # start-gnome-session runs lfa-set-wallpaper then `gnome-shell --x11`.
-        nohup proot-distro login $NO_SYSVIPC $DISTRO --user "$X11_USER" --shared-tmp -- bash -c "mkdir -p /tmp/.X11-unix; chmod 1777 /tmp/.X11-unix; export XDG_RUNTIME_DIR=/tmp/xdg-\$USER-$DISTRO; mkdir -p "\$XDG_RUNTIME_DIR"; chmod 700 "\$XDG_RUNTIME_DIR"; export PULSE_SERVER=127.0.0.1; export DISPLAY=:1; export XCURSOR_THEME=Adwaita; export XCURSOR_SIZE=24; $VIRGL_ENV if command -v dbus-run-session >/dev/null 2>&1; then dbus-run-session -- /usr/local/bin/start-gnome-session > \$HOME/start-linux-session.log 2>&1; else /usr/local/bin/start-gnome-session > \$HOME/start-linux-session.log 2>&1; fi" &
+        nohup pd_login $NO_SYSVIPC $DISTRO --user "$X11_USER" --shared-tmp -- bash -c "${USB_WRAP}mkdir -p /tmp/.X11-unix; chmod 1777 /tmp/.X11-unix; export XDG_RUNTIME_DIR=/tmp/xdg-\$USER-$DISTRO; mkdir -p "\$XDG_RUNTIME_DIR"; chmod 700 "\$XDG_RUNTIME_DIR"; export PULSE_SERVER=127.0.0.1; export DISPLAY=:1; export XCURSOR_THEME=Adwaita; export XCURSOR_SIZE=24; $VIRGL_ENV if command -v dbus-run-session >/dev/null 2>&1; then dbus-run-session -- /usr/local/bin/start-gnome-session > \$HOME/start-linux-session.log 2>&1; else /usr/local/bin/start-gnome-session > \$HOME/start-linux-session.log 2>&1; fi" &
     fi
     echo "If the screen stays on the X cursor, the desktop failed to start:"
     echo "  cat ~/start-linux-session.log   (inside the distro) for the reason."
@@ -7539,7 +7675,7 @@ elif [ "$SERVER" == "vnc" ]; then
         [ "$DE" = "lxde" ] && VNC_SES="startlxde"
         [ "$DE" = "mate" ] && VNC_SES="mate-session"
         [ "$DE" = "gnome" ] && VNC_SES="/usr/local/bin/start-gnome-session"
-        nohup proot-distro login $NO_SYSVIPC $DISTRO --user "$X11_USER" --shared-tmp -- bash -c "export PULSE_SERVER=127.0.0.1; mkdir -p \$HOME/.vnc \$HOME/.config/tigervnc; printf 'geometry=%s\n' '$RESOLUTION' > \$HOME/.vnc/config; printf 'geometry=%s\n' '$RESOLUTION' > \$HOME/.config/tigervnc/config; if command -v vncserver >/dev/null 2>&1; then $VIRGL_ENV vncserver :1; rc=\$?; [ \$rc -eq 0 ] || exit \$rc; else $VIRGL_ENV Xvnc :1 -geometry $RESOLUTION -depth 24 -rfbauth \$HOME/.config/tigervnc/passwd -SecurityTypes VncAuth > \$HOME/.vnc-xvnc.log 2>&1 & sleep 2; export XCURSOR_THEME=Adwaita; export XCURSOR_SIZE=24; DISPLAY=:1 dbus-run-session -- $VNC_SES > \$HOME/start-linux-session.log 2>&1; fi; exec sleep 2147483647" > "$VNC_LOG" 2>&1 &
+        nohup pd_login $NO_SYSVIPC $DISTRO --user "$X11_USER" --shared-tmp -- bash -c "${USB_WRAP}export PULSE_SERVER=127.0.0.1; mkdir -p \$HOME/.vnc \$HOME/.config/tigervnc; printf 'geometry=%s\n' '$RESOLUTION' > \$HOME/.vnc/config; printf 'geometry=%s\n' '$RESOLUTION' > \$HOME/.config/tigervnc/config; if command -v vncserver >/dev/null 2>&1; then $VIRGL_ENV vncserver :1; rc=\$?; [ \$rc -eq 0 ] || exit \$rc; else $VIRGL_ENV Xvnc :1 -geometry $RESOLUTION -depth 24 -rfbauth \$HOME/.config/tigervnc/passwd -SecurityTypes VncAuth > \$HOME/.vnc-xvnc.log 2>&1 & sleep 2; export XCURSOR_THEME=Adwaita; export XCURSOR_SIZE=24; DISPLAY=:1 dbus-run-session -- $VNC_SES > \$HOME/start-linux-session.log 2>&1; fi; exec sleep 2147483647" > "$VNC_LOG" 2>&1 &
         echo $! > "$VNC_PIDFILE"
         printf 'Waiting for VNC on port 5901'
         for _i in $(seq 1 20); do
@@ -7759,6 +7895,24 @@ else
     lfa_clear_stale_x1() { local _p=999999; [ -f "$PREFIX/tmp/.X1-lock" ] && _p=$(tr -dc '0-9' < "$PREFIX/tmp/.X1-lock" 2>/dev/null); [ -n "$_p" ] && kill -0 "$_p" 2>/dev/null && return 0; rm -f "$PREFIX/tmp/.X11-unix/X1" "$PREFIX/tmp/.X1-lock" 2>/dev/null; }
 fi
 
+# USB auto mode: `lfa usb enable` is enough. When it is on, lfa-usb-auto
+# prepares the device view and re-runs this launcher with the bindings
+# exported; without a device it just runs the launcher.
+if [ "${LFA_USB_AUTO_DONE:-}" != "1" ] && [ -x "$PREFIX/bin/lfa-usb-auto" ]; then
+    exec "$PREFIX/bin/lfa-usb-auto" -- "$0" "$@"
+fi
+USB_BIND=()
+[ -n "${LFA_USB_BIND:-}" ] && USB_BIND+=(--bind "$LFA_USB_BIND")
+if [ -n "${LFA_USB_DEVBIND:-}" ]; then
+    _ub_ifs="$IFS"; IFS=';'
+    for _ub in $LFA_USB_DEVBIND; do [ -n "$_ub" ] && USB_BIND+=(--bind "$_ub"); done
+    IFS="$_ub_ifs"; unset _ub_ifs _ub
+fi
+USB_WRAP=""
+if [ -n "${LFA_USB_PRELOAD:-}" ] && [ -n "${LFA_USB_MAP:-}" ]; then
+    USB_WRAP="export LD_PRELOAD=$LFA_USB_PRELOAD; export LFA_USB_MAP=$LFA_USB_MAP; "
+fi
+
 TERM_MODE=""
 EXPLICIT_INSTANCE=0
 PRESELECT_INSTANCE=""
@@ -7839,9 +7993,17 @@ else
     read -p "Select [1-2, default 1]: " TERM_CHOICE
 fi
 if [ "$TERM_CHOICE" == "2" ]; then
-    proot-distro login $NO_SYSVIPC $DISTRO --user "$TERM_USER" --shared-tmp -- /bin/bash -l
+    if [ -n "$USB_WRAP" ]; then
+        proot-distro login $NO_SYSVIPC "${USB_BIND[@]}" $DISTRO --user "$TERM_USER" --shared-tmp -- bash -c "${USB_WRAP}exec /bin/bash -l"
+    else
+        proot-distro login $NO_SYSVIPC "${USB_BIND[@]}" $DISTRO --user "$TERM_USER" --shared-tmp -- /bin/bash -l
+    fi
 else
-    proot-distro login $NO_SYSVIPC $DISTRO --shared-tmp -- /bin/bash -l
+    if [ -n "$USB_WRAP" ]; then
+        proot-distro login $NO_SYSVIPC "${USB_BIND[@]}" $DISTRO --shared-tmp -- bash -c "${USB_WRAP}exec /bin/bash -l"
+    else
+        proot-distro login $NO_SYSVIPC "${USB_BIND[@]}" $DISTRO --shared-tmp -- /bin/bash -l
+    fi
 fi
 EOF
     chmod +x $PREFIX/bin/terminal-linux

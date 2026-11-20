@@ -15,6 +15,15 @@ tag names, define the order. See the table at the bottom.
 
 ### Added
 
+- USB automatic mode. `lfa usb enable -i NAME` now makes every later session
+  that LFA starts (`lfa shell`, `lfa desktop`, the Terminal shortcut) open
+  with the plugged-in device already available: the launchers call
+  `lfa-usb-auto`, which takes the real descriptor from Termux:API, prepares
+  the synthetic sysfs tree once per device, and re-runs the launcher with
+  `--bind` flags and the guest preload exported. No `lfa usb attach`, no
+  environment variables, and GUI programs inherit the same view. Sessions
+  still start normally when nothing is plugged in; `lfa usb disable` turns
+  the mode off again.
 - `lfa appimage` (alias `lfa app`) adds first-class AppImage support. `add`
   extracts an AppImage once into `~/.local/opt/appimages`, writes a launcher
   in `~/.local/bin`, and adds a desktop entry; `list`, `run`, and `remove`
