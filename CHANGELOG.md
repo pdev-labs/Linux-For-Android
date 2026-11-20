@@ -77,8 +77,11 @@ tag names, define the order. See the table at the bottom.
   hand it over with `FD_CLOEXEC`, so `lsusb`, `python3` and `esptool` started
   without it (`os.dup(7)` returned `EBADF`, control transfers `ENOTTY`) while
   descriptors still came from sysfs. The generated session script now
-  duplicates the descriptor without the flag and rewrites `LFA_USB_MAP`, and
-  the login profile keeps `TERMUX_USB_FD` in a USB session.
+  duplicates it onto a free fd with a plain redirection (`dup2()` clears the
+  flag; bash's `{var}<&N` form allocates with `F_DUPFD_CLOEXEC` on some
+  builds), rewrites `LFA_USB_MAP` to the new number and prints whether
+  children really inherited it, and the login profile keeps `TERMUX_USB_FD`
+  in a USB session.
 - The guest login profile keeps the USB session's `LD_PRELOAD`. The
   "make env look normal" cleanup unset every `LD_PRELOAD`, including the
   usbfs shim a `bash -l` session needs, so libusb still failed with `-99`.

@@ -1887,7 +1887,8 @@ check "Y11 attach command" 'lsusb' "$T/home/last-run.sh"
 check "Y11 attach preload in script" \
     'export LD_PRELOAD=/usr/local/lib/lfa-usb-node.so' "$T/home/last-run.sh"
 # The inherited fd can be FD_CLOEXEC; the script re-dups it so children keep it.
-check "Y11 attach fd re-dup" 'exec {LFA_USB_FD_SAFE}<&"$TERMUX_USB_FD"' "$T/home/last-run.sh"
+check "Y11 attach fd re-dup" 'for _lfa_fd in 10 11 12 13 14 15' "$T/home/last-run.sh"
+check "Y11 attach fd inheritable report" 'NOT inheritable (transfers will fail)' "$T/home/last-run.sh"
 check "Y11 attach map rewrite" 'LFA_USB_MAP="${LFA_USB_MAP%=*}=$TERMUX_USB_FD"' "$T/home/last-run.sh"
 [ -f "$UROOT/usr/local/lib/lfa-usb-node.so" ] && pass=$((pass+1)) \
     || { fail=$((fail+1)); echo "FAIL: Y11 attach did not stage the preload"; }
@@ -2005,7 +2006,7 @@ check "Y11 tty node" '/dev/ttyUSB0' "$T/y11-tty.log"
 check "Y11 tty baud" 'baud:   460800' "$T/y11-tty.log"
 check "Y11 tty bridge script" 'lfa-usb-tty.py' "$T/home/last-run.sh"
 check "Y11 tty preload in script" 'export LD_PRELOAD=' "$T/home/last-run.sh"
-check "Y11 tty fd re-dup" 'exec {LFA_USB_FD_SAFE}<&' "$T/home/last-run.sh"
+check "Y11 tty fd re-dup" 'eval "exec ${_lfa_fd}<&' "$T/home/last-run.sh"
 check "Y11 tty bridge baud" '--baud 460800' "$T/home/last-run.sh"
 check "Y11 tty forwards command" 'picocom' "$T/home/last-run.sh"
 check "Y11 tty dev bind" 'dev/bus/usb:/dev/bus/usb' "$T/home/pd-calls.log"
