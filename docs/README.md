@@ -12,6 +12,7 @@ Start here to understand the project rather than install it.
 | [TEST-REPORT.md](TEST-REPORT.md) | What was verified, on which device, with which version |
 | [CI-ANDROID.md](CI-ANDROID.md) | Android emulator workflows, matrix tiers, pinned APKs, and gaps |
 | [INCOMPATIBLE.md](INCOMPATIBLE.md) | Software that cannot run, and why shims cannot fix kernel limits |
+| [USB.md](USB.md) | Real USB devices in the guest: /dev/bus/usb, /dev/ttyUSB0, esptool, and their limits |
 | [issues.md](../issues.md) | Every known defect and limitation, with severity and status |
 | [ghissue.md](../ghissue.md) | Repository-level improvements: metadata, CI, releases |
 | [tracker.md](../tracker.md) | Live progress for the audit above |

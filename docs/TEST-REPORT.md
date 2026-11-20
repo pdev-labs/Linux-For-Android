@@ -1,6 +1,46 @@
 # Test report for v1.7.1
 
-> Current development suite: `PASS=627 FAIL=0`.
+> Current development suite: `PASS=811 FAIL=0`.
+
+## USB bridge, 2026-11-18
+
+Host verification of the `lfa usb` bridge. `termux-usb` and `proot-distro` are
+faked, so the complete host path is exercised without hardware. The Android
+permission dialog, a real descriptor, real transfers and flashing still need a
+phone with an OTG adapter; do not claim them before that run.
+
+| Check | Result |
+|---|---|
+| Host suite (`./tests/test-all.sh`) | `PASS=811 FAIL=0` |
+| Descriptor parser (`python3 lib/usb-desc.py --selftest`) | device and configuration descriptors parsed; sysfs blob built |
+| Serial bridge (`python3 lib/lfa-usb-tty.py --selftest`) | CH340 divisor encoding, CDC/CP210x detection, endpoint selection |
+| Preload build | `lib/lfa-usb-node.c` built for the guest architecture, no `DT_NEEDED`; aarch64 prebuilt bundled |
+| Preload map | `open()` on a mapped node returns a duplicate of the inherited fd; reads and writes reach it; an unmapped node is untouched; DTR/RTS ioctls succeed and are forwarded to the bridge |
+| Enumeration | `termux-usb -l` JSON parsed into `devices.tsv`, `sys/`, and `state.env` |
+| Guest view | `lsusb` default, `-d`, `-s`, `-t`, `-v`, `-V`, and missing-bridge paths |
+| sysfs shape | device, configuration, interface and endpoint directories written from the descriptors, with the attributes usbutils reads |
+| Guest helper | `lfa-usb status`, `info`, `path`, `fd`, `desc`, and `help` |
+| Real access | `lfa usb exec` ran the Termux:API callback and entered the guest with `--shared-tmp`; the run script was removed |
+| Attach | descriptor pass wrote the sysfs tree; session bound it at `/sys/bus/usb/devices`, mapped `001/002=<fd>`, preloaded the node helper, and created the placeholder node |
+| TTY | `/dev/ttyUSB0` session forwarded baud and the client command to `lfa-usb-tty.py`; a fake-device harness relayed bytes through the pty in both directions |
+| ESP32 flashing | `--install`, `probe` -> `flash_id`, and `write` wrapper checked for `--port /dev/ttyUSB0` and the requested baud; a real board is not run |
+| Hotplug | `lfa usb watch --count 1` printed the initial add event |
+| Status honesty | a working `termux-usb -l` counts as proof that Termux:API is installed when `pm` cannot list packages, and a feature list without `usb.host` reads "not advertised" |
+| Instance selection | USB commands reuse the instance saved by `lfa usb enable`; a saved-but-missing or unset instance prints the exact `-i NAME` hint instead of exiting silently |
+| Failure paths | missing client, non-JSON `termux-usb` output, and old `termux-api` without `-E` reported honestly |
+| Real USB hardware | **not yet run** |
+
+The session preload was also exercised outside the fake harness: with a
+regular file standing in for the usbfs descriptor, `open()` on a mapped node
+returned a duplicate of that descriptor; with a synthetic sysfs tree bound
+over `/sys/bus/usb/devices`, the host `libusb`/`lsusb` enumerated the device,
+including its strings, interface class, endpoint address, packet size, and
+serial number. That test found three requirements that are now handled:
+libudev rejects a syspath whose filesystem is not sysfs, libusb's init fails
+when the udev hotplug monitor cannot be created in an Android guest, and
+usbutils reads `bMaxPacketSize0`, `bcdDevice`, `bmAttributes`, `maxchild`
+and the lane counts straight from sysfs. `lsusb -t` stays empty because the
+tree has no host-controller root hub.
 
 ## Android storage, 2026-11-06
 
@@ -9,7 +49,7 @@ storage changes.
 
 | Check | Result |
 |---|---|
-| Host suite | `PASS=627 FAIL=0` |
+| Host suite | `PASS=742 FAIL=0` |
 | Thunar false X | gid 1023; folder icons normal; screenshot checked |
 | `lfa storage exec` | shell and Python scripts from `/storage/emulated/0` ran from a `/tmp` copy |
 | `lfa storage data` | adb at `127.0.0.1:5555`; `list` and `pull` worked for `Android/data` and `Android/obb`; guest read the copy |
@@ -33,7 +73,7 @@ the network during this pass, so the legacy-device rows remain pending.
 
 | Check | Result |
 |---|---|
-| Host suite (`./tests/test-all.sh`) | `PASS=627 FAIL=0` |
+| Host suite (`./tests/test-all.sh`) | `PASS=742 FAIL=0` |
 | On-device VNC scenario (`termux-e2e.sh`) | `PASS=14 FAIL=0` |
 | On-device Both → VNC/X11 switch | `PASS=22 FAIL=0` |
 | On-device X11 scenario | `PASS=14 FAIL=0` |

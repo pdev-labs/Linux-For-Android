@@ -159,6 +159,58 @@ Neither layer may fake a kernel facility. Docker, Podman, Flatpak, TUN/TAP,
 iptables, CUDA, ROCm, KVM, and modules are listed as unsupported by
 `lfa compat list` and explained by `lfa compat explain`.
 
+### USB bridge
+
+```
+Termux:API app ── Binder ──> UsbManager ──> /dev/bus/usb/BBB/DDD
+      │                                           (Android-owned)
+      ▼
+termux-usb -l ────────────────> $PREFIX/tmp/lfa-usb/devices.tsv
+      │                                   │
+      │                                   ▼  guest /tmp/lfa-usb
+      │                            lsusb / lfa-usb (shims)
+      ▼
+termux-usb -E -e lfa-usb-callback DEV
+      │  TERMUX_USB_FD = real descriptor
+      ▼
+descriptor pass: lib/usb-desc.py --sysfs -> $PREFIX/tmp/lfa-usb/session-sys
+      │
+      ▼
+proot-distro login --bind sys:/sys/bus/usb/devices -- CMD
+      │  LFA_USB_MAP=BBB/DDD=<fd>, LD_PRELOAD=liblfa-usb-node.so
+      ▼
+guest CMD: open("/dev/bus/usb/BBB/DDD") -> dup(real fd)
+           ioctl/read/write -> the real device
+```
+
+`lfa usb refresh` is the only writer of the shared view. It enumerates with
+`termux-usb -l`, enriches from host sysfs when Android allows it, and publishes
+`devices.tsv` plus a small sysfs-shaped tree under `sys/`. `lfa usb scan`
+requests permission for each device and runs `lib/usb-desc.py` in the guest
+with the inherited descriptor; that script reads the device, string, and
+configuration descriptors with raw ioctls, so it needs no libusb.
+
+The descriptor is owned by Android and handed to one process at a time by
+`termux-usb`. proot does not virtualise file descriptors, so the number is
+valid inside the guest. `lfa usb attach` uses that to build a real port:
+
+- `lib/usb-desc.py --sysfs` writes a sysfs-shaped directory from the real
+  descriptors (device, configuration, interfaces, endpoints).
+- `proot-distro login --bind` mounts it at `/sys/bus/usb/devices`.
+- `lib/lfa-usb-node.c`, built for the guest architecture and preloaded as
+  `liblfa-usb-node.so`, duplicates the inherited descriptor on `open()` of
+  the node path, reports `SYSFS_MAGIC` for `statfs()` on `/sys` (libudev
+  rejects syspaths elsewhere), and replaces the udev hotplug monitor with an
+  idle pipe (Android has no udev daemon).
+
+The node name is therefore virtual, but the descriptor and every `ioctl`,
+`read`, and `write` are the real ones. A plain regular-file placeholder would
+open successfully and then fail every `USBDEVFS_*` request, which is why LFA
+does not use one. `lfa usb tty` builds on the same descriptor: it claims the
+bulk interface and bridges it to a pty, with baud and DTR/RTS forwarded, so
+serial tools see `/dev/ttyUSB0`. `lfa usb exec` remains the raw-descriptor
+door for guests where the preload cannot be built.
+
 ## Storage model
 
 Android shared storage is at `/storage/emulated/0`. proot binds it at the

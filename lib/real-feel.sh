@@ -47,10 +47,21 @@ WELCOME
 cat > "$R/etc/profile.d/zz-lfa-env.sh" <<'CLEAN'
 #!/bin/sh
 # Make `env` look like a normal Linux box.
-for _v in $(env 2>/dev/null | sed -n 's/^\(TERMUX[^=]*\|ANDROID[^=]*\|EXTERNAL_STORAGE\|PREFIX\|LD_PRELOAD\|TMPDIR\)=.*/\1/p'); do
+_usb_session="${LFA_USB_MAP:-}"
+for _v in $(env 2>/dev/null | sed -n 's/^\(TERMUX[^=]*\|ANDROID[^=]*\|EXTERNAL_STORAGE\|PREFIX\|TMPDIR\)=.*/\1/p'); do
+    # A USB session needs its descriptor and the usbfs shim; both are set by
+    # LFA, not inherited from Termux, and would otherwise point at nothing.
+    if [ -n "$_usb_session" ] && { [ "$_v" = TERMUX_USB_FD ] || [ "$_v" = LD_PRELOAD ]; }; then
+        continue
+    fi
     unset "$_v" 2>/dev/null || true
 done
-unset _v
+unset _v _usb_session
+# Any remaining LD_PRELOAD came from Termux and points at a bionic object the
+# guest cannot load, so drop that one.
+if [ -z "${LFA_USB_MAP:-}" ]; then
+    unset LD_PRELOAD 2>/dev/null || true
+fi
 case "${SHELL:-}" in /data/data/*) SHELL=/bin/bash; export SHELL ;; esac
 case "${TERM:-}" in xterm-ghostty|xterm-kitty|alacritty) TERM=xterm-256color; export TERM ;; esac
 # Do not let an uninstalled guest command fall through to a Termux binary

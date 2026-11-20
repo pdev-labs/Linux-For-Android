@@ -30,6 +30,79 @@ tag names, define the order. See the table at the bottom.
   `Android/obb` folders through adb into shared storage. Android blocks both
   folders for apps, including Termux, so direct access is not possible without
   shell access.
+- `lfa usb` exposes real USB devices through Termux:API. `status`, `list`, and
+  `refresh` read `termux-usb -l`; `scan` requests Android permission and reads
+  real descriptors; `enable` installs the guest helpers.
+- `lfa usb attach` opens a guest session with a real `/dev/bus/usb/BBB/DDD`
+  and a `/sys/bus/usb/devices` tree built from the device's descriptors.
+  `lib/lfa-usb-node.c`, preloaded for the session, duplicates the usbfs
+  descriptor that Termux:API opened, reports sysfs magic for libudev, and
+  stubs the hotplug monitor, so unmodified `lsusb`, PyUSB, dfu-util and other
+  libusb tools work with real ioctls and transfers. The preload is built for
+  the guest architecture with clang/cc and falls back to
+  `lib/prebuilt/lfa-usb-node-<arch>.so` (aarch64 bundled).
+- `lfa usb tty` bridges the device's bulk endpoints to a pty and exposes
+  `/dev/ttyUSB0` for serial tools. CDC-ACM, CP210x and CH340 are supported;
+  baud changes and DTR/RTS are forwarded to the chip, so esptool's reset
+  sequence works. `lfa usb flash` installs and runs `esptool` inside the
+  distribution instead of delegating to nrflash.
+- `lfa usb exec DEV -- CMD` still forwards the raw descriptor as
+  `TERMUX_USB_FD` for guests where the preload cannot be built. proot still
+  cannot create device nodes; the node is a preload over the real descriptor.
+  See `docs/USB.md`.
+- `lfa usb status` no longer asks you to install Termux:API when `pm list
+  packages` cannot see other apps (Android 11 and newer); a working
+  `termux-usb -l` counts as proof, and host mode is reported as
+  "not advertised" rather than "no".
+- USB commands fall back to the instance remembered by `lfa usb enable`, so
+  `lfa usb scan` works with several distros installed, and an unusable or
+  missing instance is reported instead of exiting silently.
+- `lfa usb attach`, `lfa usb tty` and `lfa usb exec` keep the terminal:
+  a zero-second timeout no longer wraps the session in GNU `timeout`, which
+  put the guest shell in a background process group so reads stopped with
+  SIGTTIN (or failed with EIO).
+- USB sessions show output live. `termux-usb` runs its callback inside
+  `OUTPUT="$(...)"`, so the guest's stdout was captured and only printed when
+  the session ended; the callback now points stdout at the terminal when
+  stderr is still a tty. Redirecting both streams (`> log 2>&1`) still
+  captures the session.
+- USB enumeration works in real usbutils/libusb. libudev scans `/sys/bus`
+  and `/sys/class` before `/sys/bus/usb/devices`, and Android's `/sys` is not
+  readable for an app, so `udev_enumerate_scan_devices()` failed with `EACCES`
+  and `lsusb` listed nothing even though the device tree was bound. The
+  session now binds a small readable `/sys/bus` (containing our
+  `usb/devices` tree) and an empty `/sys/class`, and the synthetic
+  `subsystem` links are absolute so proot cannot resolve them out of `/sys`.
+- USB tools can open the device from inside the session's login shell. bash
+  marks the descriptors it inherited close-on-exec when it starts as an
+  interactive login shell, so the shell kept the device fd while every child
+  (`lsusb`, `python3`, `esptool`) got `EBADF`: `lsusb -v` printed
+  `Couldn't open device` and kept going on sysfs descriptors alone. The
+  preload now clears `FD_CLOEXEC` on `execve`, so the first child inherits a
+  plain descriptor and the flag is never set again for the rest of the
+  session.
+- The inherited USB descriptor survives into child processes. Termux:API can
+  hand it over with `FD_CLOEXEC`, so `lsusb`, `python3` and `esptool` started
+  without it (`os.dup(7)` returned `EBADF`, control transfers `ENOTTY`) while
+  descriptors still came from sysfs. The generated session script now
+  duplicates it onto a free fd with a plain redirection (`dup2()` clears the
+  flag; bash's `{var}<&N` form allocates with `F_DUPFD_CLOEXEC` on some
+  builds), rewrites `LFA_USB_MAP` to the new number and prints whether
+  children really inherited it, and the login profile keeps `TERMUX_USB_FD`
+  in a USB session.
+- The guest login profile keeps the USB session's `LD_PRELOAD`. The
+  "make env look normal" cleanup unset every `LD_PRELOAD`, including the
+  usbfs shim a `bash -l` session needs, so libusb still failed with `-99`.
+  It now removes only a Termux/bionic preload, recognised by the absence of
+  `LFA_USB_MAP`.
+- The usbfs preload is set inside the guest script. proot-distro v5 removes
+  `LD_PRELOAD` from the environment it passes to proot, so libusb started
+  without the udev stubs and failed with `unable to initialize libusb: -99`.
+  The generated session scripts export it after proot has started.
+- `/dev/bus/usb/BBB/DDD` is visible inside the guest. proot-distro binds the
+  host `/dev` over the rootfs, which hid the placeholder node; the node is now
+  also kept in a Termux-side shadow tree and bound over `/dev/bus/usb`, so
+  `ls`, `stat()` and tools that check the path before opening it work.
 - Guest sessions now export `APPIMAGE_EXTRACT_AND_RUN=1`, because proot does
   not expose `/dev/fuse` and an AppImage cannot self-mount. A direct
   `./Foo.AppImage`, a file-manager double-click, and a menu entry all work.
