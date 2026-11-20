@@ -311,6 +311,7 @@ Termux shells if you need two devices; `lfa usb watch` still shows all of them.
 | `ID ----:----` in `lsusb` | Live list works, descriptors are not cached. Run `lfa usb scan` |
 | `usbfs preload could not be built` | `pkg install clang`, then `lfa usb enable -i NAME` again, or use `lfa usb exec` |
 | `lsusb` prints nothing in a session | the command ran outside `lfa usb attach`, or the preload/sysfs is missing. Check `lfa usb status` |
+| `Couldn't open device` / `USBDEVFS_CONTROL failed: Bad file descriptor` even though `FD` is set | a login shell marks inherited descriptors close-on-exec, so the device fd dies in every child. Fixed by the preload clearing the flag on `execve`; run `./install_linux.sh` → 12 after pulling |
 | Saving session output | redirect both streams, e.g. `lfa usb attach -- lsusb > log 2>&1`; Termux:API captures stdout in a pipe, so a session keeps it on the terminal unless both are redirected |
 | `lsusb -t` is empty | there is no root hub in the synthetic tree; use `lsusb` or `lsusb -v` |
 | `interface N is already claimed by a kernel driver` | Android bound `cdc_acm`/`usb-storage`. Unplug, use the native USB bootloader port, or a board without that driver |

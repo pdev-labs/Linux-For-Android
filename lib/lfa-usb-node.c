@@ -62,6 +62,7 @@ extern int *__errno_location(void);
 # define LFA_NR_fstatfs64 138
 # define LFA_NR_statfs 137
 # define LFA_NR_statfs64 137
+# define LFA_NR_execve 59
 #else
 # if defined(__aarch64__)
 #  define LFA_NR_openat 56
@@ -77,6 +78,7 @@ extern int *__errno_location(void);
 #  define LFA_NR_fstatfs64 44
 #  define LFA_NR_statfs 43
 #  define LFA_NR_statfs64 43
+#  define LFA_NR_execve 221
 # else
 #  if defined(__arm__)
 #   define LFA_NR_openat 322
@@ -92,6 +94,7 @@ extern int *__errno_location(void);
 #   define LFA_NR_fstatfs64 267
 #   define LFA_NR_statfs 99
 #   define LFA_NR_statfs64 266
+#   define LFA_NR_execve 11
 #  else
 #   if defined(__i386__)
 #    define LFA_NR_openat 295
@@ -107,6 +110,7 @@ extern int *__errno_location(void);
 #    define LFA_NR_fstatfs64 269
 #    define LFA_NR_statfs 99
 #    define LFA_NR_statfs64 268
+#    define LFA_NR_execve 11
 #   else
 #    error "lfa-usb-node: unsupported architecture"
 #   endif
@@ -390,6 +394,35 @@ int __open64_2(const char *path, int flags)
 int __openat_2(int dirfd, const char *path, int flags)
 {
     return lfa_open_common(dirfd, path, flags, 0);
+}
+
+/* ------------------------------------------------------------------ */
+/* execve: hand the descriptor to child processes                      */
+/* ------------------------------------------------------------------ */
+
+/* A login shell marks the descriptors it inherited close-on-exec (bash does
+ * this when it starts as an interactive login shell), so the device fd dies
+ * at the first exec even though the shell itself still has it: `lsusb` opens
+ * the placeholder file and control transfers return ENOTTY while descriptors
+ * still come from sysfs. Clear the flag on every execve instead. The child
+ * inherits a plain fd, keeps it for its own children, and the flag is never
+ * set again, so one hook is enough for the whole session. */
+static void lfa_keep_fds(void)
+{
+    int i;
+    if (lfa_map_count < 0) lfa_parse_map();
+    if (!lfa_tty_parsed) lfa_parse_tty();
+    for (i = 0; i < lfa_map_count; i++)
+        if (lfa_maps[i].fd >= 0)
+            syscall(LFA_NR_fcntl, lfa_maps[i].fd, 2 /* F_SETFD */, 0);
+    if (lfa_tty_fd >= 0)
+        syscall(LFA_NR_fcntl, lfa_tty_fd, 2 /* F_SETFD */, 0);
+}
+
+int execve(const char *path, char *const argv[], char *const envp[])
+{
+    lfa_keep_fds();
+    return (int)syscall(LFA_NR_execve, path, argv, envp);
 }
 
 /* ------------------------------------------------------------------ */

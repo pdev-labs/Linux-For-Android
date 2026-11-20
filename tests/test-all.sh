@@ -1939,6 +1939,18 @@ raise SystemExit(1)' ); then
 else
     fail=$((fail+1)); echo "FAIL: Y11 preload mapped an unmapped node"
 fi
+# A login shell marks the descriptors it inherited close-on-exec, so the
+# device fd must survive into children anyway.
+if ( exec 7<>"$T/shim-fd"
+     export LD_PRELOAD="$UROOT/usr/local/lib/lfa-usb-node.so"
+     export LFA_USB_MAP="099/098=7"
+     python3 -c 'import fcntl, os
+fcntl.fcntl(7, fcntl.F_SETFD, fcntl.FD_CLOEXEC)
+os.execve("/bin/sh", ["sh", "-c", "test -e /proc/self/fd/7"], os.environ)' ); then
+    pass=$((pass+1))
+else
+    fail=$((fail+1)); echo "FAIL: Y11 preload let execve drop the device fd"
+fi
 printf 'x' > "$T/tty-plain"
 if ( exec 6<>"$T/tty-plain" 7>"$T/ctl-out"
      export LD_PRELOAD="$UROOT/usr/local/lib/lfa-usb-node.so"

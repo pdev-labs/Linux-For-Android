@@ -73,6 +73,14 @@ tag names, define the order. See the table at the bottom.
   session now binds a small readable `/sys/bus` (containing our
   `usb/devices` tree) and an empty `/sys/class`, and the synthetic
   `subsystem` links are absolute so proot cannot resolve them out of `/sys`.
+- USB tools can open the device from inside the session's login shell. bash
+  marks the descriptors it inherited close-on-exec when it starts as an
+  interactive login shell, so the shell kept the device fd while every child
+  (`lsusb`, `python3`, `esptool`) got `EBADF`: `lsusb -v` printed
+  `Couldn't open device` and kept going on sysfs descriptors alone. The
+  preload now clears `FD_CLOEXEC` on `execve`, so the first child inherits a
+  plain descriptor and the flag is never set again for the rest of the
+  session.
 - The inherited USB descriptor survives into child processes. Termux:API can
   hand it over with `FD_CLOEXEC`, so `lsusb`, `python3` and `esptool` started
   without it (`os.dup(7)` returned `EBADF`, control transfers `ENOTTY`) while
