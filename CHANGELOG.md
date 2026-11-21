@@ -23,6 +23,13 @@ tag names, define the order. See the table at the bottom.
   internal storage. A card reader then behaves like a normal directory.
   Mounting the block device itself stays impossible without root: Android's
   `usb-storage` driver owns the interface and proot has no block layer.
+- `lfa usb block` reports the card's real backing device
+  (`/dev/block/vold/public:X,Y`), whether this app can open it, and whether a
+  root shell is available. `lfa usb block write IMAGE [-v VOLUME]` plans a
+  write and, with root and `--yes`, unmounts, `dd`s the image and verifies it
+  by reading the bytes back. Without root it refuses explicitly instead of
+  simulating a block device, since a fake `/dev/sdb1` would let `dd` and
+  Ventoy report success while writing to a file.
 - USB automatic mode. `lfa usb enable -i NAME` now makes every later session
   that LFA starts (`lfa shell`, `lfa desktop`, the Terminal shortcut) open
   with the plugged-in device already available: the launchers call

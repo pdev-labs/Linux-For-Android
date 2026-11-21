@@ -2751,6 +2751,7 @@ Usage: lfa usb <command> [options]
   refresh                  re-read `termux-usb -l` and rebuild the guest view
   scan [DEV...]            request permission and read real descriptors
   storage [--json]         list storage cards Android exposes to apps
+  block [write IMAGE]      show the card's raw block device / write an image
   watch [--interval N] [--count N]
                            poll for hotplug and print add/remove events
   enable [-i NAME]         install helpers, preload, tty bridge, auto mode
@@ -4075,6 +4076,185 @@ EOF
     return 0
 }
 
+lfa_usb_shq() {  # single-quote a string for su -c
+    printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
+}
+
+lfa_usb_root_ok() {  # is a working root shell available on this device?
+    local _rootcmd="${LFA_ROOT_CMD:-su -c}"
+    command -v "${_rootcmd%% *}" >/dev/null 2>&1 || return 1
+    # shellcheck disable=SC2086
+    $_rootcmd true >/dev/null 2>&1
+}
+
+lfa_usb_block_mounts() {  # id<TAB>node<TAB>fs from Android's vold mounts
+    awk -v OFS='\t' '
+        $1 ~ /^\/dev\/block\// && $2 ~ /^\/mnt\/media_rw\// {
+            id = $2
+            sub("^/mnt/media_rw/", "", id)
+            if (id != "") print id, $1, $3
+        }' "${LFA_USB_MOUNTS:-/proc/mounts}" 2>/dev/null | awk '!seen[$1]++'
+}
+
+lfa_usb_block_state() {  # $1 = block node -> rw | denied | invisible | notblock
+    local _node="${LFA_BLOCK_DEV_ROOT:-}$1"
+    [ -e "$_node" ] || { printf 'invisible\n'; return 0; }
+    [ -b "$_node" ] || { printf 'notblock\n'; return 0; }
+    # Opening O_RDWR is the only honest probe: mode bits and SELinux disagree
+    # often enough that a stat is not an answer. This writes nothing.
+    if ( exec 3<>"$_node" ) 2>/dev/null; then
+        exec 3>&-
+        printf 'rw\n'
+    else
+        printf 'denied\n'
+    fi
+}
+
+lfa_usb_block_reason() {  # $1 = state, $2 = node -> one line for humans
+    case "$1" in
+        rw)        printf '%s is writable by this app\n' "$2" ;;
+        denied)    printf '%s exists but this app may not open it (root needed)\n' "$2" ;;
+        invisible) printf '%s is not in this app'"'"'s namespace (root needed)\n' "$2" ;;
+        notblock)  printf '%s is not a block device here\n' "$2" ;;
+        *)         printf 'no block device reported by Android\n' ;;
+    esac
+}
+
+lfa_usb_block() {  # [--json]  — raw block access for the storage cards
+    local _json=0 _rows="" _id _node _fs _state _root=no _any=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) _json=1; shift ;;
+            -h|--help) echo "Usage: lfa usb block [--json]" >&2; return 0 ;;
+            *) echo "Unknown option: $1" >&2; return 2 ;;
+        esac
+    done
+    lfa_usb_root_ok && _root=yes
+    _rows="$(lfa_usb_block_mounts)"
+    if [ "$_json" = "1" ]; then
+        printf '['
+        printf '%s\n' "$_rows" | while IFS="$(printf '\t')" read -r _id _node _fs; do
+            [ -n "$_id" ] || continue
+            _state="$(lfa_usb_block_state "$_node")"
+            printf '%s{"volume":"%s","node":"%s","fs":"%s","state":"%s","root":%s}' \
+                "$([ "$_any" = 1 ] && printf ',')" "$_id" "$_node" "$_fs" "$_state" \
+                "$([ "$_root" = yes ] && printf true || printf false)"
+            _any=1
+        done
+        printf ']\n'
+        return 0
+    fi
+    if [ -z "$_rows" ]; then
+        echo "No storage card is mounted, so there is no block device to inspect."
+        echo "Plug a card first; Android mounts it before any app can see it."
+        return 0
+    fi
+    printf '%-12s %-32s %-6s %s\n' VOLUME "BACKING DEVICE" FS RAW
+    printf '%s\n' "$_rows" | while IFS="$(printf '\t')" read -r _id _node _fs; do
+        [ -n "$_id" ] || continue
+        _state="$(lfa_usb_block_state "$_node")"
+        printf '%-12s %-32s %-6s %s\n' "$_id" "$_node" "$_fs" \
+            "$([ "$_state" = rw ] && printf yes || printf no)"
+    done
+    echo ""
+    printf '%s\n' "$_rows" | while IFS="$(printf '\t')" read -r _id _node _fs; do
+        [ -n "$_id" ] || continue
+        _state="$(lfa_usb_block_state "$_node")"
+        printf '  %s: %s\n' "$_id" "$(lfa_usb_block_reason "$_state" "$_node")"
+    done
+    echo ""
+    if [ "$_root" = yes ]; then
+        echo "Root shell detected: raw writes are possible."
+        echo "  lfa usb block write IMAGE [-v VOLUME] [--yes]"
+    else
+        echo "No root: Android keeps block devices for vold/init. Card *files* are"
+        echo "still fully usable through Android's mount (lfa usb storage)."
+        echo "Flashing boot code (Ventoy, Etcher, dd to /dev/...) needs root; LFA"
+        echo "will not fake a block device, because dd would then write to a file"
+        echo "and report success while the card stays unchanged."
+    fi
+}
+
+lfa_usb_block_write() {  # IMAGE [-v VOLUME] [--yes]
+    local _img="" _vol="" _yes=0 _rows _id _node _fs _state _line _size _sha _blocks
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            -v|--volume) _vol="${2:-}"; shift 2 ;;
+            --yes|-y) _yes=1; shift ;;
+            -h|--help)
+                echo "Usage: lfa usb block write IMAGE [-v VOLUME] [--yes]" >&2
+                echo "Writes IMAGE to the card's raw block device, then verifies" >&2
+                echo "the bytes by reading them back. Without --yes it only plans." >&2
+                return 0 ;;
+            -*) echo "Unknown option: $1" >&2; return 2 ;;
+            *) _img="$1"; shift ;;
+        esac
+    done
+    [ -n "$_img" ] || { echo "Usage: lfa usb block write IMAGE [-v VOLUME] [--yes]" >&2; return 2; }
+    [ -f "$_img" ] || { echo "[!] no such image: $_img" >&2; return 2; }
+    _rows="$(lfa_usb_block_mounts)"
+    [ -n "$_rows" ] || { echo "[!] no storage card is mounted" >&2; return 3; }
+    if [ -z "$_vol" ]; then
+        if [ "$(printf '%s\n' "$_rows" | wc -l)" = "1" ]; then
+            _vol="$(printf '%s\n' "$_rows" | cut -f1)"
+        else
+            echo "[!] more than one card is mounted; pick one with -v:" >&2
+            printf '%s\n' "$_rows" | cut -f1 | sed 's/^/      /' >&2
+            return 2
+        fi
+    fi
+    _line="$(printf '%s\n' "$_rows" | awk -F '\t' -v v="$_vol" '$1 == v')"
+    [ -n "$_line" ] || { echo "[!] volume '$_vol' has no block device" >&2; return 3; }
+    _node="$(printf '%s\n' "$_line" | cut -f2)"
+    _fs="$(printf '%s\n' "$_line" | cut -f3)"
+    _state="$(lfa_usb_block_state "$_node")"
+    if [ "$_state" != "rw" ]; then
+        echo "[!] cannot write $_node: $(lfa_usb_block_reason "$_state" "$_node")" >&2
+        echo "    Run 'lfa usb block' for the full picture." >&2
+        return 3
+    fi
+    lfa_usb_root_ok || {
+        echo "[!] root is required to detach Android's mount and write $_node" >&2
+        echo "    (= sudo/su on the device; LFA will not simulate a block device)" >&2
+        return 3
+    }
+    _size="$(wc -c < "$_img" | tr -d '[:space:]')"
+    _sha="$(sha256sum "$_img" | awk '{ print $1 }')"
+    echo "Card:    $_vol ($_fs, mounted at /storage/$_vol)"
+    echo "Device:  $_node"
+    echo "Image:   $_img ($(lfa_usb_size_h "$((_size / 1024))"), sha256 $(printf '%s' "$_sha" | cut -c1-8)…)"
+    echo ""
+    if [ "$_yes" != "1" ]; then
+        echo "Dry run. This WOULD erase $_vol. Re-run with --yes to write."
+        echo "The card's Android mount is unmounted first and remounted after."
+        return 0
+    fi
+    local _root_cmd="${LFA_ROOT_CMD:-su -c}"
+    echo "[*] unmounting $_vol"
+    # shellcheck disable=SC2086
+    $_root_cmd "sm unmount $(lfa_usb_shq "$_vol"); sm unmount $(lfa_usb_shq "/storage/$_vol")" \
+        >/dev/null 2>&1 || true
+    sleep 1
+    echo "[*] writing $_size bytes"
+    # shellcheck disable=SC2086
+    if ! $_root_cmd "dd if=$(lfa_usb_shq "$_img") of=$(lfa_usb_shq "$_node") bs=1M conv=fsync status=none"; then
+        echo "[!] dd failed; card is now in an unknown state" >&2
+        return 4
+    fi
+    echo "[*] reading the card back to verify"
+    # shellcheck disable=SC2086
+    if ! $_root_cmd "sync; head -c $_size $(lfa_usb_shq "$_node") | sha256sum" \
+        | grep -qx "$_sha  -"; then
+        echo "[!] verification failed: the card does not match the image" >&2
+        return 4
+    fi
+    echo "[+] verified: $_vol matches $_img"
+    # shellcheck disable=SC2086
+    $_root_cmd "sm mount $(lfa_usb_shq "$_vol")" >/dev/null 2>&1 || true
+    echo "[*] remount requested; replug the reader if Android does not pick it up"
+    return 0
+}
+
 lfa_usb_sys_bind() {  # print the /sys/bus bind spec when the tree is ready
     if [ -d "$LFA_USB_BRIDGE/sysroot/bus/usb/devices" ] && \
        [ -n "$(ls -A "$LFA_USB_BRIDGE/sysroot/bus/usb/devices" 2>/dev/null)" ]; then
@@ -4650,6 +4830,11 @@ lfa_cli_usb() {
         enable|install) lfa_usb_enable "$@" ;;
         disable|remove) lfa_usb_disable "$@" ;;
         storage|sdcard) lfa_usb_storage "$@" ;;
+        block|bdev)
+            case "${1:-}" in
+                write) shift; lfa_usb_block_write "$@" ;;
+                *) lfa_usb_block "$@" ;;
+            esac ;;
         auto) lfa_usb_auto "$@" ;;
         exec|run) lfa_usb_exec "$@" ;;
         attach|shell) lfa_usb_attach "$@" ;;

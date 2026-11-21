@@ -2022,6 +2022,30 @@ check "Y11 storage desktop binds" 'LFA_STORAGE_BIND' "$T/prefix/bin/start-linux"
     || { fail=$((fail+1)); echo "FAIL: Y11 storage did not create /mnt/card"; }
 [ -d "$UROOT/media/CABC-1701" ] && pass=$((pass+1)) \
     || { fail=$((fail+1)); echo "FAIL: Y11 storage did not create /media/CABC-1701"; }
+
+# The card is a real block device on Android, but an app cannot open it.
+# `lfa usb block` must say exactly that and refuse to write anything.
+printf '/dev/block/vold/public:8,65 /mnt/media_rw/CABC-1701 vfat rw,relatime 0 0\n' \
+    > "$T/block-mounts"
+mkdir -p "$T/blk"
+LFA_USB_MOUNTS="$T/block-mounts" LFA_BLOCK_DEV_ROOT="$T/blk" \
+    "$LFA" usb block > "$T/y11-block.log" 2>&1; rc=$?
+[ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y11 block exit $rc"; }
+check "Y11 block volume" 'CABC-1701' "$T/y11-block.log"
+check "Y11 block backing node" '/dev/block/vold/public:8,65' "$T/y11-block.log"
+check "Y11 block invisible" 'not in this app' "$T/y11-block.log"
+check "Y11 block no fake device" 'will not fake a block device' "$T/y11-block.log"
+LFA_USB_MOUNTS="$T/block-mounts" LFA_BLOCK_DEV_ROOT="$T/blk" \
+    "$LFA" usb block --json > "$T/y11-block.json" 2>&1
+check "Y11 block json" '"state":"invisible"' "$T/y11-block.json"
+printf 'not-an-image' > "$T/fake-image"
+LFA_USB_MOUNTS="$T/block-mounts" LFA_BLOCK_DEV_ROOT="$T/blk" \
+    "$LFA" usb block write "$T/fake-image" --yes > "$T/y11-block-write.log" 2>&1; rc=$?
+[ "$rc" = "3" ] && pass=$((pass+1)) \
+    || { fail=$((fail+1)); echo "FAIL: Y11 block write should refuse, exit $rc"; }
+check "Y11 block write refused" 'cannot write' "$T/y11-block-write.log"
+[ -s "$T/fake-image" ] && [ "$(wc -c < "$T/fake-image")" = "12" ] && pass=$((pass+1)) \
+    || { fail=$((fail+1)); echo "FAIL: Y11 block write touched the image"; }
 "$LFA" usb disable -i debian > "$T/y11-auto-disable.log" 2>&1
 check "Y11 auto off" 'USB_AUTO="0"' "$T/home/.config/linux-for-android/usb.conf"
 [ ! -e "$T/prefix/bin/lfa-usb-auto" ] && pass=$((pass+1)) \

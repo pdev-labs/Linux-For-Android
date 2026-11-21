@@ -308,6 +308,70 @@ FILE` (opens Android's picker and copies one file into Termux) or copy
 with the Files app to internal storage, then bind that. `/mnt/media_rw`
 is root/media_rw-only and unusable from Termux.
 
+## Raw block devices (`dd`, Ventoy, Etcher)
+
+The card *is* a block device: Android's `vold` mounts it from
+`/dev/block/vold/public:8,65`. That node belongs to `vold` and `init`; an
+unprivileged app is refused at three separate doors:
+
+1. `/dev/block` is not searchable for apps, so the node has no path.
+2. Its mode is `0660 root:media_rw`, and even with the group the node is not
+   in the app's mount namespace.
+3. SELinux labels the app domain `untrusted_app`, which cannot open
+   `block_device`.
+
+`lfa usb block` shows all of this for the card in front of you:
+
+```bash
+lfa usb block
+# VOLUME       BACKING DEVICE                   FS     RAW
+# CABC-1701    /dev/block/vold/public:8,65       vfat   no
+#
+#   CABC-1701: /dev/block/vold/public:8,65 is not in this app's namespace (root needed)
+#
+# No root: Android keeps block devices for vold/init. Card *files* are
+# still fully usable through Android's mount (lfa usb storage).
+```
+
+Note the last lines: LFA **refuses to fake** the device. A simulated
+`/dev/sdb1` would make `dd`, `Ventoy2Disk` and `Etcher` report success while
+writing to a plain file, leaving the card untouched — the worst possible
+outcome for a flashing tool. Directory access (`lfa usb storage`) is honest;
+raw block access is not available here and says so.
+
+### With root
+
+If `su` works, the node is reachable and LFA writes and verifies images:
+
+```bash
+lfa usb block write ventoy.img -v CABC-1701          # plan only
+lfa usb block write ventoy.img -v CABC-1701 --yes    # unmount, dd, read back
+```
+
+It unmounts the volume with `sm`, writes with `dd conv=fsync`, reads the same
+number of bytes back, compares SHA-256, and remounts. On a non-rooted phone
+this exits `3` and prints why.
+
+Even with root the write happens in Termux, not in the guest: proot's `/dev`
+is a synthetic tree, so a guest session cannot see `/dev/block`. If you want
+the writer inside the guest, bind the node in from Termux as root
+(`su -c 'mount --bind /dev/block/vold/public:8,65 ...'`) and start the
+session with that bind.
+
+### Ventoy without raw writes
+
+Copying ISOs onto an existing Ventoy card works without root, because the
+exFAT data partition is the volume Android mounts:
+
+```bash
+cp ubuntu.iso /media/CABC-1701/    # or /mnt/card
+sync
+```
+
+Creating or updating Ventoy itself needs the card's boot sectors, so it is a
+PC job (`Ventoy2Disk.sh -i /dev/sdX`) or a rooted-phone job. There is no
+userspace trick that avoids this: Ventoy boots from its own MBR/GPT code.
+
 ## Raw descriptor mode: `lfa usb exec`
 
 If the preload cannot be built for a guest, or you want the smallest possible
