@@ -468,6 +468,7 @@ def probe(fd: int, as_json: bool) -> int:
             fcntl.ioctl(fd, USBDEVFS_RELEASEINTERFACE, struct.pack("I", bot.interface))
         except OSError:
             pass
+    print("[*] replug the reader so Android mounts the card again")
     return 0
 
 
