@@ -2044,6 +2044,17 @@ LFA_USB_MOUNTS="$T/block-mounts" LFA_BLOCK_DEV_ROOT="$T/blk" \
 [ "$rc" = "3" ] && pass=$((pass+1)) \
     || { fail=$((fail+1)); echo "FAIL: Y11 block write should refuse, exit $rc"; }
 check "Y11 block write refused" 'cannot write' "$T/y11-block-write.log"
+# Bulk-Only Transport: raw access over USB without a block node.
+python3 "$REPO/lib/lfa-usb-bot.py" --selftest > "$T/y11-bot-selftest.log" 2>&1; rc=$?
+[ "$rc" = "0" ] && pass=$((pass+1)) \
+    || { fail=$((fail+1)); echo "FAIL: Y11 bot selftest exit $rc"; }
+check "Y11 bot selftest" 'selftest: ok' "$T/y11-bot-selftest.log"
+"$LFA" usb bot --write > "$T/y11-bot-noimage.log" 2>&1; rc=$?
+[ "$rc" = "2" ] && pass=$((pass+1)) \
+    || { fail=$((fail+1)); echo "FAIL: Y11 bot --write without image exit $rc"; }
+check "Y11 bot needs an image" 'Usage: lfa usb bot --write IMAGE' "$T/y11-bot-noimage.log"
+"$LFA" usb help > "$T/y11-usage.log" 2>&1
+check "Y11 bot documented" 'talk USB mass storage directly' "$T/y11-usage.log"
 [ -s "$T/fake-image" ] && [ "$(wc -c < "$T/fake-image")" = "12" ] && pass=$((pass+1)) \
     || { fail=$((fail+1)); echo "FAIL: Y11 block write touched the image"; }
 "$LFA" usb disable -i debian > "$T/y11-auto-disable.log" 2>&1

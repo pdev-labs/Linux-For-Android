@@ -2752,6 +2752,8 @@ Usage: lfa usb <command> [options]
   scan [DEV...]            request permission and read real descriptors
   storage [--json]         list storage cards Android exposes to apps
   block [write IMAGE]      show the card's raw block device / write an image
+  bot [DEV] [--probe|--write IMAGE] [--yes]
+                           talk USB mass storage directly (no block node)
   watch [--interval N] [--count N]
                            poll for hotplug and print add/remove events
   enable [-i NAME]         install helpers, preload, tty bridge, auto mode
@@ -3529,6 +3531,7 @@ lfa_usb_disable() {
         fi
     done
     for _f in "usr/local/libexec/lfa-usb-desc.py" "usr/local/libexec/lfa-usb-tty.py" \
+              "usr/local/libexec/lfa-usb-bot.py" \
               "usr/local/lib/lfa-usb-node.so"; do
         [ -e "$_root/$_f" ] && rm -f "$_root/$_f"
     done
@@ -4255,6 +4258,76 @@ lfa_usb_block_write() {  # IMAGE [-v VOLUME] [--yes]
     return 0
 }
 
+lfa_usb_stage_bot() {  # $1 = guest rootfs
+    local _src="$LFA_DIR/lib/lfa-usb-bot.py"
+    local _dst="$1/usr/local/libexec/lfa-usb-bot.py"
+    if [ ! -f "$_src" ]; then
+        echo "[!] lib/lfa-usb-bot.py is missing; run menu 12 or reinstall." >&2
+        return 1
+    fi
+    if ! mkdir -p "$(dirname "$_dst")" 2>/dev/null; then
+        echo "[!] Could not create $(dirname "$_dst") in the guest rootfs." >&2
+        return 1
+    fi
+    if ! cp -f "$_src" "$_dst" 2>/dev/null; then
+        echo "[!] Could not copy lib/lfa-usb-bot.py to $_dst." >&2
+        return 1
+    fi
+    chmod 755 "$_dst" 2>/dev/null || true
+}
+
+lfa_usb_bot() {  # [DEV] [--probe|--write IMAGE] [--yes] [--json]
+    local _inst="" _dev="" _mode="--probe" _img="" _json="" _no_verify="" _yes=""
+    local _id _root
+    local -a _args=()
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            -i|--instance) _inst="${2:-}"; shift 2 ;;
+            --probe) _mode="--probe"; shift ;;
+            --write)
+                _mode="--write"; _img="${2:-}"
+                if [ $# -ge 2 ]; then shift 2; else shift; fi ;;
+            --write=*) _mode="--write"; _img="${1#*=}"; shift ;;
+            --no-verify) _no_verify="--no-verify"; shift ;;
+            --json) _json="--json"; shift ;;
+            --yes|-y) _yes="--yes"; shift ;;
+            --device)
+                _dev="${2:-}"
+                if [ $# -ge 2 ]; then shift 2; else shift; fi ;;
+            -h|--help) lfa_usb_usage; return 0 ;;
+            --) shift; break ;;
+            -*) echo "Unknown option: $1" >&2; return 2 ;;
+            *) _dev="$1"; shift ;;
+        esac
+    done
+    if [ "$_mode" = "--write" ] && [ -z "$_img" ]; then
+        echo "Usage: lfa usb bot --write IMAGE [--yes]" >&2
+        return 2
+    fi
+    if [ -z "$_dev" ]; then
+        _dev="$(lfa_usb_default_dev)"
+        [ -n "$_dev" ] || {
+            echo "[!] No USB device is visible. Connect one and run: lfa usb refresh" >&2
+            return 1
+        }
+        echo "[*] Using $_dev (the only visible device)."
+    fi
+    lfa_usb_pick_instance "$_inst" || return 1
+    _id="$INSTANCE_NAME"
+    _root="$(pd_rootfs "$_id")"
+    [ -d "$_root" ] || { echo "[!] Rootfs missing for $_id." >&2; return 1; }
+    lfa_usb_stage_bot "$_root" || return 1
+    echo "[*] Bulk-Only Transport: Android's usb-storage driver is detached for"
+    echo "    this command, so the card leaves /storage until you replug it."
+    echo "    Nothing is written unless --write and --yes are both given."
+    _args=("$_mode")
+    [ "$_mode" = "--write" ] && _args+=("$_img")
+    [ "$_mode" = "--write" ] && [ -n "$_yes" ] && _args+=("$_yes")
+    [ "$_mode" = "--write" ] && [ -n "$_no_verify" ] && _args+=("$_no_verify")
+    [ "$_mode" = "--probe" ] && [ -n "$_json" ] && _args+=("$_json")
+    lfa_usb_exec -i "$_id" "$_dev" -- python3 /usr/local/libexec/lfa-usb-bot.py "${_args[@]}"
+}
+
 lfa_usb_sys_bind() {  # print the /sys/bus bind spec when the tree is ready
     if [ -d "$LFA_USB_BRIDGE/sysroot/bus/usb/devices" ] && \
        [ -n "$(ls -A "$LFA_USB_BRIDGE/sysroot/bus/usb/devices" 2>/dev/null)" ]; then
@@ -4830,6 +4903,7 @@ lfa_cli_usb() {
         enable|install) lfa_usb_enable "$@" ;;
         disable|remove) lfa_usb_disable "$@" ;;
         storage|sdcard) lfa_usb_storage "$@" ;;
+        bot|bot-probe) lfa_usb_bot "$@" ;;
         block|bdev)
             case "${1:-}" in
                 write) shift; lfa_usb_block_write "$@" ;;

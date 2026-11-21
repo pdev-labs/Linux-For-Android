@@ -1554,7 +1554,7 @@ plus `script` from util-linux for the pty test, which is skipped if absent:
 
 ```bash
 chmod +x tests/test-all.sh
-./tests/test-all.sh   # expect: PASS=848 FAIL=0
+./tests/test-all.sh   # expect: PASS=853 FAIL=0
 ```
 
 The suite is deliberately stubbed. It cannot prove a desktop actually appears.

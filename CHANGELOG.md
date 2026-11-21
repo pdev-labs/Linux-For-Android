@@ -30,6 +30,14 @@ tag names, define the order. See the table at the bottom.
   by reading the bytes back. Without root it refuses explicitly instead of
   simulating a block device, since a fake `/dev/sdb1` would let `dd` and
   Ventoy report success while writing to a file.
+- `lfa usb bot` reaches the storage card's sectors with no block device and
+  no root: it detaches Android's `usb-storage` driver from the
+  `termux-usb` descriptor and speaks USB Mass Storage Bulk-Only Transport.
+  `--probe` is read-only (INQUIRY, READ CAPACITY, sector 0 partition table);
+  `--write IMAGE --yes` writes with `WRITE(10)`, flushes the cache and reads
+  the range back to verify it. The card leaves `/storage` while the driver is
+  detached, and a ROM that refuses the detach gets a real errno, not a
+  simulated success.
 - USB automatic mode. `lfa usb enable -i NAME` now makes every later session
   that LFA starts (`lfa shell`, `lfa desktop`, the Terminal shortcut) open
   with the plugged-in device already available: the launchers call

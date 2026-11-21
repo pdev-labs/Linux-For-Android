@@ -358,6 +358,54 @@ the writer inside the guest, bind the node in from Termux as root
 (`su -c 'mount --bind /dev/block/vold/public:8,65 ...'`) and start the
 session with that bind.
 
+### Without root: talk to the reader directly
+
+A block node is not the only way to reach the sectors. It is only the way
+the kernel offers. Apps like EtchDroid flash drives on unrooted phones by
+asking Android to **detach its `usb-storage` driver** from the reader, then
+speaking USB Mass Storage Bulk-Only Transport (BOT) over the descriptor
+`termux-usb` handed over. No `/dev` node is involved.
+
+LFA does the same:
+
+```bash
+lfa usb bot --probe          # read-only: INQUIRY, capacity, sector 0
+lfa usb bot --probe --json   # same, for scripts
+lfa usb bot --write ventoy.img --yes
+```
+
+`--probe` prints what the card actually is and whether a raw write is
+possible on this phone:
+
+```
+Device:   Generic  Mass Storage Device (rev ...)
+Capacity: 7.4G in 15523840 blocks of 512 bytes
+Sector 0: MBR table, signature 0xaa55
+          #1 type 0x07 start 2048 (1.0M) size 7.4G
+RAW WRITE: possible without root through this transport
+```
+
+`--write` writes in 1 MiB chunks with `WRITE(10)`, flushes with
+`SYNCHRONIZE CACHE(10)`, then reads the same byte range back and compares
+it, so a truncated or refused transfer cannot pass as success.
+
+Things to know:
+
+- While the command runs, Android's mount of the card is gone: it will
+  disappear from `/storage` and from `lfa usb storage`. That is unavoidable,
+  because only one owner can have the device. Replug the reader afterwards
+  and Android mounts it again.
+- The detach is a permission the Android USB host API grants to the app that
+  owns the descriptor. If a ROM refuses it, the probe fails with the exact
+  errno (`EBUSY`, `EPERM`) instead of pretending.
+- `--write` always needs `--yes`; without it the tool only explains what it
+  would erase. There is no dry-run that writes part of an image.
+- Do not run `--write` while the card is mounted and in use. LFA detaches the
+  driver, so vold cannot flush anything after that point.
+
+If the detach is refused, the honest fallbacks remain: `lfa usb block` with
+root, or a PC for the one-time Ventoy install.
+
 ### Ventoy without raw writes
 
 Copying ISOs onto an existing Ventoy card works without root, because the
