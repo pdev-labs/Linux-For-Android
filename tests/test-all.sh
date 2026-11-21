@@ -157,6 +157,9 @@ fresh_env() { # reset HOME/PREFIX, keep stubs
     export HOME="$T/home" PREFIX="$T/prefix" \
         PATH="$T/fakebin${REAL_PREFIX:+:$REAL_PREFIX/bin}:/usr/bin:/bin" TERM=""
     export LFA_KEEP_SETUP_SCRIPT=1   # inspect the generated guest script
+    # Never read the *host* /sys/bus/usb/devices: a real device at 001/002
+    # would shadow the fake scan cache and make the USB checks host-dependent.
+    export LFA_USB_SYSFS="$T/usb-sysfs-host"
     unset GETPROP_SDK FREE_MB PD_V4
 }
 run_script() { # $1=logname, rest of stdin via caller pipe; needs $T/tmpin set
@@ -1993,8 +1996,28 @@ check "Y11 auto map" 'map=001/002=9' "$T/y11-auto.log"
 check "Y11 auto preload" 'preload=/usr/local/lib/lfa-usb-node.so' "$T/y11-auto.log"
 check "Y11 auto terminal hook" 'lfa-usb-auto' "$T/prefix/bin/terminal-linux"
 check "Y11 auto terminal binds" 'USB_BIND+=(--bind "$LFA_USB_BIND")' "$T/prefix/bin/terminal-linux"
-check "Y11 auto desktop helper" 'pd_login() { proot-distro login "${USB_BIND[@]}" "$@"' "$T/prefix/bin/start-linux"
+check "Y11 auto desktop helper" 'pd_login() {' "$T/prefix/bin/start-linux"
 check "Y11 auto desktop wrap" '${USB_WRAP}mkdir' "$T/prefix/bin/start-linux"
+# Storage cards Android exposes to apps: list, probe, bind into sessions.
+mkdir -p "$T/storage/CABC-1701/DCIM" "$T/storage/emulated/0/Download"
+printf 'x' > "$T/storage/CABC-1701/DCIM/photo.jpg"
+LFA_STORAGE_ROOT="$T/storage" "$LFA" usb storage > "$T/y11-storage.log" 2>&1; rc=$?
+[ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y11 storage exit $rc"; }
+check "Y11 storage lists card" 'CABC-1701' "$T/y11-storage.log"
+check "Y11 storage path" "$T/storage/CABC-1701" "$T/y11-storage.log"
+check "Y11 storage rw probe" 'rw' "$T/y11-storage.log"
+LFA_STORAGE_ROOT="$T/storage" "$LFA" usb storage --json > "$T/y11-storage.json" 2>&1
+check "Y11 storage json" '"writable":true' "$T/y11-storage.json"
+LFA_STORAGE_ROOT="$T/storage" "$LFA" usb auto -- sh -c 'echo "storage=${LFA_STORAGE_BIND:-}"' \
+    > "$T/y11-storage-bind.log" 2>&1
+check "Y11 storage bind card" "$T/storage/CABC-1701:/mnt/sdcard" "$T/y11-storage-bind.log"
+check "Y11 storage bind internal" "$T/storage/emulated/0:/sdcard" "$T/y11-storage-bind.log"
+check "Y11 storage launcher binds" 'LFA_STORAGE_BIND' "$T/prefix/bin/terminal-linux"
+check "Y11 storage desktop binds" 'LFA_STORAGE_BIND' "$T/prefix/bin/start-linux"
+[ -d "$UROOT/mnt/sdcard" ] && pass=$((pass+1)) \
+    || { fail=$((fail+1)); echo "FAIL: Y11 storage did not create /mnt/sdcard"; }
+[ -d "$UROOT/sdcard" ] && pass=$((pass+1)) \
+    || { fail=$((fail+1)); echo "FAIL: Y11 storage did not create /sdcard"; }
 "$LFA" usb disable -i debian > "$T/y11-auto-disable.log" 2>&1
 check "Y11 auto off" 'USB_AUTO="0"' "$T/home/.config/linux-for-android/usb.conf"
 [ ! -e "$T/prefix/bin/lfa-usb-auto" ] && pass=$((pass+1)) \

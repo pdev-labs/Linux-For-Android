@@ -2750,6 +2750,7 @@ Usage: lfa usb <command> [options]
   list [--json]            list real devices visible through Termux:API
   refresh                  re-read `termux-usb -l` and rebuild the guest view
   scan [DEV...]            request permission and read real descriptors
+  storage [--json]         list storage cards Android exposes to apps
   watch [--interval N] [--count N]
                            poll for hotplug and print add/remove events
   enable [-i NAME]         install helpers, preload, tty bridge, auto mode
@@ -2920,6 +2921,12 @@ lfa_usb_status() {
     echo "  bridge directory:   $LFA_USB_BRIDGE"
     echo "  guest helpers:      $_shims"
     echo "  automatic mode:     $(lfa_usb_conf_get USB_AUTO | grep -qx 1 && echo "on (sessions get the device)" || echo "off")"
+    _vols="$(lfa_usb_storage_rows 2>/dev/null)"
+    if [ -n "$_vols" ]; then
+        echo "  storage cards:      $(printf '%s\n' "$_vols" | awk -F '\t' '{ printf "%s%s (%s, %s)", (n++ ? ", " : ""), $1, $3, $6 }') -> /mnt/sdcard"
+    else
+        echo "  storage cards:      none mounted for apps"
+    fi
     echo "  libusb preload:     $_preload"
     echo "  last scan:          $_last"
     echo "  USB fd in this shell: $_fd_now"
@@ -3942,6 +3949,118 @@ lfa_usb_install_esptool() {  # $1 = optional instance
     return 0
 }
 
+lfa_usb_storage_root() {  # where Android exposes volumes to apps
+    printf '%s\n' "${LFA_STORAGE_ROOT:-/storage}"
+}
+
+lfa_usb_storage_ids() {  # volume ids Android exposes under the storage root
+    local _root _id
+    _root="$(lfa_usb_storage_root)"
+    if [ -n "${LFA_STORAGE_ROOT:-}" ]; then
+        # Tests (and unusual setups) point this at a plain directory.
+        for _id in "$_root"/*; do
+            [ -d "$_id" ] || continue
+            _id="${_id##*/}"
+            case "$_id" in emulated|self) continue ;; esac
+            printf '%s\n' "$_id"
+        done
+        return 0
+    fi
+    # `/storage` itself is not listable for an app, so read the mount table.
+    awk -v root="$_root/" 'index($2, root) == 1 {
+        id = substr($2, length(root) + 1)
+        sub("/.*", "", id)
+        if (id != "" && id != "emulated" && id != "self") print id
+    }' /proc/mounts 2>/dev/null | awk '!seen[$0]++'
+}
+
+lfa_usb_size_h() {  # $1 KiB -> short human size
+    awk -v k="${1:-0}" 'BEGIN {
+        if (k >= 1048576) printf "%.1fG", k / 1048576
+        else if (k >= 1024) printf "%.1fM", k / 1024
+        else printf "%dK", k
+    }'
+}
+
+lfa_usb_storage_rows() {  # id<TAB>path<TAB>fs<TAB>size_k<TAB>avail_k<TAB>rw
+    local _root _id _path _fs _size _avail _rw _probe
+    _root="$(lfa_usb_storage_root)"
+    lfa_usb_storage_ids | while IFS= read -r _id; do
+        [ -n "$_id" ] || continue
+        _path="$_root/$_id"
+        [ -d "$_path" ] || continue
+        _fs="$(awk -v p="$_path" '$2 == p { print $3; exit }' /proc/mounts 2>/dev/null)"
+        [ -n "$_fs" ] || _fs="?"
+        _size=""; _avail=""
+        read -r _size _avail <<EOF
+$(df -k "$_path" 2>/dev/null | awk 'NR == 2 { print $2, $4 }')
+EOF
+        case "$_size" in ''|*[!0-9]*) _size=0 ;; esac
+        case "$_avail" in ''|*[!0-9]*) _avail=0 ;; esac
+        # FUSE ignores the mode bits, so probe with a real write.
+        _rw="ro"
+        _probe="$_path/.lfa-write-$$"
+        if ( : > "$_probe" ) 2>/dev/null; then
+            _rw="rw"
+            rm -f "$_probe" 2>/dev/null || true
+        fi
+        printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$_id" "$_path" "$_fs" "$_size" "$_avail" "$_rw"
+    done
+}
+
+lfa_usb_storage() {  # [--json]
+    local _json=0 _rows _id _path _fs _size _avail _rw
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) _json=1; shift ;;
+            -h|--help) echo "Usage: lfa usb storage [--json]" >&2; return 0 ;;
+            *) echo "Unknown option: $1" >&2; return 2 ;;
+        esac
+    done
+    _rows="$(lfa_usb_storage_rows)"
+    if [ "$_json" = "1" ]; then
+        printf '%s\n' "$_rows" | awk -F '\t' '
+            BEGIN { printf "[" }
+            NF { printf "%s{\"id\":\"%s\",\"path\":\"%s\",\"fs\":\"%s\",\"size_kb\":%s,\"avail_kb\":%s,\"writable\":%s}",
+                        (n++ ? "," : ""), $1, $2, $3, $4, $5, ($6 == "rw" ? "true" : "false") }
+            END { print "]" }'
+        return 0
+    fi
+    if [ -z "$_rows" ]; then
+        echo "No storage card is mounted for apps."
+        echo "Plug an OTG reader or card; Android must mount it first."
+        return 0
+    fi
+    printf '%-12s %8s %8s  %-5s %-4s %s\n' VOLUME SIZE FREE FS MODE PATH
+    printf '%s\n' "$_rows" | while IFS="$(printf '\t')" read -r _id _path _fs _size _avail _rw; do
+        printf '%-12s %8s %8s  %-5s %-4s %s\n' \
+            "$_id" "$(lfa_usb_size_h "$_size")" "$(lfa_usb_size_h "$_avail")" \
+            "$_fs" "$_rw" "$_path"
+    done
+    echo ""
+    echo "Sessions started by lfa bind the first card at /mnt/sdcard,"
+    echo "internal storage at /sdcard."
+}
+
+lfa_usb_storage_binds() {  # host:guest bind specs, ';' separated
+    local _root _id _guest _n=0 _out="" _ids
+    _root="$(lfa_usb_storage_root)"
+    _ids="$(lfa_usb_storage_ids)"
+    while IFS= read -r _id; do
+        [ -n "$_id" ] || continue
+        _n=$((_n + 1))
+        if [ "$_n" = "1" ]; then _guest="/mnt/sdcard"; else _guest="/mnt/$_id"; fi
+        _out="${_out:+$_out;}$_root/$_id:$_guest"
+    done <<EOF
+$_ids
+EOF
+    if [ -d "$_root/emulated/0" ]; then
+        _out="${_out:+$_out;}$_root/emulated/0:/sdcard"
+    fi
+    [ -n "$_out" ] && printf '%s\n' "$_out"
+    return 0
+}
+
 lfa_usb_sys_bind() {  # print the /sys/bus bind spec when the tree is ready
     if [ -d "$LFA_USB_BRIDGE/sysroot/bus/usb/devices" ] && \
        [ -n "$(ls -A "$LFA_USB_BRIDGE/sysroot/bus/usb/devices" 2>/dev/null)" ]; then
@@ -4026,6 +4145,21 @@ lfa_usb_auto() {  # -- COMMAND... : session entrypoint used by the launchers
         esac
     done
     [ $# -gt 0 ] || return 2
+    # Storage binds do not need a USB descriptor, so they are exported before
+    # any of the early exits below: a session always sees a mounted card.
+    LFA_STORAGE_BIND="$(lfa_usb_storage_binds 2>/dev/null || true)"
+    [ -n "$LFA_STORAGE_BIND" ] && export LFA_STORAGE_BIND
+    if [ -n "$LFA_STORAGE_BIND" ]; then
+        _str_root="$(pd_rootfs "$(lfa_usb_conf_instance)" 2>/dev/null || true)"
+        if [ -n "$_str_root" ] && [ -d "$_str_root" ]; then
+            _str_ifs="$IFS"; IFS=';'
+            for _str_spec in $LFA_STORAGE_BIND; do
+                [ -n "$_str_spec" ] && mkdir -p "$_str_root${_str_spec##*:}" 2>/dev/null || true
+            done
+            IFS="$_str_ifs"; unset _str_ifs _str_spec
+        fi
+        unset _str_root
+    fi
     # Anything that cannot be prepared must still start the session: a
     # missing device is not an error for a desktop or a shell.
     if [ "${LFA_USB_AUTO_DONE:-}" = "1" ] || \
@@ -4501,6 +4635,7 @@ lfa_cli_usb() {
         watch|monitor) lfa_usb_watch "$@" ;;
         enable|install) lfa_usb_enable "$@" ;;
         disable|remove) lfa_usb_disable "$@" ;;
+        storage|sdcard) lfa_usb_storage "$@" ;;
         auto) lfa_usb_auto "$@" ;;
         exec|run) lfa_usb_exec "$@" ;;
         attach|shell) lfa_usb_attach "$@" ;;
@@ -7420,12 +7555,30 @@ if [ -n "${LFA_USB_DEVBIND:-}" ]; then
     for _ub in $LFA_USB_DEVBIND; do [ -n "$_ub" ] && USB_BIND+=(--bind "$_ub"); done
     IFS="$_ub_ifs"; unset _ub_ifs _ub
 fi
+if [ -n "${LFA_STORAGE_BIND:-}" ]; then
+    _st_ifs="$IFS"; IFS=';'
+    for _st in $LFA_STORAGE_BIND; do [ -n "$_st" ] && USB_BIND+=(--bind "$_st"); done
+    IFS="$_st_ifs"; unset _st_ifs _st
+fi
 USB_WRAP=""
 if [ -n "${LFA_USB_PRELOAD:-}" ] && [ -n "${LFA_USB_MAP:-}" ]; then
     USB_WRAP="export LD_PRELOAD=$LFA_USB_PRELOAD; export LFA_USB_MAP=$LFA_USB_MAP; "
 fi
 
-pd_login() { proot-distro login "${USB_BIND[@]}" "$@"; }
+pd_login() {
+    if [ -n "${LFA_STORAGE_BIND:-}" ]; then
+        _st_rfs="$(lfa_rootfs "$DISTRO" 2>/dev/null || true)"
+        if [ -n "$_st_rfs" ]; then
+            _st_ifs="$IFS"; IFS=';'
+            for _st in $LFA_STORAGE_BIND; do
+                [ -n "$_st" ] && mkdir -p "$_st_rfs${_st##*:}" 2>/dev/null || true
+            done
+            IFS="$_st_ifs"; unset _st_ifs _st
+        fi
+        unset _st_rfs
+    fi
+    proot-distro login "${USB_BIND[@]}" "$@"
+}
 
 # GUI installs can boot the full desktop or drop straight to a shell.
 # CLI-only installs go directly to a root terminal.
@@ -7908,6 +8061,11 @@ if [ -n "${LFA_USB_DEVBIND:-}" ]; then
     for _ub in $LFA_USB_DEVBIND; do [ -n "$_ub" ] && USB_BIND+=(--bind "$_ub"); done
     IFS="$_ub_ifs"; unset _ub_ifs _ub
 fi
+if [ -n "${LFA_STORAGE_BIND:-}" ]; then
+    _st_ifs="$IFS"; IFS=';'
+    for _st in $LFA_STORAGE_BIND; do [ -n "$_st" ] && USB_BIND+=(--bind "$_st"); done
+    IFS="$_st_ifs"; unset _st_ifs _st
+fi
 USB_WRAP=""
 if [ -n "${LFA_USB_PRELOAD:-}" ] && [ -n "${LFA_USB_MAP:-}" ]; then
     USB_WRAP="export LD_PRELOAD=$LFA_USB_PRELOAD; export LFA_USB_MAP=$LFA_USB_MAP; "
@@ -7991,6 +8149,17 @@ else
     echo "1) Root terminal (admin)"
     echo "2) User terminal ('$TERM_USER' account)"
     read -p "Select [1-2, default 1]: " TERM_CHOICE
+fi
+if [ -n "${LFA_STORAGE_BIND:-}" ]; then
+    _st_rfs="$(lfa_rootfs "$DISTRO" 2>/dev/null || true)"
+    if [ -n "$_st_rfs" ]; then
+        _st_ifs="$IFS"; IFS=';'
+        for _st in $LFA_STORAGE_BIND; do
+            [ -n "$_st" ] && mkdir -p "$_st_rfs${_st##*:}" 2>/dev/null || true
+        done
+        IFS="$_st_ifs"; unset _st_ifs _st
+    fi
+    unset _st_rfs
 fi
 if [ "$TERM_CHOICE" == "2" ]; then
     if [ -n "$USB_WRAP" ]; then

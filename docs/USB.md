@@ -133,6 +133,7 @@ lfa usb status                 Termux:API, host feature, bridge, preload state
 lfa usb list [--json]          live devices; descriptors when already cached
 lfa usb refresh                re-read `termux-usb -l` and rewrite the guest view
 lfa usb scan [DEV...]          request permission and read real descriptors
+lfa usb storage [--json]       list storage cards Android exposes to apps
 lfa usb watch [--interval N]   poll for hotplug, print add/remove events
 lfa usb enable [-i NAME]       install helpers, preload, tty bridge, auto mode
 lfa usb disable [-i NAME]      remove those helpers
@@ -258,6 +259,49 @@ devices and `usb-storage` for mass storage). A userspace claim then fails with
 `EBUSY`; without root, Android cannot detach the driver. The bridge reports
 this clearly. Native-USB ESP32 bootloaders and CP210x/CH340 boards normally
 have no bound driver, which is why they work.
+
+## Storage cards (SD, card readers, USB sticks)
+
+A mass-storage device is the one thing this bridge cannot turn into
+`/dev/sdb1`. Android's own `usb-storage` driver claims the reader's
+interface and mounts the card at the kernel level; proot has no block
+layer, cannot create block nodes, and the guest has no kernel of its own.
+Bulk transfers to a claimed interface fail with `EBUSY`, so a userspace
+reader cannot reach the files either without root.
+
+What does work: Android already mounted the card, and on Android 11+
+the FUSE view under `/storage/<VOLUME-ID>` is often readable by Termux.
+LFA uses that path:
+
+```bash
+lfa usb storage
+# VOLUME          SIZE     FREE  FS    MODE PATH
+# CABC-1701       7.4G     7.4G  vfat  rw   /storage/CABC-1701
+
+lfa shell -i ubuntu-5623
+# [*] storage: CABC-1701 -> /mnt/sdcard (rw)
+ls /mnt/sdcard
+```
+
+Sessions started by LFA bind:
+
+| Path | Contents |
+|---|---|
+| `/mnt/sdcard` | first storage card Android exposes |
+| `/mnt/<VOLUME-ID>` | any further cards |
+| `/sdcard` | internal phone storage (`/storage/emulated/0`) |
+
+`lfa usb storage --json` prints the same data for scripts. If
+`/storage/<VOLUME-ID>` is readable but not writable, the mode column says
+`ro`; proot cannot enforce read-only binds, so LFA warns instead of
+pretending. Unplugging the card removes the directory contents, exactly
+as on a desktop.
+
+If `/storage/<VOLUME-ID>` is denied (some Android builds restrict it),
+there is no filesystem path for the app to bind. Use `termux-storage-get
+FILE` (opens Android's picker and copies one file into Termux) or copy
+with the Files app to internal storage, then bind that. `/mnt/media_rw`
+is root/media_rw-only and unusable from Termux.
 
 ## Raw descriptor mode: `lfa usb exec`
 
