@@ -15,6 +15,44 @@ tag names, define the order. See the table at the bottom.
 
 ### Added
 
+- `lfa usb storage` lists the storage cards Android mounts for apps
+  (`/storage/<VOLUME-ID>`), with filesystem, size, free space and a real
+  read/write probe. Sessions started by LFA bind the first card at
+  `/media/<VOLUME-ID>` and the largest card at `/mnt/card`, avoiding the
+  `/sdcard` and `/mnt/sdcard` destinations proot-distro already uses for
+  internal storage. A card reader then behaves like a normal directory.
+  Mounting the block device itself stays impossible without root: Android's
+  `usb-storage` driver owns the interface and proot has no block layer.
+- `lfa usb block` reports the card's real backing device
+  (`/dev/block/vold/public:X,Y`), whether this app can open it, and whether a
+  root shell is available. `lfa usb block write IMAGE [-v VOLUME]` plans a
+  write and, with root and `--yes`, unmounts, `dd`s the image and verifies it
+  by reading the bytes back. Without root it refuses explicitly instead of
+  simulating a block device, since a fake `/dev/sdb1` would let `dd` and
+  Ventoy report success while writing to a file.
+- `lfa usb bot` reaches the storage card's sectors with no block device and
+  no root: it detaches Android's `usb-storage` driver from the
+  `termux-usb` descriptor and speaks USB Mass Storage Bulk-Only Transport.
+  `--probe` is read-only (INQUIRY, READ CAPACITY, sector 0 partition table);
+  `--write IMAGE --yes` writes with `WRITE(10)`, flushes the cache and reads
+  the range back to verify it. The card leaves `/storage` while the driver is
+  detached, and a ROM that refuses the detach gets a real errno, not a
+  simulated success.
+- `lfa usb bot --export FILE` reads the card into a sparse image and
+  `--import FILE --yes` writes it back, rewriting only the 1 MiB chunks that
+  differ and verifying those. Partitioning, `mkfs`, `dd` and `fsck` then work
+  on the card from inside a desktop session using the normal tools; a block
+  device still cannot exist in the guest, so `losetup` and `mount -o loop`
+  remain impossible.
+- USB automatic mode. `lfa usb enable -i NAME` now makes every later session
+  that LFA starts (`lfa shell`, `lfa desktop`, the Terminal shortcut) open
+  with the plugged-in device already available: the launchers call
+  `lfa-usb-auto`, which takes the real descriptor from Termux:API, prepares
+  the synthetic sysfs tree once per device, and re-runs the launcher with
+  `--bind` flags and the guest preload exported. No `lfa usb attach`, no
+  environment variables, and GUI programs inherit the same view. Sessions
+  still start normally when nothing is plugged in; `lfa usb disable` turns
+  the mode off again.
 - `lfa appimage` (alias `lfa app`) adds first-class AppImage support. `add`
   extracts an AppImage once into `~/.local/opt/appimages`, writes a launcher
   in `~/.local/bin`, and adds a desktop entry; `list`, `run`, and `remove`

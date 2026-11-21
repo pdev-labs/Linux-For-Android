@@ -157,6 +157,9 @@ fresh_env() { # reset HOME/PREFIX, keep stubs
     export HOME="$T/home" PREFIX="$T/prefix" \
         PATH="$T/fakebin${REAL_PREFIX:+:$REAL_PREFIX/bin}:/usr/bin:/bin" TERM=""
     export LFA_KEEP_SETUP_SCRIPT=1   # inspect the generated guest script
+    # Never read the *host* /sys/bus/usb/devices: a real device at 001/002
+    # would shadow the fake scan cache and make the USB checks host-dependent.
+    export LFA_USB_SYSFS="$T/usb-sysfs-host"
     unset GETPROP_SDK FREE_MB PD_V4
 }
 run_script() { # $1=logname, rest of stdin via caller pipe; needs $T/tmpin set
@@ -1973,6 +1976,101 @@ check "Y11 tty selftest" 'selftest: ok' "$T/y11-tty-self.log"
 timeout 60 python3 "$REPO/tests/usb-tty-plumbing.py" > "$T/y11-tty-plumb.log" 2>&1; rc=$?
 [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y11 tty plumbing exit $rc"; }
 check "Y11 tty plumbing relay" 'plumbing: ok' "$T/y11-tty-plumb.log"
+
+# Automatic mode: `lfa usb enable` is enough; the launchers ask for the
+# device themselves and inject the binds.
+"$LFA" usb enable -i debian > "$T/y11-auto-enable.log" 2>&1; rc=$?
+[ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y11 auto enable exit $rc"; }
+check "Y11 auto conf" 'USB_AUTO="1"' "$T/home/.config/linux-for-android/usb.conf"
+[ -x "$T/prefix/bin/lfa-usb-auto" ] && pass=$((pass+1)) \
+    || { fail=$((fail+1)); echo "FAIL: Y11 auto wrapper not installed"; }
+"$LFA" usb auto -- sh -c 'echo "bind=${LFA_USB_BIND:-}"; echo "devbind=${LFA_USB_DEVBIND:-}"; echo "map=${LFA_USB_MAP:-}"; echo "preload=${LFA_USB_PRELOAD:-}"' \
+    > "$T/y11-auto.log" 2>&1; rc=$?
+[ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y11 auto exit $rc"; }
+check "Y11 auto announced" 'available in this session (auto mode)' "$T/y11-auto.log"
+check "Y11 auto sysfs bind" '/lfa-usb/sysroot/bus:/sys/bus' "$T/y11-auto.log"
+check "Y11 auto dev bind" 'dev/bus/usb:/dev/bus/usb' "$T/y11-auto.log"
+# The fake termux-usb sets TERMUX_USB_FD=9 without opening it, so the map
+# keeps that number; a real session re-dups to a free fd first.
+check "Y11 auto map" 'map=001/002=9' "$T/y11-auto.log"
+check "Y11 auto preload" 'preload=/usr/local/lib/lfa-usb-node.so' "$T/y11-auto.log"
+check "Y11 auto terminal hook" 'lfa-usb-auto' "$T/prefix/bin/terminal-linux"
+check "Y11 auto terminal binds" 'USB_BIND+=(--bind "$LFA_USB_BIND")' "$T/prefix/bin/terminal-linux"
+check "Y11 auto desktop helper" 'pd_login() {' "$T/prefix/bin/start-linux"
+check "Y11 auto desktop wrap" '${USB_WRAP}mkdir' "$T/prefix/bin/start-linux"
+# Storage cards Android exposes to apps: list, probe, bind into sessions.
+mkdir -p "$T/storage/CABC-1701/DCIM" "$T/storage/emulated/0/Download"
+printf 'x' > "$T/storage/CABC-1701/DCIM/photo.jpg"
+LFA_STORAGE_ROOT="$T/storage" "$LFA" usb storage > "$T/y11-storage.log" 2>&1; rc=$?
+[ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y11 storage exit $rc"; }
+check "Y11 storage lists card" 'CABC-1701' "$T/y11-storage.log"
+check "Y11 storage path" "$T/storage/CABC-1701" "$T/y11-storage.log"
+check "Y11 storage rw probe" 'rw' "$T/y11-storage.log"
+LFA_STORAGE_ROOT="$T/storage" "$LFA" usb storage --json > "$T/y11-storage.json" 2>&1
+check "Y11 storage json" '"writable":true' "$T/y11-storage.json"
+LFA_STORAGE_ROOT="$T/storage" "$LFA" usb auto -- sh -c 'echo "storage=${LFA_STORAGE_BIND:-}"' \
+    > "$T/y11-storage-bind.log" 2>&1
+# proot-distro already binds internal storage at /sdcard and /mnt/sdcard, so
+# the card must use destinations it does not take.
+check "Y11 storage bind media" "$T/storage/CABC-1701:/media/CABC-1701" "$T/y11-storage-bind.log"
+check "Y11 storage bind alias" "$T/storage/CABC-1701:/mnt/card" "$T/y11-storage-bind.log"
+check_absent "Y11 storage no internal bind" "$T/storage/emulated/0:/sdcard" "$T/y11-storage-bind.log"
+check_absent "Y11 storage no sdcard collision" ":/mnt/sdcard" "$T/y11-storage-bind.log"
+check "Y11 storage launcher binds" 'LFA_STORAGE_BIND' "$T/prefix/bin/terminal-linux"
+check "Y11 storage desktop binds" 'LFA_STORAGE_BIND' "$T/prefix/bin/start-linux"
+[ -d "$UROOT/mnt/card" ] && pass=$((pass+1)) \
+    || { fail=$((fail+1)); echo "FAIL: Y11 storage did not create /mnt/card"; }
+[ -d "$UROOT/media/CABC-1701" ] && pass=$((pass+1)) \
+    || { fail=$((fail+1)); echo "FAIL: Y11 storage did not create /media/CABC-1701"; }
+
+# The card is a real block device on Android, but an app cannot open it.
+# `lfa usb block` must say exactly that and refuse to write anything.
+printf '/dev/block/vold/public:8,65 /mnt/media_rw/CABC-1701 vfat rw,relatime 0 0\n' \
+    > "$T/block-mounts"
+mkdir -p "$T/blk"
+LFA_USB_MOUNTS="$T/block-mounts" LFA_BLOCK_DEV_ROOT="$T/blk" \
+    "$LFA" usb block > "$T/y11-block.log" 2>&1; rc=$?
+[ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y11 block exit $rc"; }
+check "Y11 block volume" 'CABC-1701' "$T/y11-block.log"
+check "Y11 block backing node" '/dev/block/vold/public:8,65' "$T/y11-block.log"
+check "Y11 block invisible" 'not in this app' "$T/y11-block.log"
+check "Y11 block no fake device" 'will not fake a block device' "$T/y11-block.log"
+LFA_USB_MOUNTS="$T/block-mounts" LFA_BLOCK_DEV_ROOT="$T/blk" \
+    "$LFA" usb block --json > "$T/y11-block.json" 2>&1
+check "Y11 block json" '"state":"invisible"' "$T/y11-block.json"
+printf 'not-an-image' > "$T/fake-image"
+LFA_USB_MOUNTS="$T/block-mounts" LFA_BLOCK_DEV_ROOT="$T/blk" \
+    "$LFA" usb block write "$T/fake-image" --yes > "$T/y11-block-write.log" 2>&1; rc=$?
+[ "$rc" = "3" ] && pass=$((pass+1)) \
+    || { fail=$((fail+1)); echo "FAIL: Y11 block write should refuse, exit $rc"; }
+check "Y11 block write refused" 'cannot write' "$T/y11-block-write.log"
+# Bulk-Only Transport: raw access over USB without a block node.
+python3 "$REPO/lib/lfa-usb-bot.py" --selftest > "$T/y11-bot-selftest.log" 2>&1; rc=$?
+[ "$rc" = "0" ] && pass=$((pass+1)) \
+    || { fail=$((fail+1)); echo "FAIL: Y11 bot selftest exit $rc"; }
+check "Y11 bot selftest" 'selftest: ok' "$T/y11-bot-selftest.log"
+"$LFA" usb bot --write > "$T/y11-bot-noimage.log" 2>&1; rc=$?
+[ "$rc" = "2" ] && pass=$((pass+1)) \
+    || { fail=$((fail+1)); echo "FAIL: Y11 bot --write without image exit $rc"; }
+check "Y11 bot needs an image" 'Usage: lfa usb bot --write IMAGE' "$T/y11-bot-noimage.log"
+"$LFA" usb help > "$T/y11-usage.log" 2>&1
+check "Y11 bot documented" 'talk USB mass storage directly' "$T/y11-usage.log"
+# Card as an image file, for fdisk/mkfs/dd inside the guest.
+"$LFA" usb bot --export > "$T/y11-bot-noexport.log" 2>&1; rc=$?
+[ "$rc" = "2" ] && pass=$((pass+1)) \
+    || { fail=$((fail+1)); echo "FAIL: Y11 bot --export without file exit $rc"; }
+check "Y11 bot export usage" 'Usage: lfa usb bot --export FILE' "$T/y11-bot-noexport.log"
+"$LFA" usb bot --import > "$T/y11-bot-noimport.log" 2>&1; rc=$?
+[ "$rc" = "2" ] && pass=$((pass+1)) \
+    || { fail=$((fail+1)); echo "FAIL: Y11 bot --import without file exit $rc"; }
+check "Y11 bot import usage" 'Usage: lfa usb bot --import FILE' "$T/y11-bot-noimport.log"
+check "Y11 bot export documented" '--export FILE' "$T/y11-usage.log"
+[ -s "$T/fake-image" ] && [ "$(wc -c < "$T/fake-image")" = "12" ] && pass=$((pass+1)) \
+    || { fail=$((fail+1)); echo "FAIL: Y11 block write touched the image"; }
+"$LFA" usb disable -i debian > "$T/y11-auto-disable.log" 2>&1
+check "Y11 auto off" 'USB_AUTO="0"' "$T/home/.config/linux-for-android/usb.conf"
+[ ! -e "$T/prefix/bin/lfa-usb-auto" ] && pass=$((pass+1)) \
+    || { fail=$((fail+1)); echo "FAIL: Y11 auto wrapper survived disable"; }
 
 # The sysfs tree must carry the interface and endpoint directories that
 # libusb walks, not just the device files.
