@@ -2055,6 +2055,16 @@ check "Y11 bot selftest" 'selftest: ok' "$T/y11-bot-selftest.log"
 check "Y11 bot needs an image" 'Usage: lfa usb bot --write IMAGE' "$T/y11-bot-noimage.log"
 "$LFA" usb help > "$T/y11-usage.log" 2>&1
 check "Y11 bot documented" 'talk USB mass storage directly' "$T/y11-usage.log"
+# Card as an image file, for fdisk/mkfs/dd inside the guest.
+"$LFA" usb bot --export > "$T/y11-bot-noexport.log" 2>&1; rc=$?
+[ "$rc" = "2" ] && pass=$((pass+1)) \
+    || { fail=$((fail+1)); echo "FAIL: Y11 bot --export without file exit $rc"; }
+check "Y11 bot export usage" 'Usage: lfa usb bot --export FILE' "$T/y11-bot-noexport.log"
+"$LFA" usb bot --import > "$T/y11-bot-noimport.log" 2>&1; rc=$?
+[ "$rc" = "2" ] && pass=$((pass+1)) \
+    || { fail=$((fail+1)); echo "FAIL: Y11 bot --import without file exit $rc"; }
+check "Y11 bot import usage" 'Usage: lfa usb bot --import FILE' "$T/y11-bot-noimport.log"
+check "Y11 bot export documented" '--export FILE' "$T/y11-usage.log"
 [ -s "$T/fake-image" ] && [ "$(wc -c < "$T/fake-image")" = "12" ] && pass=$((pass+1)) \
     || { fail=$((fail+1)); echo "FAIL: Y11 block write touched the image"; }
 "$LFA" usb disable -i debian > "$T/y11-auto-disable.log" 2>&1

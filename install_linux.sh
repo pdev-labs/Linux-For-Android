@@ -2752,7 +2752,7 @@ Usage: lfa usb <command> [options]
   scan [DEV...]            request permission and read real descriptors
   storage [--json]         list storage cards Android exposes to apps
   block [write IMAGE]      show the card's raw block device / write an image
-  bot [DEV] [--probe|--write IMAGE] [--yes]
+  bot [DEV] [--probe|--write IMAGE|--export FILE|--import FILE]
                            talk USB mass storage directly (no block node)
   watch [--interval N] [--count N]
                            poll for hotplug and print add/remove events
@@ -4276,8 +4276,9 @@ lfa_usb_stage_bot() {  # $1 = guest rootfs
     chmod 755 "$_dst" 2>/dev/null || true
 }
 
-lfa_usb_bot() {  # [DEV] [--probe|--write IMAGE] [--yes] [--json]
-    local _inst="" _dev="" _mode="--probe" _img="" _json="" _no_verify="" _yes=""
+lfa_usb_bot() {  # [DEV] [--probe|--write IMAGE|--export FILE|--import FILE]
+    local _inst="" _dev="" _mode="--probe" _img="" _file="" _json="" _no_verify=""
+    local _full="" _yes=""
     local _id _root
     local -a _args=()
     while [ $# -gt 0 ]; do
@@ -4288,6 +4289,15 @@ lfa_usb_bot() {  # [DEV] [--probe|--write IMAGE] [--yes] [--json]
                 _mode="--write"; _img="${2:-}"
                 if [ $# -ge 2 ]; then shift 2; else shift; fi ;;
             --write=*) _mode="--write"; _img="${1#*=}"; shift ;;
+            --export)
+                _mode="--export"; _file="${2:-}"
+                if [ $# -ge 2 ]; then shift 2; else shift; fi ;;
+            --export=*) _mode="--export"; _file="${1#*=}"; shift ;;
+            --import)
+                _mode="--import"; _file="${2:-}"
+                if [ $# -ge 2 ]; then shift 2; else shift; fi ;;
+            --import=*) _mode="--import"; _file="${1#*=}"; shift ;;
+            --full) _full="--full"; shift ;;
             --no-verify) _no_verify="--no-verify"; shift ;;
             --json) _json="--json"; shift ;;
             --yes|-y) _yes="--yes"; shift ;;
@@ -4302,6 +4312,14 @@ lfa_usb_bot() {  # [DEV] [--probe|--write IMAGE] [--yes] [--json]
     done
     if [ "$_mode" = "--write" ] && [ -z "$_img" ]; then
         echo "Usage: lfa usb bot --write IMAGE [--yes]" >&2
+        return 2
+    fi
+    if [ "$_mode" = "--export" ] && [ -z "$_file" ]; then
+        echo "Usage: lfa usb bot --export FILE" >&2
+        return 2
+    fi
+    if [ "$_mode" = "--import" ] && [ -z "$_file" ]; then
+        echo "Usage: lfa usb bot --import FILE [--yes]" >&2
         return 2
     fi
     if [ -z "$_dev" ]; then
@@ -4320,11 +4338,23 @@ lfa_usb_bot() {  # [DEV] [--probe|--write IMAGE] [--yes] [--json]
     echo "[*] Bulk-Only Transport: Android's usb-storage driver is detached for"
     echo "    this command, so the card leaves /storage until you replug it."
     echo "    Nothing is written unless --write and --yes are both given."
-    _args=("$_mode")
-    [ "$_mode" = "--write" ] && _args+=("$_img")
-    [ "$_mode" = "--write" ] && [ -n "$_yes" ] && _args+=("$_yes")
-    [ "$_mode" = "--write" ] && [ -n "$_no_verify" ] && _args+=("$_no_verify")
-    [ "$_mode" = "--probe" ] && [ -n "$_json" ] && _args+=("$_json")
+    case "$_mode" in
+        --probe)
+            _args=("--probe")
+            [ -n "$_json" ] && _args+=("$_json")
+            ;;
+        --write)
+            _args=("--write" "$_img")
+            [ -n "$_yes" ] && _args+=("$_yes")
+            [ -n "$_no_verify" ] && _args+=("$_no_verify")
+            ;;
+        --export) _args=("--export" "$_file") ;;
+        --import)
+            _args=("--import" "$_file")
+            [ -n "$_full" ] && _args+=("$_full")
+            [ -n "$_yes" ] && _args+=("$_yes")
+            ;;
+    esac
     lfa_usb_exec -i "$_id" "$_dev" -- python3 /usr/local/libexec/lfa-usb-bot.py "${_args[@]}"
 }
 

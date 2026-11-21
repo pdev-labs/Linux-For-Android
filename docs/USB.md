@@ -406,6 +406,39 @@ Things to know:
 If the detach is refused, the honest fallbacks remain: `lfa usb block` with
 root, or a PC for the one-time Ventoy install.
 
+### From a desktop session: the card as an image file
+
+The guest still cannot have `/dev/sdb`: proot has no block layer, no
+`mknod`, no `/dev/loop*` and no `mount(2)`. What it *can* have is the card's
+bytes as a file, and the real tools accept files:
+
+```bash
+lfa usb bot --export ~/card.img      # read-only, sparse
+lfa shell -i ubuntu-5623
+
+fdisk -l ~/card.img                  # real fdisk, real partition table
+sfdisk ~/card.img < layout           # repartition
+mkfs.vfat -F32 ~/card.img            # format the image, not the card
+dd if=file.bin of=~/card.img bs=1M conv=notrunc seek=2048
+fsck.vfat ~/card.img
+
+exit
+lfa usb bot --import ~/card.img --yes   # write back only changed chunks
+```
+
+`--export` writes a **sparse** file: 1 MiB chunks that are entirely zero
+become holes, so a mostly empty 8 GB card costs only a few MB on disk. The
+read is still the whole card over USB, so expect minutes, not seconds.
+
+`--import` compares each 1 MiB chunk with the card and writes only the ones
+that differ, then reads those back to confirm. A small edit writes a small
+amount; a brand-new image writes everything.
+
+What works this way: `fdisk`, `sfdisk`, `parted`, `mkfs.*` (files are valid
+targets), `dd`, `fsck`, `debugfs`, byte patching. What does not:
+`losetup`, `mount -o loop`, and installers that insist on `S_ISBLK`
+(Ventoy2Disk). The kernel is still missing; only the storage moved.
+
 ### Ventoy without raw writes
 
 Copying ISOs onto an existing Ventoy card works without root, because the

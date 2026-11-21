@@ -38,6 +38,12 @@ tag names, define the order. See the table at the bottom.
   the range back to verify it. The card leaves `/storage` while the driver is
   detached, and a ROM that refuses the detach gets a real errno, not a
   simulated success.
+- `lfa usb bot --export FILE` reads the card into a sparse image and
+  `--import FILE --yes` writes it back, rewriting only the 1 MiB chunks that
+  differ and verifying those. Partitioning, `mkfs`, `dd` and `fsck` then work
+  on the card from inside a desktop session using the normal tools; a block
+  device still cannot exist in the guest, so `losetup` and `mount -o loop`
+  remain impossible.
 - USB automatic mode. `lfa usb enable -i NAME` now makes every later session
   that LFA starts (`lfa shell`, `lfa desktop`, the Terminal shortcut) open
   with the plugged-in device already available: the launchers call

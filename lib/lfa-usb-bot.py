@@ -19,7 +19,13 @@ Read-only by default.  ``--write`` needs ``--yes`` and erases the card.
 Usage:
     python3 lfa-usb-bot.py [--fd N] --probe [--json]
     python3 lfa-usb-bot.py [--fd N] --write IMAGE [--no-verify] [--yes]
+    python3 lfa-usb-bot.py [--fd N] --export FILE
+    python3 lfa-usb-bot.py [--fd N] --import FILE [--full] [--yes]
     python3 lfa-usb-bot.py --selftest
+
+--export writes the whole card to a sparse file so ordinary tools (fdisk,
+sfdisk, mkfs, dd, fsck) can work on it inside the guest; --import writes the
+file back, touching only the 1 MiB chunks that differ.
 
 The descriptor comes from ``$TERMUX_USB_FD`` when ``--fd`` is absent, which
 is what ``termux-usb -E -e`` sets up.
@@ -545,6 +551,125 @@ def write_image(fd: int, path: str, verify: bool) -> int:
 
 
 # --------------------------------------------------------------------------
+# Card <-> image file, for tools that only accept files
+# --------------------------------------------------------------------------
+
+CHUNK = 1024 * 1024
+
+
+def _chunk_geometry(block: int) -> Tuple[int, int]:
+    blocks = max(1, CHUNK // block)
+    return blocks, blocks * block
+
+
+def _progress(done: int, total: int, label: str) -> None:
+    pct = min(100, int(done * 100 / max(total, 1)))
+    sys.stderr.write("\r[%s] %3d%% %s of %s" % (label, pct, human(done), human(total)))
+    sys.stderr.flush()
+
+
+def export_image(fd: int, path: str) -> int:
+    """Read the card into a sparse file: holes for all-zero chunks."""
+    bot, info = open_bot(fd)
+    try:
+        bot.wait_ready()
+        cap = bot.capacity()
+        block = cap["block_size"] or 512
+        blocks_per_chunk, chunk_size = _chunk_geometry(block)
+        total = cap["blocks"] * block
+        holes = 0
+        written = 0
+        lba = 0
+        with open(path, "wb") as out:
+            out.truncate(total)
+            while lba < cap["blocks"]:
+                blocks = min(blocks_per_chunk, cap["blocks"] - lba)
+                data = bot.read10(lba, blocks, block)
+                if data.count(0) == len(data):
+                    holes += len(data)          # leave a hole in the file
+                else:
+                    out.seek(lba * block)
+                    out.write(data)
+                    written += len(data)
+                lba += blocks
+                _progress(lba * block, total, "export")
+            out.flush()
+            os.fsync(out.fileno())
+        sys.stderr.write("\n")
+        print("[+] %s: %s (%s data, %s holes)"
+              % (path, human(total), human(written), human(holes)))
+        print("[*] work on it with fdisk/sfdisk/mkfs/dd, then: lfa usb bot"
+              " --import %s" % os.path.basename(path))
+    finally:
+        try:
+            fcntl.ioctl(fd, USBDEVFS_RELEASEINTERFACE, struct.pack("I", bot.interface))
+        except OSError:
+            pass
+    print("[*] replug the reader so Android mounts the card again")
+    return 0
+
+
+def import_image(fd: int, path: str, full: bool) -> int:
+    """Write a card image back, rewriting only the chunks that differ."""
+    size = os.path.getsize(path)
+    bot, info = open_bot(fd)
+    try:
+        bot.wait_ready()
+        cap = bot.capacity()
+        block = cap["block_size"] or 512
+        blocks_per_chunk, chunk_size = _chunk_geometry(block)
+        total = cap["blocks"] * block
+        if size > total:
+            print("[!] image is larger than the card (%s > %s)"
+                  % (human(size), human(total)), file=sys.stderr)
+            return 2
+        changed: List[Tuple[int, int]] = []
+        changed_bytes = 0
+        offset = 0
+        with open(path, "rb") as src:
+            while offset < size:
+                want = min(chunk_size, size - offset)
+                blocks = (want + block - 1) // block
+                expect = src.read(want)
+                if len(expect) < blocks * block:
+                    expect += b"\x00" * (blocks * block - len(expect))
+                current = bot.read10(offset // block, blocks, block)
+                if full or current != expect:
+                    bot.write10(offset // block, expect, block)
+                    changed.append((offset, len(expect)))
+                    changed_bytes += len(expect)
+                offset += want
+                _progress(offset, size, "import")
+        sys.stderr.write("\n")
+        bot.sync_cache()
+        print("[+] wrote %s in %d chunk(s)" % (human(changed_bytes), len(changed)))
+        if not changed:
+            print("[*] card already matched the image; nothing to verify")
+            print("[*] replug the reader so Android mounts the card again")
+            return 0
+        print("[*] verifying the chunks that changed")
+        with open(path, "rb") as src:
+            for offset, length in changed:
+                src.seek(offset)
+                expect = src.read(length)
+                if len(expect) < length:
+                    expect += b"\x00" * (length - len(expect))
+                back = bot.read10(offset // block, length // block, block)
+                if back != expect:
+                    print("[!] verification failed at byte %d" % offset,
+                          file=sys.stderr)
+                    return 4
+        print("[+] verified %d chunk(s)" % len(changed))
+    finally:
+        try:
+            fcntl.ioctl(fd, USBDEVFS_RELEASEINTERFACE, struct.pack("I", bot.interface))
+        except OSError:
+            pass
+    print("[*] replug the reader so Android mounts the card again")
+    return 0
+
+
+# --------------------------------------------------------------------------
 # Self test (no device, runs in CI)
 # --------------------------------------------------------------------------
 
@@ -602,6 +727,13 @@ def main(argv: Optional[List[str]] = None) -> int:
                         help="write IMAGE to the card (erases it)")
     parser.add_argument("--no-verify", action="store_true",
                         help="skip reading the image back after --write")
+    parser.add_argument("--export", metavar="FILE",
+                        help="write the whole card to a sparse file (read-only)")
+    parser.add_argument("--import", dest="import_file", metavar="FILE",
+                        help="write FILE back, touching only changed chunks")
+    parser.add_argument("--full", action="store_true",
+                        help="with --import: write every chunk, not only the"
+                             " ones that differ")
     parser.add_argument("--yes", action="store_true",
                         help="confirm that the card will be erased")
     parser.add_argument("--json", action="store_true", help="machine output")
@@ -610,8 +742,13 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     if args.selftest:
         return selftest()
-    if not args.probe and not args.write:
+    actions = [bool(args.probe), bool(args.write), bool(args.export),
+               bool(args.import_file)]
+    if sum(actions) != 1:
         parser.print_help()
+        return 2
+    if args.full and not args.import_file:
+        print("[!] --full only applies to --import", file=sys.stderr)
         return 2
     if not args.fd:
         print("[!] no USB descriptor: TERMUX_USB_FD is empty", file=sys.stderr)
@@ -628,6 +765,14 @@ def main(argv: Optional[List[str]] = None) -> int:
                       file=sys.stderr)
                 return 2
             return write_image(fd, args.write, not args.no_verify)
+        if args.export:
+            return export_image(fd, args.export)
+        if args.import_file:
+            if not args.yes:
+                print("[!] --import overwrites the card. Add --yes when you mean it.",
+                      file=sys.stderr)
+                return 2
+            return import_image(fd, args.import_file, args.full)
         return probe(fd, args.json)
     except BotError as exc:
         print("[!] %s" % exc, file=sys.stderr)
