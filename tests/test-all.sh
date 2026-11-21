@@ -2010,14 +2010,18 @@ LFA_STORAGE_ROOT="$T/storage" "$LFA" usb storage --json > "$T/y11-storage.json" 
 check "Y11 storage json" '"writable":true' "$T/y11-storage.json"
 LFA_STORAGE_ROOT="$T/storage" "$LFA" usb auto -- sh -c 'echo "storage=${LFA_STORAGE_BIND:-}"' \
     > "$T/y11-storage-bind.log" 2>&1
-check "Y11 storage bind card" "$T/storage/CABC-1701:/mnt/sdcard" "$T/y11-storage-bind.log"
-check "Y11 storage bind internal" "$T/storage/emulated/0:/sdcard" "$T/y11-storage-bind.log"
+# proot-distro already binds internal storage at /sdcard and /mnt/sdcard, so
+# the card must use destinations it does not take.
+check "Y11 storage bind media" "$T/storage/CABC-1701:/media/CABC-1701" "$T/y11-storage-bind.log"
+check "Y11 storage bind alias" "$T/storage/CABC-1701:/mnt/card" "$T/y11-storage-bind.log"
+check_absent "Y11 storage no internal bind" "$T/storage/emulated/0:/sdcard" "$T/y11-storage-bind.log"
+check_absent "Y11 storage no sdcard collision" ":/mnt/sdcard" "$T/y11-storage-bind.log"
 check "Y11 storage launcher binds" 'LFA_STORAGE_BIND' "$T/prefix/bin/terminal-linux"
 check "Y11 storage desktop binds" 'LFA_STORAGE_BIND' "$T/prefix/bin/start-linux"
-[ -d "$UROOT/mnt/sdcard" ] && pass=$((pass+1)) \
-    || { fail=$((fail+1)); echo "FAIL: Y11 storage did not create /mnt/sdcard"; }
-[ -d "$UROOT/sdcard" ] && pass=$((pass+1)) \
-    || { fail=$((fail+1)); echo "FAIL: Y11 storage did not create /sdcard"; }
+[ -d "$UROOT/mnt/card" ] && pass=$((pass+1)) \
+    || { fail=$((fail+1)); echo "FAIL: Y11 storage did not create /mnt/card"; }
+[ -d "$UROOT/media/CABC-1701" ] && pass=$((pass+1)) \
+    || { fail=$((fail+1)); echo "FAIL: Y11 storage did not create /media/CABC-1701"; }
 "$LFA" usb disable -i debian > "$T/y11-auto-disable.log" 2>&1
 check "Y11 auto off" 'USB_AUTO="0"' "$T/home/.config/linux-for-android/usb.conf"
 [ ! -e "$T/prefix/bin/lfa-usb-auto" ] && pass=$((pass+1)) \

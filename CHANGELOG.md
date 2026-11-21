@@ -18,8 +18,9 @@ tag names, define the order. See the table at the bottom.
 - `lfa usb storage` lists the storage cards Android mounts for apps
   (`/storage/<VOLUME-ID>`), with filesystem, size, free space and a real
   read/write probe. Sessions started by LFA bind the first card at
-  `/mnt/sdcard`, further cards at `/mnt/<VOLUME-ID>`, and internal storage at
-  `/sdcard`, so a card reader behaves like a normal directory in the guest.
+  `/media/<VOLUME-ID>` and the largest card at `/mnt/card`, avoiding the
+  `/sdcard` and `/mnt/sdcard` destinations proot-distro already uses for
+  internal storage. A card reader then behaves like a normal directory.
   Mounting the block device itself stays impossible without root: Android's
   `usb-storage` driver owns the interface and proot has no block layer.
 - USB automatic mode. `lfa usb enable -i NAME` now makes every later session

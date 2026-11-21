@@ -279,17 +279,22 @@ lfa usb storage
 # CABC-1701       7.4G     7.4G  vfat  rw   /storage/CABC-1701
 
 lfa shell -i ubuntu-5623
-# [*] storage: CABC-1701 -> /mnt/sdcard (rw)
-ls /mnt/sdcard
+# [*] storage: CABC-1701 -> /mnt/card (rw)
+ls /mnt/card
 ```
 
 Sessions started by LFA bind:
 
 | Path | Contents |
 |---|---|
-| `/mnt/sdcard` | first storage card Android exposes |
-| `/mnt/<VOLUME-ID>` | any further cards |
-| `/sdcard` | internal phone storage (`/storage/emulated/0`) |
+| `/media/<VOLUME-ID>` | every storage card Android exposes |
+| `/mnt/card` | the largest card, as a stable alias (Ventoy cards: the data partition) |
+| `/sdcard` | internal phone storage (proot-distro binds it itself) |
+| `/mnt/sdcard` | also internal storage: proot-distro's own bind |
+
+The card destinations deliberately avoid `/sdcard` and `/mnt/sdcard`:
+proot-distro v5 binds internal storage there already and warns when a
+destination is used twice.
 
 `lfa usb storage --json` prints the same data for scripts. If
 `/storage/<VOLUME-ID>` is readable but not writable, the mode column says

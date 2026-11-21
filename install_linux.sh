@@ -2923,7 +2923,7 @@ lfa_usb_status() {
     echo "  automatic mode:     $(lfa_usb_conf_get USB_AUTO | grep -qx 1 && echo "on (sessions get the device)" || echo "off")"
     _vols="$(lfa_usb_storage_rows 2>/dev/null)"
     if [ -n "$_vols" ]; then
-        echo "  storage cards:      $(printf '%s\n' "$_vols" | awk -F '\t' '{ printf "%s%s (%s, %s)", (n++ ? ", " : ""), $1, $3, $6 }') -> /mnt/sdcard"
+        echo "  storage cards:      $(printf '%s\n' "$_vols" | awk -F '\t' '{ printf "%s%s (%s, %s)", (n++ ? ", " : ""), $1, $3, $6 }') -> /mnt/card"
     else
         echo "  storage cards:      none mounted for apps"
     fi
@@ -4038,25 +4038,39 @@ lfa_usb_storage() {  # [--json]
             "$_fs" "$_rw" "$_path"
     done
     echo ""
-    echo "Sessions started by lfa bind the first card at /mnt/sdcard,"
-    echo "internal storage at /sdcard."
+    echo "Sessions started by lfa bind every card at /media/<VOLUME-ID>,"
+    echo "plus /mnt/card for the first one. Phone storage is /sdcard."
+}
+
+lfa_usb_storage_alias() {  # id of the largest exposed volume
+    local _root _id _size _best="" _best_k=0
+    _root="$(lfa_usb_storage_root)"
+    for _id in $(lfa_usb_storage_ids); do
+        _size="$(df -k "$_root/$_id" 2>/dev/null | awk 'NR == 2 { print $2 }')"
+        case "$_size" in ''|*[!0-9]*) continue ;; esac
+        if [ "$_size" -gt "$_best_k" ]; then
+            _best="$_id"; _best_k="$_size"
+        fi
+    done
+    [ -n "$_best" ] && printf '%s\n' "$_best"
 }
 
 lfa_usb_storage_binds() {  # host:guest bind specs, ';' separated
-    local _root _id _guest _n=0 _out="" _ids
+    local _root _id _out="" _ids _alias
     _root="$(lfa_usb_storage_root)"
     _ids="$(lfa_usb_storage_ids)"
+    _alias="$(lfa_usb_storage_alias)"
+    # proot-distro already binds /storage and internal storage at /sdcard and
+    # /mnt/sdcard, and warns when a destination is taken twice. So cards go to
+    # /media/<VOLUME-ID> (the Linux convention) plus /mnt/card for the largest
+    # one, which keeps a Ventoy card's 32 MB VTOYEFI volume out of the alias.
     while IFS= read -r _id; do
         [ -n "$_id" ] || continue
-        _n=$((_n + 1))
-        if [ "$_n" = "1" ]; then _guest="/mnt/sdcard"; else _guest="/mnt/$_id"; fi
-        _out="${_out:+$_out;}$_root/$_id:$_guest"
+        _out="${_out:+$_out;}$_root/$_id:/media/$_id"
+        [ "$_id" = "$_alias" ] && _out="$_out;$_root/$_id:/mnt/card"
     done <<EOF
 $_ids
 EOF
-    if [ -d "$_root/emulated/0" ]; then
-        _out="${_out:+$_out;}$_root/emulated/0:/sdcard"
-    fi
     [ -n "$_out" ] && printf '%s\n' "$_out"
     return 0
 }
