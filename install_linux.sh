@@ -4323,6 +4323,9 @@ lfa_usb_bot() {  # [DEV] [--probe|--write IMAGE|--export FILE|--import FILE]
         return 2
     fi
     if [ -z "$_dev" ]; then
+        # A detach makes Android re-enumerate the reader, so the cached
+        # bus/dev number is stale by the next command. Refresh first.
+        lfa_usb_refresh >/dev/null 2>&1 || true
         _dev="$(lfa_usb_default_dev)"
         [ -n "$_dev" ] || {
             echo "[!] No USB device is visible. Connect one and run: lfa usb refresh" >&2

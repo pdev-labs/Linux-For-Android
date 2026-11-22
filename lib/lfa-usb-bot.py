@@ -441,6 +441,26 @@ def open_bot(fd: int, verbose: bool = True) -> Tuple[Bot, Dict[str, Any]]:
                  "interface": interface, "ep_in": ep_in, "ep_out": ep_out}
 
 
+def describe_volume(sector: bytes) -> Tuple[str, str]:
+    """Filesystem name and volume label from a partition's boot sector."""
+    if len(sector) < 512:
+        return "?", ""
+    if sector[3:11] == b"EXFAT   ":
+        return "exFAT", ""
+    if sector[3:11] == b"NTFS    ":
+        return "NTFS", ""
+    if sector[0x52:0x5A] == b"FAT32   ":
+        label = sector[0x47:0x52]
+        return "FAT32", label.decode("ascii", "replace").strip()
+    for name in ("FAT16", "FAT12"):
+        if sector[0x36:0x3E] == name.ljust(8).encode():
+            label = sector[0x2B:0x36]
+            return name, label.decode("ascii", "replace").strip()
+    if struct.unpack_from("<H", sector, 510)[0] == 0xAA55:
+        return "(boot sector)", ""
+    return "?", ""
+
+
 def parse_mbr(sector: bytes) -> Dict[str, Any]:
     if len(sector) < 512:
         return {"signature": None, "partitions": []}
@@ -477,6 +497,14 @@ def probe(fd: int, as_json: bool) -> int:
         cap = bot.capacity()
         sector = bot.read10(0, 1, cap["block_size"] or 512)
         mbr = parse_mbr(sector)
+        # Read each partition's boot sector so the report can name the
+        # filesystem and label (VTOYEFI is how an existing Ventoy card shows).
+        for part in mbr["partitions"]:
+            try:
+                boot = bot.read10(part["start_lba"], 1, cap["block_size"] or 512)
+                part["fs"], part["label"] = describe_volume(boot)
+            except BotError:
+                part["fs"], part["label"] = "?", ""
         result = dict(info)
         result.update({"inquiry": inquiry, "capacity": cap, "mbr": mbr})
         if as_json:
@@ -492,10 +520,19 @@ def probe(fd: int, as_json: bool) -> int:
         if not mbr["partitions"]:
             print("          no partitions (blank or not yet flashed)")
         for part in mbr["partitions"]:
-            print("          #%d type %s start %d (%s) size %s%s"
+            extra = ""
+            if part["fs"] != "?":
+                extra += " " + part["fs"]
+            if part["label"]:
+                extra += ' "%s"' % part["label"]
+            print("          #%d type %s start %d (%s) size %s%s%s"
                   % (part["index"], part["type"], part["start_lba"],
                      human(part["start_lba"] * 512), human(part["bytes"]),
-                     " bootable" if part["bootable"] else ""))
+                     " bootable" if part["bootable"] else "", extra))
+        labels = [p.get("label", "").upper() for p in mbr["partitions"]]
+        if any(label.startswith("VTOY") for label in labels):
+            print("          This card already has Ventoy: put ISOs on the data")
+            print("          partition (/mnt/card). Flashing is not needed.")
         print("RAW WRITE: possible without root through this transport")
         print("           lfa usb bot --write IMAGE --yes")
     finally:
@@ -746,6 +783,15 @@ def selftest() -> int:
     assert mbr["partitions"][0]["start_lba"] == 2048
 
     assert human(1024) == "1.0K" and human(1536) == "1.5K"
+
+    fat32 = bytearray(512)
+    fat32[0x52:0x5A] = b"FAT32   "
+    fat32[0x47:0x52] = b"VTOYEFI    "
+    struct.pack_into("<H", fat32, 510, 0xAA55)
+    assert describe_volume(bytes(fat32)) == ("FAT32", "VTOYEFI")
+    exfat = bytearray(512)
+    exfat[3:11] = b"EXFAT   "
+    assert describe_volume(bytes(exfat))[0] == "exFAT"
 
     # The ioctl encodings must match <linux/usbdevice_fs.h>; a wrong
     # direction bit is indistinguishable from "unsupported" at runtime.
