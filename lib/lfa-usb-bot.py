@@ -135,17 +135,41 @@ def get_descriptor(fd: int, dtype: int, index: int = 0, length: int = 255,
                             (dtype << 8) | (index & 0xFF), langid, length)
 
 
-def bulk_transfer(fd: int, ep: int, data: Optional[bytes], length: int,
-                  timeout: int = 15000) -> bytes:
-    """One USBDEVFS_BULK ioctl. ``data`` None means host->device of ``length``."""
-    if data is None:
-        buf = (ctypes.c_ubyte * max(length, 1))()
-    else:
-        buf = (ctypes.c_ubyte * max(len(data), 1)).from_buffer_copy(
-            data if len(data) else b"\x00")
-    transfer = BulkTransfer(ep, length, timeout, ctypes.cast(buf, ctypes.c_void_p))
-    done = _ioctl(fd, USBDEVFS_BULK, transfer)
-    return bytes(bytearray(buf))[:done]
+# usbfs refuses a single USBDEVFS_BULK request larger than this, so a data
+# phase is split into slices; USB bulk is a stream, the device cannot tell.
+MAX_BULK = 16384
+
+
+def bulk_out(fd: int, ep: int, data: bytes, timeout: int = 15000) -> int:
+    """Host -> device; returns the number of bytes the device accepted."""
+    total = 0
+    for offset in range(0, len(data), MAX_BULK):
+        piece = data[offset:offset + MAX_BULK]
+        buf = (ctypes.c_ubyte * len(piece)).from_buffer_copy(piece)
+        transfer = BulkTransfer(ep, len(piece), timeout,
+                                ctypes.cast(buf, ctypes.c_void_p))
+        done = _ioctl(fd, USBDEVFS_BULK, transfer)
+        total += done
+        if done != len(piece):
+            break
+    return total
+
+
+def bulk_in(fd: int, ep: int, length: int, timeout: int = 15000) -> bytes:
+    """Device -> host; returns at most ``length`` bytes (short is legal)."""
+    out = bytearray()
+    while len(out) < length:
+        want = min(MAX_BULK, length - len(out))
+        buf = (ctypes.c_ubyte * max(want, 1))()
+        transfer = BulkTransfer(ep, want, timeout,
+                                ctypes.cast(buf, ctypes.c_void_p))
+        done = _ioctl(fd, USBDEVFS_BULK, transfer)
+        if done <= 0:
+            break
+        out += bytes(bytearray(buf))[:done]
+        if done < want:
+            break
+    return bytes(out)
 
 
 def clear_halt(fd: int, ep: int) -> None:
@@ -289,17 +313,17 @@ class Bot:
             tag = self._next_tag()
             cbw = build_cbw(tag, length, direction_in, self.lun, cdb)
             try:
-                sent = bulk_transfer(self.fd, self.ep_out, cbw, len(cbw))
+                sent = bulk_out(self.fd, self.ep_out, cbw)
                 if sent != len(cbw):
                     raise BotError("short CBW write (%d of %d)" % (sent, len(cbw)))
                 payload = b""
                 if direction_in and length:
-                    payload = bulk_transfer(self.fd, self.ep_in, None, length)
+                    payload = bulk_in(self.fd, self.ep_in, length)
                 elif (not direction_in) and length and data is not None:
-                    sent = bulk_transfer(self.fd, self.ep_out, data, length)
+                    sent = bulk_out(self.fd, self.ep_out, data)
                     if sent != length:
                         raise BotError("short data write (%d of %d)" % (sent, length))
-                csw = bulk_transfer(self.fd, self.ep_in, None, 13)
+                csw = bulk_in(self.fd, self.ep_in, 13)
             except BotError:
                 if attempt > retries:
                     raise
@@ -405,6 +429,8 @@ def open_bot(fd: int, verbose: bool = True) -> Tuple[Bot, Dict[str, Any]]:
         except BotError:
             pass
     bot = Bot(fd, interface, ep_in, ep_out)
+    # usb-storage may have been interrupted mid-command while we detached it.
+    bot.reset_recovery()
     try:
         luns = control_transfer(fd, 0xA1, 0xFE, 0, interface, 1)
         if luns:
@@ -477,7 +503,8 @@ def probe(fd: int, as_json: bool) -> int:
             fcntl.ioctl(fd, USBDEVFS_RELEASEINTERFACE, struct.pack("I", bot.interface))
         except OSError:
             pass
-    print("[*] replug the reader so Android mounts the card again")
+    print("[*] Android usually remounts the card on its own; replug the"
+          " reader if it does not")
     return 0
 
 
@@ -549,7 +576,8 @@ def write_image(fd: int, path: str, verify: bool) -> int:
             fcntl.ioctl(fd, USBDEVFS_RELEASEINTERFACE, struct.pack("I", bot.interface))
         except OSError:
             pass
-    print("[*] replug the reader so Android mounts the card again")
+    print("[*] Android usually remounts the card on its own; replug the"
+          " reader if it does not")
     return 0
 
 
@@ -608,7 +636,8 @@ def export_image(fd: int, path: str) -> int:
             fcntl.ioctl(fd, USBDEVFS_RELEASEINTERFACE, struct.pack("I", bot.interface))
         except OSError:
             pass
-    print("[*] replug the reader so Android mounts the card again")
+    print("[*] Android usually remounts the card on its own; replug the"
+          " reader if it does not")
     return 0
 
 
@@ -648,7 +677,8 @@ def import_image(fd: int, path: str, full: bool) -> int:
         print("[+] wrote %s in %d chunk(s)" % (human(changed_bytes), len(changed)))
         if not changed:
             print("[*] card already matched the image; nothing to verify")
-            print("[*] replug the reader so Android mounts the card again")
+            print("[*] Android usually remounts the card on its own; replug the"
+          " reader if it does not")
             return 0
         print("[*] verifying the chunks that changed")
         with open(path, "rb") as src:
@@ -668,7 +698,8 @@ def import_image(fd: int, path: str, full: bool) -> int:
             fcntl.ioctl(fd, USBDEVFS_RELEASEINTERFACE, struct.pack("I", bot.interface))
         except OSError:
             pass
-    print("[*] replug the reader so Android mounts the card again")
+    print("[*] Android usually remounts the card on its own; replug the"
+          " reader if it does not")
     return 0
 
 
@@ -794,6 +825,12 @@ def main(argv: Optional[List[str]] = None) -> int:
         print("    Android may refuse the driver detach on this device.", file=sys.stderr)
         print("    If it does, the card's files are still available via"
               " 'lfa usb storage'.", file=sys.stderr)
+        return 5
+    except Exception as exc:                      # noqa: BLE001 - CLI boundary
+        print("[!] unexpected failure: %s: %s" % (type(exc).__name__, exc),
+              file=sys.stderr)
+        print("    Run with --probe again; if it repeats, please report it.",
+              file=sys.stderr)
         return 5
 
 
