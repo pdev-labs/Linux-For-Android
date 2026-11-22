@@ -880,9 +880,14 @@ def import_image(fd: int, path: str, full: bool) -> int:
             print("[*] card already matched the image; nothing to verify")
             restore_android(fd)
             return 0
-        print("[*] verifying the chunks that changed")
+        print("[*] verifying %d chunk(s): %s"
+              % (len(changed), ", ".join(str(off) for off, _ in changed[:8])
+                 + (" ..." if len(changed) > 8 else "")))
         with open(path, "rb") as src:
             for offset, length in changed:
+                if len(changed) <= 8:
+                    print("[*] reading back byte %d (%s)"
+                          % (offset, human(length)))
                 src.seek(offset)
                 expect = src.read(length)
                 if len(expect) < length:
@@ -896,6 +901,8 @@ def import_image(fd: int, path: str, full: bool) -> int:
                         if attempt == 2:
                             raise BotError("verification read failed at byte %d: %s"
                                            % (offset, exc)) from exc
+                        print("[*] transport stalled; resetting and retrying"
+                              " (attempt %d of 2)" % (attempt + 1))
                         try:
                             bot.reset_recovery()
                             bot.wait_ready()
@@ -906,6 +913,8 @@ def import_image(fd: int, path: str, full: bool) -> int:
                           " different bytes than the image" % offset,
                           file=sys.stderr)
                     return 4
+                if len(changed) <= 8:
+                    print("[+] byte %d matches" % offset)
         print("[+] verified %d chunk(s)" % len(changed))
     finally:
         try:
