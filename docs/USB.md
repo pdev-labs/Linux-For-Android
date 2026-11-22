@@ -93,6 +93,39 @@ lfa usb flash write 0x0 /sdcard/firmware.bin
 shell) inside the guest. `lfa usb list` still works without any session: it
 reads the published bridge and needs no permission dialog.
 
+## Automatic mode: enable once
+
+`lfa usb enable -i NAME` also turns on automatic mode. After that, every
+session LFA starts — `lfa shell`, `lfa desktop` (and the Terminal shortcut,
+which use the same launchers) — is opened with the device already inside:
+no `lfa usb attach`, no `lfa usb scan`, no environment variables.
+
+```bash
+lfa usb enable -i ubuntu-5623     # once
+lfa desktop -i ubuntu-5623        # lsusb, PyUSB, esptool: already there
+lfa shell   -i ubuntu-5623        # same
+```
+
+How it works: the launchers call `lfa-usb-auto`, which asks Termux:API for
+the descriptor, prepares the synthetic sysfs tree once per device (it is
+reused by later sessions), and re-runs the launcher with `--bind` flags and
+the guest preload exported. If no device is plugged in, the session starts
+normally. GUI programs inherit the same view, so a serial tool opened from
+the desktop menu sees `/dev/bus/usb/...` like any other process in that
+session.
+
+Limits of automatic mode:
+
+- Android still asks for permission per device and connection. Tick "always
+  allow for this app" to stop the repeat dialogs; LFA cannot bypass them.
+- Only sessions started through LFA get the view. A bare
+  `proot-distro login` is untouched.
+- One device per session, as everywhere else in this bridge. Automatic
+  mode follows the instance you enabled; a session for a different distro
+  starts without it.
+- `lfa usb disable -i NAME` turns automatic mode off again and removes
+  `lfa-usb-auto`.
+
 ## Commands
 
 ```
@@ -100,8 +133,9 @@ lfa usb status                 Termux:API, host feature, bridge, preload state
 lfa usb list [--json]          live devices; descriptors when already cached
 lfa usb refresh                re-read `termux-usb -l` and rewrite the guest view
 lfa usb scan [DEV...]          request permission and read real descriptors
+lfa usb storage [--json]       list storage cards Android exposes to apps
 lfa usb watch [--interval N]   poll for hotplug, print add/remove events
-lfa usb enable [-i NAME]       install helpers, preload, and the tty bridge
+lfa usb enable [-i NAME]       install helpers, preload, tty bridge, auto mode
 lfa usb disable [-i NAME]      remove those helpers
 lfa usb attach [DEV] [-- CMD]  session with /dev/bus/usb/BBB/DDD and sysfs
 lfa usb tty [DEV] [-- CMD]     session with /dev/ttyUSB0
@@ -225,6 +259,220 @@ devices and `usb-storage` for mass storage). A userspace claim then fails with
 `EBUSY`; without root, Android cannot detach the driver. The bridge reports
 this clearly. Native-USB ESP32 bootloaders and CP210x/CH340 boards normally
 have no bound driver, which is why they work.
+
+## Storage cards (SD, card readers, USB sticks)
+
+A mass-storage device is the one thing this bridge cannot turn into
+`/dev/sdb1`. Android's own `usb-storage` driver claims the reader's
+interface and mounts the card at the kernel level; proot has no block
+layer, cannot create block nodes, and the guest has no kernel of its own.
+Bulk transfers to a claimed interface fail with `EBUSY`, so a userspace
+reader cannot reach the files either without root.
+
+What does work: Android already mounted the card, and on Android 11+
+the FUSE view under `/storage/<VOLUME-ID>` is often readable by Termux.
+LFA uses that path:
+
+```bash
+lfa usb storage
+# VOLUME          SIZE     FREE  FS    MODE PATH
+# CABC-1701       7.4G     7.4G  vfat  rw   /storage/CABC-1701
+
+lfa shell -i ubuntu-5623
+# [*] storage: CABC-1701 -> /mnt/card (rw)
+ls /mnt/card
+```
+
+Sessions started by LFA bind:
+
+| Path | Contents |
+|---|---|
+| `/media/<VOLUME-ID>` | every storage card Android exposes |
+| `/mnt/card` | the largest card, as a stable alias (Ventoy cards: the data partition) |
+| `/sdcard` | internal phone storage (proot-distro binds it itself) |
+| `/mnt/sdcard` | also internal storage: proot-distro's own bind |
+
+The card destinations deliberately avoid `/sdcard` and `/mnt/sdcard`:
+proot-distro v5 binds internal storage there already and warns when a
+destination is used twice.
+
+`lfa usb storage --json` prints the same data for scripts. If
+`/storage/<VOLUME-ID>` is readable but not writable, the mode column says
+`ro`; proot cannot enforce read-only binds, so LFA warns instead of
+pretending. Unplugging the card removes the directory contents, exactly
+as on a desktop.
+
+If `/storage/<VOLUME-ID>` is denied (some Android builds restrict it),
+there is no filesystem path for the app to bind. Use `termux-storage-get
+FILE` (opens Android's picker and copies one file into Termux) or copy
+with the Files app to internal storage, then bind that. `/mnt/media_rw`
+is root/media_rw-only and unusable from Termux.
+
+## Raw block devices (`dd`, Ventoy, Etcher)
+
+The card *is* a block device: Android's `vold` mounts it from
+`/dev/block/vold/public:8,65`. That node belongs to `vold` and `init`; an
+unprivileged app is refused at three separate doors:
+
+1. `/dev/block` is not searchable for apps, so the node has no path.
+2. Its mode is `0660 root:media_rw`, and even with the group the node is not
+   in the app's mount namespace.
+3. SELinux labels the app domain `untrusted_app`, which cannot open
+   `block_device`.
+
+`lfa usb block` shows all of this for the card in front of you:
+
+```bash
+lfa usb block
+# VOLUME       BACKING DEVICE                   FS     RAW
+# CABC-1701    /dev/block/vold/public:8,65       vfat   no
+#
+#   CABC-1701: /dev/block/vold/public:8,65 is not in this app's namespace (root needed)
+#
+# No root: Android keeps block devices for vold/init. Card *files* are
+# still fully usable through Android's mount (lfa usb storage).
+```
+
+Note the last lines: LFA **refuses to fake** the device. A simulated
+`/dev/sdb1` would make `dd`, `Ventoy2Disk` and `Etcher` report success while
+writing to a plain file, leaving the card untouched — the worst possible
+outcome for a flashing tool. Directory access (`lfa usb storage`) is honest;
+raw block access is not available here and says so.
+
+### With root
+
+If `su` works, the node is reachable and LFA writes and verifies images:
+
+```bash
+lfa usb block write ventoy.img -v CABC-1701          # plan only
+lfa usb block write ventoy.img -v CABC-1701 --yes    # unmount, dd, read back
+```
+
+It unmounts the volume with `sm`, writes with `dd conv=fsync`, reads the same
+number of bytes back, compares SHA-256, and remounts. On a non-rooted phone
+this exits `3` and prints why.
+
+Even with root the write happens in Termux, not in the guest: proot's `/dev`
+is a synthetic tree, so a guest session cannot see `/dev/block`. If you want
+the writer inside the guest, bind the node in from Termux as root
+(`su -c 'mount --bind /dev/block/vold/public:8,65 ...'`) and start the
+session with that bind.
+
+### Without root: talk to the reader directly
+
+A block node is not the only way to reach the sectors. It is only the way
+the kernel offers. Apps like EtchDroid flash drives on unrooted phones by
+asking Android to **detach its `usb-storage` driver** from the reader, then
+speaking USB Mass Storage Bulk-Only Transport (BOT) over the descriptor
+`termux-usb` handed over. No `/dev` node is involved.
+
+LFA does the same:
+
+```bash
+lfa usb bot --probe          # read-only: INQUIRY, capacity, sector 0
+lfa usb bot --probe --json   # same, for scripts
+lfa usb bot --write ventoy.img --yes
+```
+
+`--probe` prints what the card actually is and whether a raw write is
+possible on this phone:
+
+```
+Device:   Generic  Mass Storage Device (rev ...)
+Capacity: 7.4G in 15523840 blocks of 512 bytes
+Sector 0: MBR table, signature 0xaa55
+          #1 type 0x07 start 2048 (1.0M) size 7.4G
+RAW WRITE: possible without root through this transport
+```
+
+`--write` writes in 1 MiB chunks with `WRITE(10)`, flushes with
+`SYNCHRONIZE CACHE(10)`, then reads the same byte range back and compares
+it, so a truncated or refused transfer cannot pass as success.
+
+Things to know:
+
+- While the command runs, Android's mount of the card is gone: it will
+  disappear from `/storage` and from `lfa usb storage`. That is unavoidable,
+  because only one owner can have the device. Replug the reader afterwards
+  and Android mounts it again.
+- The detach is a permission the Android USB host API grants to the app that
+  owns the descriptor. If a ROM refuses it, the probe fails with the exact
+  errno (`EBUSY`, `EPERM`) instead of pretending.
+- `--write` always needs `--yes`; without it the tool only explains what it
+  would erase. There is no dry-run that writes part of an image.
+- Do not run `--write` while the card is mounted and in use. LFA detaches the
+  driver, so vold cannot flush anything after that point.
+
+If the detach is refused, the honest fallbacks remain: `lfa usb block` with
+root, or a PC for the one-time Ventoy install.
+
+### From a desktop session: the card as an image file
+
+The guest still cannot have `/dev/sdb`: proot has no block layer, no
+`mknod`, no `/dev/loop*` and no `mount(2)`. What it *can* have is the card's
+bytes as a file, and the real tools accept files:
+
+```bash
+lfa usb bot --export ~/card.img      # read-only, sparse
+lfa shell -i ubuntu-5623
+
+fdisk -l ~/card.img                  # real fdisk, real partition table
+sfdisk ~/card.img < layout           # repartition
+mkfs.vfat -F32 ~/card.img            # format the image, not the card
+dd if=file.bin of=~/card.img bs=1M conv=notrunc seek=2048
+fsck.vfat ~/card.img
+
+exit
+lfa usb bot --import ~/card.img --yes   # write back only changed chunks
+```
+
+`--export` writes a **sparse** file: 1 MiB chunks that are entirely zero
+become holes, so a mostly empty 8 GB card costs only a few MB on disk. The
+read is still the whole card over USB, so expect minutes, not seconds.
+
+`--import` compares each 1 MiB chunk with the card and writes only the ones
+that differ, then reads those back to confirm. A small edit writes a small
+amount; a brand-new image writes everything.
+
+What works this way: `fdisk`, `sfdisk`, `parted`, `mkfs.*` (files are valid
+targets), `dd`, `fsck`, `debugfs`, byte patching. What does not:
+`losetup`, `mount -o loop`, and installers that insist on `S_ISBLK`
+(Ventoy2Disk). The kernel is still missing; only the storage moved.
+
+### Checking an existing Ventoy card
+
+`lfa usb bot --probe` reads each partition's boot sector, so the report
+names the filesystem and the volume label:
+
+```
+#1 type 0x07 start 2048      size 7.4G bootable FAT32 "NO NAME"
+#2 type 0xef start 15540224  size 32.0M FAT16 "VTOYEFI"
+This card already has Ventoy: put ISOs on the data partition (/mnt/card).
+```
+
+`VTOYEFI` is the 32 MB partition Ventoy creates; when it is present the card
+is already bootable and nothing needs flashing. Watch the data partition's
+filesystem: **FAT32 cannot hold an ISO larger than 4 GiB**, so a card with a
+FAT32 data partition needs small ISOs, or a reinstall with Ventoy's default
+exFAT (a PC job, since the installer wants a block device).
+
+A Bulk-Only session unbinds `usb-storage`, and the driver core only looks
+again when the device re-enumerates. LFA asks for a USB reset afterwards and
+reports whether Android remounted the card; if it did not, replug the reader.
+
+### Ventoy without raw writes
+
+Copying ISOs onto an existing Ventoy card works without root, because the
+exFAT data partition is the volume Android mounts:
+
+```bash
+cp ubuntu.iso /media/CABC-1701/    # or /mnt/card
+sync
+```
+
+Creating or updating Ventoy itself needs the card's boot sectors, so it is a
+PC job (`Ventoy2Disk.sh -i /dev/sdX`) or a rooted-phone job. There is no
+userspace trick that avoids this: Ventoy boots from its own MBR/GPT code.
 
 ## Raw descriptor mode: `lfa usb exec`
 

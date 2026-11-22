@@ -2750,9 +2750,13 @@ Usage: lfa usb <command> [options]
   list [--json]            list real devices visible through Termux:API
   refresh                  re-read `termux-usb -l` and rebuild the guest view
   scan [DEV...]            request permission and read real descriptors
+  storage [--json]         list storage cards Android exposes to apps
+  block [write IMAGE]      show the card's raw block device / write an image
+  bot [DEV] [--probe|--write IMAGE|--export FILE|--import FILE]
+                           talk USB mass storage directly (no block node)
   watch [--interval N] [--count N]
                            poll for hotplug and print add/remove events
-  enable [-i NAME]         install the guest helpers, libusb preload, tty bridge
+  enable [-i NAME]         install helpers, preload, tty bridge, auto mode
   disable [-i NAME]        remove those guest helpers
   attach [DEV] [-- CMD...] open a guest session with /dev/bus/usb/BBB/DDD
   tty [DEV] [-- CMD...]    open a session with /dev/ttyUSB0 (serial bridge)
@@ -2767,7 +2771,8 @@ Examples:
   lfa usb status
   lfa usb refresh
   lfa usb scan
-  lfa usb enable -i ubuntu
+  lfa usb enable -i ubuntu        # once: helpers and automatic mode
+  lfa desktop -i ubuntu-5623      # USB already inside; no attach needed
   lfa usb attach                  # shell with a real /dev/bus/usb + sysfs
   lfa usb attach 001/002 -- lsusb -v
   lfa usb tty                     # shell with /dev/ttyUSB0
@@ -2918,6 +2923,13 @@ lfa_usb_status() {
     echo "  live refresh:       $_refresh"
     echo "  bridge directory:   $LFA_USB_BRIDGE"
     echo "  guest helpers:      $_shims"
+    echo "  automatic mode:     $(lfa_usb_conf_get USB_AUTO | grep -qx 1 && echo "on (sessions get the device)" || echo "off")"
+    _vols="$(lfa_usb_storage_rows 2>/dev/null)"
+    if [ -n "$_vols" ]; then
+        echo "  storage cards:      $(printf '%s\n' "$_vols" | awk -F '\t' '{ printf "%s%s (%s, %s)", (n++ ? ", " : ""), $1, $3, $6 }') -> /mnt/card"
+    else
+        echo "  storage cards:      none mounted for apps"
+    fi
     echo "  libusb preload:     $_preload"
     echo "  last scan:          $_last"
     echo "  USB fd in this shell: $_fd_now"
@@ -3139,6 +3151,8 @@ lfa_usb_enable() {
         echo "[!] Rootfs missing for $_id." >&2
         return 1
     fi
+    lfa_usb_conf_set USB_AUTO "1"
+    lfa_usb_write_auto_wrapper || true
     mkdir -p "$_root/usr/local/bin" "$_root/usr/local/libexec" 2>/dev/null || true
     lfa_usb_shim_safe "$_root/usr/local/bin/lsusb" || return 1
     lfa_usb_shim_safe "$_root/usr/local/bin/lfa-usb" || return 1
@@ -3488,6 +3502,10 @@ LFAUSB
     echo "    Serial:  lfa usb tty             (real /dev/ttyUSB0)"
     echo "    Flash:   lfa usb flash --install"
     echo "    Raw fd:  lfa usb exec 001/002 -- lfa-usb desc"
+    echo ""
+    echo "[*] Automatic mode is on: lfa shell and lfa desktop now start with"
+    echo "    the plugged-in device already inside. Plug it in, then open a"
+    echo "    session; no lfa usb attach needed. Off: lfa usb disable -i $_id"
 }
 
 lfa_usb_disable() {
@@ -3504,6 +3522,8 @@ lfa_usb_disable() {
         return 1
     fi
     _id="$INSTANCE_NAME"
+    lfa_usb_conf_set USB_AUTO "0"
+    rm -f "$PREFIX/bin/lfa-usb-auto" 2>/dev/null || true
     _root="$(pd_rootfs "$_id")"
     for _f in "usr/local/bin/lsusb" "usr/local/bin/lfa-usb"; do
         if [ -f "$_root/$_f" ] && grep -q 'LFA USB bridge' "$_root/$_f" 2>/dev/null; then
@@ -3511,6 +3531,7 @@ lfa_usb_disable() {
         fi
     done
     for _f in "usr/local/libexec/lfa-usb-desc.py" "usr/local/libexec/lfa-usb-tty.py" \
+              "usr/local/libexec/lfa-usb-bot.py" \
               "usr/local/lib/lfa-usb-node.so"; do
         [ -e "$_root/$_f" ] && rm -f "$_root/$_f"
     done
@@ -3932,6 +3953,567 @@ lfa_usb_install_esptool() {  # $1 = optional instance
     return 0
 }
 
+lfa_usb_storage_root() {  # where Android exposes volumes to apps
+    printf '%s\n' "${LFA_STORAGE_ROOT:-/storage}"
+}
+
+lfa_usb_storage_ids() {  # volume ids Android exposes under the storage root
+    local _root _id
+    _root="$(lfa_usb_storage_root)"
+    if [ -n "${LFA_STORAGE_ROOT:-}" ]; then
+        # Tests (and unusual setups) point this at a plain directory.
+        for _id in "$_root"/*; do
+            [ -d "$_id" ] || continue
+            _id="${_id##*/}"
+            case "$_id" in emulated|self) continue ;; esac
+            printf '%s\n' "$_id"
+        done
+        return 0
+    fi
+    # `/storage` itself is not listable for an app, so read the mount table.
+    awk -v root="$_root/" 'index($2, root) == 1 {
+        id = substr($2, length(root) + 1)
+        sub("/.*", "", id)
+        if (id != "" && id != "emulated" && id != "self") print id
+    }' /proc/mounts 2>/dev/null | awk '!seen[$0]++'
+}
+
+lfa_usb_size_h() {  # $1 KiB -> short human size
+    awk -v k="${1:-0}" 'BEGIN {
+        if (k >= 1048576) printf "%.1fG", k / 1048576
+        else if (k >= 1024) printf "%.1fM", k / 1024
+        else printf "%dK", k
+    }'
+}
+
+lfa_usb_storage_rows() {  # id<TAB>path<TAB>fs<TAB>size_k<TAB>avail_k<TAB>rw
+    local _root _id _path _fs _size _avail _rw _probe
+    _root="$(lfa_usb_storage_root)"
+    lfa_usb_storage_ids | while IFS= read -r _id; do
+        [ -n "$_id" ] || continue
+        _path="$_root/$_id"
+        [ -d "$_path" ] || continue
+        _fs="$(awk -v p="$_path" '$2 == p { print $3; exit }' /proc/mounts 2>/dev/null)"
+        [ -n "$_fs" ] || _fs="?"
+        _size=""; _avail=""
+        read -r _size _avail <<EOF
+$(df -k "$_path" 2>/dev/null | awk 'NR == 2 { print $2, $4 }')
+EOF
+        case "$_size" in ''|*[!0-9]*) _size=0 ;; esac
+        case "$_avail" in ''|*[!0-9]*) _avail=0 ;; esac
+        # FUSE ignores the mode bits, so probe with a real write.
+        _rw="ro"
+        _probe="$_path/.lfa-write-$$"
+        if ( : > "$_probe" ) 2>/dev/null; then
+            _rw="rw"
+            rm -f "$_probe" 2>/dev/null || true
+        fi
+        printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$_id" "$_path" "$_fs" "$_size" "$_avail" "$_rw"
+    done
+}
+
+lfa_usb_storage() {  # [--json]
+    local _json=0 _rows _id _path _fs _size _avail _rw
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) _json=1; shift ;;
+            -h|--help) echo "Usage: lfa usb storage [--json]" >&2; return 0 ;;
+            *) echo "Unknown option: $1" >&2; return 2 ;;
+        esac
+    done
+    _rows="$(lfa_usb_storage_rows)"
+    if [ "$_json" = "1" ]; then
+        printf '%s\n' "$_rows" | awk -F '\t' '
+            BEGIN { printf "[" }
+            NF { printf "%s{\"id\":\"%s\",\"path\":\"%s\",\"fs\":\"%s\",\"size_kb\":%s,\"avail_kb\":%s,\"writable\":%s}",
+                        (n++ ? "," : ""), $1, $2, $3, $4, $5, ($6 == "rw" ? "true" : "false") }
+            END { print "]" }'
+        return 0
+    fi
+    if [ -z "$_rows" ]; then
+        echo "No storage card is mounted for apps."
+        echo "Plug an OTG reader or card; Android must mount it first."
+        return 0
+    fi
+    printf '%-12s %8s %8s  %-5s %-4s %s\n' VOLUME SIZE FREE FS MODE PATH
+    printf '%s\n' "$_rows" | while IFS="$(printf '\t')" read -r _id _path _fs _size _avail _rw; do
+        printf '%-12s %8s %8s  %-5s %-4s %s\n' \
+            "$_id" "$(lfa_usb_size_h "$_size")" "$(lfa_usb_size_h "$_avail")" \
+            "$_fs" "$_rw" "$_path"
+    done
+    echo ""
+    echo "Sessions started by lfa bind every card at /media/<VOLUME-ID>,"
+    echo "plus /mnt/card for the first one. Phone storage is /sdcard."
+}
+
+lfa_usb_storage_alias() {  # id of the largest exposed volume
+    local _root _id _size _best="" _best_k=0
+    _root="$(lfa_usb_storage_root)"
+    for _id in $(lfa_usb_storage_ids); do
+        _size="$(df -k "$_root/$_id" 2>/dev/null | awk 'NR == 2 { print $2 }')"
+        case "$_size" in ''|*[!0-9]*) continue ;; esac
+        if [ "$_size" -gt "$_best_k" ]; then
+            _best="$_id"; _best_k="$_size"
+        fi
+    done
+    [ -n "$_best" ] && printf '%s\n' "$_best"
+}
+
+lfa_usb_storage_binds() {  # host:guest bind specs, ';' separated
+    local _root _id _out="" _ids _alias
+    _root="$(lfa_usb_storage_root)"
+    _ids="$(lfa_usb_storage_ids)"
+    _alias="$(lfa_usb_storage_alias)"
+    # proot-distro already binds /storage and internal storage at /sdcard and
+    # /mnt/sdcard, and warns when a destination is taken twice. So cards go to
+    # /media/<VOLUME-ID> (the Linux convention) plus /mnt/card for the largest
+    # one, which keeps a Ventoy card's 32 MB VTOYEFI volume out of the alias.
+    while IFS= read -r _id; do
+        [ -n "$_id" ] || continue
+        _out="${_out:+$_out;}$_root/$_id:/media/$_id"
+        [ "$_id" = "$_alias" ] && _out="$_out;$_root/$_id:/mnt/card"
+    done <<EOF
+$_ids
+EOF
+    [ -n "$_out" ] && printf '%s\n' "$_out"
+    return 0
+}
+
+lfa_usb_shq() {  # single-quote a string for su -c
+    printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
+}
+
+lfa_usb_root_ok() {  # is a working root shell available on this device?
+    local _rootcmd="${LFA_ROOT_CMD:-su -c}"
+    command -v "${_rootcmd%% *}" >/dev/null 2>&1 || return 1
+    # shellcheck disable=SC2086
+    $_rootcmd true >/dev/null 2>&1
+}
+
+lfa_usb_block_mounts() {  # id<TAB>node<TAB>fs from Android's vold mounts
+    awk -v OFS='\t' '
+        $1 ~ /^\/dev\/block\// && $2 ~ /^\/mnt\/media_rw\// {
+            id = $2
+            sub("^/mnt/media_rw/", "", id)
+            if (id != "") print id, $1, $3
+        }' "${LFA_USB_MOUNTS:-/proc/mounts}" 2>/dev/null | awk '!seen[$1]++'
+}
+
+lfa_usb_block_state() {  # $1 = block node -> rw | denied | invisible | notblock
+    local _node="${LFA_BLOCK_DEV_ROOT:-}$1"
+    [ -e "$_node" ] || { printf 'invisible\n'; return 0; }
+    [ -b "$_node" ] || { printf 'notblock\n'; return 0; }
+    # Opening O_RDWR is the only honest probe: mode bits and SELinux disagree
+    # often enough that a stat is not an answer. This writes nothing.
+    if ( exec 3<>"$_node" ) 2>/dev/null; then
+        exec 3>&-
+        printf 'rw\n'
+    else
+        printf 'denied\n'
+    fi
+}
+
+lfa_usb_block_reason() {  # $1 = state, $2 = node -> one line for humans
+    case "$1" in
+        rw)        printf '%s is writable by this app\n' "$2" ;;
+        denied)    printf '%s exists but this app may not open it (root needed)\n' "$2" ;;
+        invisible) printf '%s is not in this app'"'"'s namespace (root needed)\n' "$2" ;;
+        notblock)  printf '%s is not a block device here\n' "$2" ;;
+        *)         printf 'no block device reported by Android\n' ;;
+    esac
+}
+
+lfa_usb_block() {  # [--json]  — raw block access for the storage cards
+    local _json=0 _rows="" _id _node _fs _state _root=no _any=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) _json=1; shift ;;
+            -h|--help) echo "Usage: lfa usb block [--json]" >&2; return 0 ;;
+            *) echo "Unknown option: $1" >&2; return 2 ;;
+        esac
+    done
+    lfa_usb_root_ok && _root=yes
+    _rows="$(lfa_usb_block_mounts)"
+    if [ "$_json" = "1" ]; then
+        printf '['
+        printf '%s\n' "$_rows" | while IFS="$(printf '\t')" read -r _id _node _fs; do
+            [ -n "$_id" ] || continue
+            _state="$(lfa_usb_block_state "$_node")"
+            printf '%s{"volume":"%s","node":"%s","fs":"%s","state":"%s","root":%s}' \
+                "$([ "$_any" = 1 ] && printf ',')" "$_id" "$_node" "$_fs" "$_state" \
+                "$([ "$_root" = yes ] && printf true || printf false)"
+            _any=1
+        done
+        printf ']\n'
+        return 0
+    fi
+    if [ -z "$_rows" ]; then
+        echo "No storage card is mounted, so there is no block device to inspect."
+        echo "Plug a card first; Android mounts it before any app can see it."
+        return 0
+    fi
+    printf '%-12s %-32s %-6s %s\n' VOLUME "BACKING DEVICE" FS RAW
+    printf '%s\n' "$_rows" | while IFS="$(printf '\t')" read -r _id _node _fs; do
+        [ -n "$_id" ] || continue
+        _state="$(lfa_usb_block_state "$_node")"
+        printf '%-12s %-32s %-6s %s\n' "$_id" "$_node" "$_fs" \
+            "$([ "$_state" = rw ] && printf yes || printf no)"
+    done
+    echo ""
+    printf '%s\n' "$_rows" | while IFS="$(printf '\t')" read -r _id _node _fs; do
+        [ -n "$_id" ] || continue
+        _state="$(lfa_usb_block_state "$_node")"
+        printf '  %s: %s\n' "$_id" "$(lfa_usb_block_reason "$_state" "$_node")"
+    done
+    echo ""
+    if [ "$_root" = yes ]; then
+        echo "Root shell detected: raw writes are possible."
+        echo "  lfa usb block write IMAGE [-v VOLUME] [--yes]"
+    else
+        echo "No root: Android keeps block devices for vold/init. Card *files* are"
+        echo "still fully usable through Android's mount (lfa usb storage)."
+        echo "Flashing boot code (Ventoy, Etcher, dd to /dev/...) needs root; LFA"
+        echo "will not fake a block device, because dd would then write to a file"
+        echo "and report success while the card stays unchanged."
+    fi
+}
+
+lfa_usb_block_write() {  # IMAGE [-v VOLUME] [--yes]
+    local _img="" _vol="" _yes=0 _rows _id _node _fs _state _line _size _sha _blocks
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            -v|--volume) _vol="${2:-}"; shift 2 ;;
+            --yes|-y) _yes=1; shift ;;
+            -h|--help)
+                echo "Usage: lfa usb block write IMAGE [-v VOLUME] [--yes]" >&2
+                echo "Writes IMAGE to the card's raw block device, then verifies" >&2
+                echo "the bytes by reading them back. Without --yes it only plans." >&2
+                return 0 ;;
+            -*) echo "Unknown option: $1" >&2; return 2 ;;
+            *) _img="$1"; shift ;;
+        esac
+    done
+    [ -n "$_img" ] || { echo "Usage: lfa usb block write IMAGE [-v VOLUME] [--yes]" >&2; return 2; }
+    [ -f "$_img" ] || { echo "[!] no such image: $_img" >&2; return 2; }
+    _rows="$(lfa_usb_block_mounts)"
+    [ -n "$_rows" ] || { echo "[!] no storage card is mounted" >&2; return 3; }
+    if [ -z "$_vol" ]; then
+        if [ "$(printf '%s\n' "$_rows" | wc -l)" = "1" ]; then
+            _vol="$(printf '%s\n' "$_rows" | cut -f1)"
+        else
+            echo "[!] more than one card is mounted; pick one with -v:" >&2
+            printf '%s\n' "$_rows" | cut -f1 | sed 's/^/      /' >&2
+            return 2
+        fi
+    fi
+    _line="$(printf '%s\n' "$_rows" | awk -F '\t' -v v="$_vol" '$1 == v')"
+    [ -n "$_line" ] || { echo "[!] volume '$_vol' has no block device" >&2; return 3; }
+    _node="$(printf '%s\n' "$_line" | cut -f2)"
+    _fs="$(printf '%s\n' "$_line" | cut -f3)"
+    _state="$(lfa_usb_block_state "$_node")"
+    if [ "$_state" != "rw" ]; then
+        echo "[!] cannot write $_node: $(lfa_usb_block_reason "$_state" "$_node")" >&2
+        echo "    Run 'lfa usb block' for the full picture." >&2
+        return 3
+    fi
+    lfa_usb_root_ok || {
+        echo "[!] root is required to detach Android's mount and write $_node" >&2
+        echo "    (= sudo/su on the device; LFA will not simulate a block device)" >&2
+        return 3
+    }
+    _size="$(wc -c < "$_img" | tr -d '[:space:]')"
+    _sha="$(sha256sum "$_img" | awk '{ print $1 }')"
+    echo "Card:    $_vol ($_fs, mounted at /storage/$_vol)"
+    echo "Device:  $_node"
+    echo "Image:   $_img ($(lfa_usb_size_h "$((_size / 1024))"), sha256 $(printf '%s' "$_sha" | cut -c1-8)…)"
+    echo ""
+    if [ "$_yes" != "1" ]; then
+        echo "Dry run. This WOULD erase $_vol. Re-run with --yes to write."
+        echo "The card's Android mount is unmounted first and remounted after."
+        return 0
+    fi
+    local _root_cmd="${LFA_ROOT_CMD:-su -c}"
+    echo "[*] unmounting $_vol"
+    # shellcheck disable=SC2086
+    $_root_cmd "sm unmount $(lfa_usb_shq "$_vol"); sm unmount $(lfa_usb_shq "/storage/$_vol")" \
+        >/dev/null 2>&1 || true
+    sleep 1
+    echo "[*] writing $_size bytes"
+    # shellcheck disable=SC2086
+    if ! $_root_cmd "dd if=$(lfa_usb_shq "$_img") of=$(lfa_usb_shq "$_node") bs=1M conv=fsync status=none"; then
+        echo "[!] dd failed; card is now in an unknown state" >&2
+        return 4
+    fi
+    echo "[*] reading the card back to verify"
+    # shellcheck disable=SC2086
+    if ! $_root_cmd "sync; head -c $_size $(lfa_usb_shq "$_node") | sha256sum" \
+        | grep -qx "$_sha  -"; then
+        echo "[!] verification failed: the card does not match the image" >&2
+        return 4
+    fi
+    echo "[+] verified: $_vol matches $_img"
+    # shellcheck disable=SC2086
+    $_root_cmd "sm mount $(lfa_usb_shq "$_vol")" >/dev/null 2>&1 || true
+    echo "[*] remount requested; replug the reader if Android does not pick it up"
+    return 0
+}
+
+lfa_usb_stage_bot() {  # $1 = guest rootfs
+    local _src="$LFA_DIR/lib/lfa-usb-bot.py"
+    local _dst="$1/usr/local/libexec/lfa-usb-bot.py"
+    if [ ! -f "$_src" ]; then
+        echo "[!] lib/lfa-usb-bot.py is missing; run menu 12 or reinstall." >&2
+        return 1
+    fi
+    if ! mkdir -p "$(dirname "$_dst")" 2>/dev/null; then
+        echo "[!] Could not create $(dirname "$_dst") in the guest rootfs." >&2
+        return 1
+    fi
+    if ! cp -f "$_src" "$_dst" 2>/dev/null; then
+        echo "[!] Could not copy lib/lfa-usb-bot.py to $_dst." >&2
+        return 1
+    fi
+    chmod 755 "$_dst" 2>/dev/null || true
+}
+
+lfa_usb_bot() {  # [DEV] [--probe|--write IMAGE|--export FILE|--import FILE]
+    local _inst="" _dev="" _mode="--probe" _img="" _file="" _json="" _no_verify=""
+    local _full="" _yes=""
+    local _id _root
+    local -a _args=()
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            -i|--instance) _inst="${2:-}"; shift 2 ;;
+            --probe) _mode="--probe"; shift ;;
+            --write)
+                _mode="--write"; _img="${2:-}"
+                if [ $# -ge 2 ]; then shift 2; else shift; fi ;;
+            --write=*) _mode="--write"; _img="${1#*=}"; shift ;;
+            --export)
+                _mode="--export"; _file="${2:-}"
+                if [ $# -ge 2 ]; then shift 2; else shift; fi ;;
+            --export=*) _mode="--export"; _file="${1#*=}"; shift ;;
+            --import)
+                _mode="--import"; _file="${2:-}"
+                if [ $# -ge 2 ]; then shift 2; else shift; fi ;;
+            --import=*) _mode="--import"; _file="${1#*=}"; shift ;;
+            --full) _full="--full"; shift ;;
+            --no-verify) _no_verify="--no-verify"; shift ;;
+            --json) _json="--json"; shift ;;
+            --yes|-y) _yes="--yes"; shift ;;
+            --device)
+                _dev="${2:-}"
+                if [ $# -ge 2 ]; then shift 2; else shift; fi ;;
+            -h|--help) lfa_usb_usage; return 0 ;;
+            --) shift; break ;;
+            -*) echo "Unknown option: $1" >&2; return 2 ;;
+            *) _dev="$1"; shift ;;
+        esac
+    done
+    if [ "$_mode" = "--write" ] && [ -z "$_img" ]; then
+        echo "Usage: lfa usb bot --write IMAGE [--yes]" >&2
+        return 2
+    fi
+    if [ "$_mode" = "--export" ] && [ -z "$_file" ]; then
+        echo "Usage: lfa usb bot --export FILE" >&2
+        return 2
+    fi
+    if [ "$_mode" = "--import" ] && [ -z "$_file" ]; then
+        echo "Usage: lfa usb bot --import FILE [--yes]" >&2
+        return 2
+    fi
+    if [ -z "$_dev" ]; then
+        # A detach makes Android re-enumerate the reader, so the cached
+        # bus/dev number is stale by the next command. Refresh first.
+        lfa_usb_refresh >/dev/null 2>&1 || true
+        _dev="$(lfa_usb_default_dev)"
+        [ -n "$_dev" ] || {
+            echo "[!] No USB device is visible. Connect one and run: lfa usb refresh" >&2
+            return 1
+        }
+        echo "[*] Using $_dev (the only visible device)."
+    fi
+    lfa_usb_pick_instance "$_inst" || return 1
+    _id="$INSTANCE_NAME"
+    _root="$(pd_rootfs "$_id")"
+    [ -d "$_root" ] || { echo "[!] Rootfs missing for $_id." >&2; return 1; }
+    lfa_usb_stage_bot "$_root" || return 1
+    echo "[*] Bulk-Only Transport: Android's usb-storage driver is detached for"
+    echo "    this command, so the card leaves /storage until you replug it."
+    echo "    Nothing is written unless --write and --yes are both given."
+    case "$_mode" in
+        --probe)
+            _args=("--probe")
+            [ -n "$_json" ] && _args+=("$_json")
+            ;;
+        --write)
+            _args=("--write" "$_img")
+            [ -n "$_yes" ] && _args+=("$_yes")
+            [ -n "$_no_verify" ] && _args+=("$_no_verify")
+            ;;
+        --export) _args=("--export" "$_file") ;;
+        --import)
+            _args=("--import" "$_file")
+            [ -n "$_full" ] && _args+=("$_full")
+            [ -n "$_yes" ] && _args+=("$_yes")
+            ;;
+    esac
+    lfa_usb_exec -i "$_id" "$_dev" -- python3 /usr/local/libexec/lfa-usb-bot.py "${_args[@]}"
+}
+
+lfa_usb_sys_bind() {  # print the /sys/bus bind spec when the tree is ready
+    if [ -d "$LFA_USB_BRIDGE/sysroot/bus/usb/devices" ] && \
+       [ -n "$(ls -A "$LFA_USB_BRIDGE/sysroot/bus/usb/devices" 2>/dev/null)" ]; then
+        mkdir -p "$LFA_USB_BRIDGE/sysroot/class" 2>/dev/null || true
+        printf '%s/bus:/sys/bus\n' "$LFA_USB_BRIDGE/sysroot"
+    fi
+}
+
+lfa_usb_prep_sysfs() {  # instance user bus dev path speed
+    local _id="$1" _user="$2" _bus="$3" _devn="$4" _dev="$5" _speed="$6"
+    local _prep_rc=0
+    rm -rf "$LFA_USB_BRIDGE/sysroot" 2>/dev/null || true
+    rm -f "$LFA_USB_BRIDGE/prep-$_bus-$_devn.json" \
+          "$LFA_USB_BRIDGE/prep-$_bus-$_devn.tsv" \
+          "$LFA_USB_BRIDGE/prep-$_bus-$_devn.bin" 2>/dev/null || true
+    (
+        export LFA_USB_MODE=prep
+        export LFA_USB_INSTANCE="$_id"
+        export LFA_USB_USER="$_user"
+        LFA_USB_PD_FLAGS="$(pd_login_flags)"
+        export LFA_USB_PD_FLAGS
+        export LFA_USB_OUT="/tmp/lfa-usb/prep-$_bus-$_devn.json"
+        export LFA_USB_TSV="/tmp/lfa-usb/prep-$_bus-$_devn.tsv"
+        export LFA_USB_BLOB="/tmp/lfa-usb/prep-$_bus-$_devn.bin"
+        export LFA_USB_SYSFS_OUT="/tmp/lfa-usb/sysroot/bus/usb/devices"
+        export LFA_USB_BUS="$_bus"
+        export LFA_USB_DEV="$_devn"
+        export LFA_USB_PATH="$_dev"
+        export LFA_USB_SPEED="$_speed"
+        lfa_android_timeout 120 termux-usb -r -E -e "$LFA_USB_CALLBACK" "$_dev"
+    ) > "$LFA_USB_BRIDGE/prep.log" 2>&1 || _prep_rc=$?
+    [ -n "$(lfa_usb_sys_bind)" ] && return 0
+    echo "[!] Descriptors could not be read; libusb will not see the device." >&2
+    if [ -s "$LFA_USB_BRIDGE/prep.log" ]; then
+        sed 's/^/    /' "$LFA_USB_BRIDGE/prep.log" >&2
+    fi
+    return 1
+}
+
+lfa_usb_write_auto_wrapper() {
+    mkdir -p "$PREFIX/bin" 2>/dev/null || return 1
+    cat > "$PREFIX/bin/lfa-usb-auto" <<AUTO
+#!/bin/bash
+# Installed by \`lfa usb enable\`. Runs a launcher with the USB view injected
+# when USB auto mode is on; otherwise it just runs the launcher.
+exec "$PREFIX/lib/linux-for-android/install_linux.sh" --cli usb auto -- "\$@"
+AUTO
+    chmod 755 "$PREFIX/bin/lfa-usb-auto" 2>/dev/null || true
+}
+
+lfa_usb_write_auto_script() {  # dst preload bind devbind BBB/DDD -- command...
+    local _dst="$1" _preload="$2" _bind="$3" _devbind="$4" _map="$5"
+    shift 5
+    [ $# -gt 0 ] || return 1
+    {
+        printf '#!/bin/bash\n'
+        printf '# Generated by lfa usb auto; deleted when the session ends.\n'
+        # termux-usb captures the callback's stdout, so keep the session on
+        # the terminal unless both streams are redirected by the caller.
+        printf 'if [ ! -t 1 ] && [ -t 2 ]; then exec >&2; fi\n'
+        printf 'export LFA_USB_AUTO_DONE=1\n'
+        lfa_usb_fd_prelude
+        printf 'export LFA_USB_MAP="%s=$TERMUX_USB_FD"\n' "$_map"
+        [ -n "$_preload" ] && printf 'export LFA_USB_PRELOAD=%q\n' "$_preload"
+        [ -n "$_bind" ] && printf 'export LFA_USB_BIND=%q\n' "$_bind"
+        [ -n "$_devbind" ] && printf 'export LFA_USB_DEVBIND=%q\n' "$_devbind"
+        printf 'exec'
+        printf ' %q' "$@"
+        printf '\n'
+    } > "$_dst" 2>/dev/null || return 1
+    chmod 700 "$_dst" 2>/dev/null || true
+}
+
+lfa_usb_auto() {  # -- COMMAND... : session entrypoint used by the launchers
+    local _inst _dev _bd _bus _devn _root _user _shim _preload="" _speed
+    local _bind="" _devbind="" _script_host
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            -h|--help) echo "Usage: lfa usb auto -- COMMAND..." >&2; return 0 ;;
+            --) shift; break ;;
+            *) break ;;
+        esac
+    done
+    [ $# -gt 0 ] || return 2
+    # Storage binds do not need a USB descriptor, so they are exported before
+    # any of the early exits below: a session always sees a mounted card.
+    LFA_STORAGE_BIND="$(lfa_usb_storage_binds 2>/dev/null || true)"
+    [ -n "$LFA_STORAGE_BIND" ] && export LFA_STORAGE_BIND
+    if [ -n "$LFA_STORAGE_BIND" ]; then
+        _str_root="$(pd_rootfs "$(lfa_usb_conf_instance)" 2>/dev/null || true)"
+        if [ -n "$_str_root" ] && [ -d "$_str_root" ]; then
+            _str_ifs="$IFS"; IFS=';'
+            for _str_spec in $LFA_STORAGE_BIND; do
+                [ -n "$_str_spec" ] && mkdir -p "$_str_root${_str_spec##*:}" 2>/dev/null || true
+            done
+            IFS="$_str_ifs"; unset _str_ifs _str_spec
+        fi
+        unset _str_root
+    fi
+    # Anything that cannot be prepared must still start the session: a
+    # missing device is not an error for a desktop or a shell.
+    if [ "${LFA_USB_AUTO_DONE:-}" = "1" ] || \
+       [ "$(lfa_usb_conf_get USB_AUTO)" != "1" ]; then
+        LFA_USB_AUTO_DONE=1 exec "$@"
+    fi
+    _inst="$(lfa_usb_conf_instance)"
+    _dev="$(lfa_usb_default_dev)"
+    if [ -z "$_inst" ] || [ -z "$_dev" ] || ! lfa_usb_api_ok || ! lfa_usb_export_ok; then
+        LFA_USB_AUTO_DONE=1 exec "$@"
+    fi
+    _dev="$(lfa_usb_normalize_dev "$_dev")"
+    _bd="$(lfa_usb_bus_dev "$_dev")"
+    _root="$(pd_rootfs "$_inst" 2>/dev/null || true)"
+    if [ -z "$_bd" ] || [ -z "$_root" ] || [ ! -d "$_root" ]; then
+        LFA_USB_AUTO_DONE=1 exec "$@"
+    fi
+    _bus="$(lfa_usb_pad3 "${_bd%% *}")"
+    _devn="$(lfa_usb_pad3 "${_bd##* }")"
+    _user="$(lfa_appimage_user "$_inst" 2>/dev/null || echo user)"
+    lfa_usb_stage_desc "$_root" 2>/dev/null || true
+    lfa_usb_stage_tty "$_root" 2>/dev/null || true
+    _shim="$(lfa_usb_build_shim "$_root" 2>/dev/null || true)"
+    if [ -n "$_shim" ] && lfa_usb_stage_shim "$_root" "$_shim"; then
+        _preload="$LFA_USB_SHIM_GUEST"
+    fi
+    lfa_usb_write_callback 2>/dev/null || true
+    mkdir -p "$LFA_USB_BRIDGE" 2>/dev/null || true
+    lfa_usb_prepare_nodes "$_root" "$_bus" "$_devn" 0
+    [ -f "$LFA_USB_BRIDGE/dev/bus/usb/$_bus/$_devn" ] && \
+        _devbind="$LFA_USB_BRIDGE/dev/bus/usb:/dev/bus/usb"
+    _speed="$(cat "$LFA_USB_BRIDGE/sys/${_bus}-${_devn}/speed" 2>/dev/null || true)"
+    case "$_speed" in ''|*[!0-9]*) _speed=480 ;; esac
+    if [ -n "$_preload" ]; then
+        # Reuse the tree from an earlier session when it already describes
+        # this device: the descriptor prep costs a whole guest login.
+        if [ -d "$LFA_USB_BRIDGE/sysroot/bus/usb/devices/$_bus-$_devn" ]; then
+            _bind="$(lfa_usb_sys_bind)"
+        elif lfa_usb_prep_sysfs "$_inst" "$_user" "$_bus" "$_devn" "$_dev" "$_speed"; then
+            _bind="$(lfa_usb_sys_bind)"
+        fi
+        [ -n "$_bind" ] && \
+            _devbind="${_devbind:+$_devbind;}$LFA_USB_BRIDGE/sysroot/class:/sys/class"
+    fi
+    if [ -z "$_preload" ] || [ -z "$_bind" ]; then
+        LFA_USB_AUTO_DONE=1 exec "$@"
+    fi
+    _script_host="$LFA_USB_BRIDGE/auto-$$.sh"
+    lfa_usb_write_auto_script "$_script_host" "$_preload" "$_bind" "$_devbind" \
+        "$_bus/$_devn" "$@" || { LFA_USB_AUTO_DONE=1 exec "$@"; }
+    echo "[*] USB: $_bus/$_devn available in this session (auto mode)"
+    exec termux-usb -r -E -e "$_script_host" "$_dev"
+}
+
 lfa_usb_attach() {
     local _inst="" _user="" _root _id _dev="" _cwd="" _perm=1 _sysfs=1 _rc=0
     local _devbind=""
@@ -4033,41 +4615,8 @@ lfa_usb_attach() {
     case "$_speed" in ''|*[!0-9]*) _speed=480 ;; esac
 
     if [ "$_sysfs" = 1 ] && [ -n "$_preload" ]; then
-        rm -rf "$LFA_USB_BRIDGE/sysroot" 2>/dev/null || true
-        rm -f "$LFA_USB_BRIDGE/prep-$_bus-$_devn.json" \
-              "$LFA_USB_BRIDGE/prep-$_bus-$_devn.tsv" \
-              "$LFA_USB_BRIDGE/prep-$_bus-$_devn.bin" 2>/dev/null || true
-        (
-            export LFA_USB_MODE=prep
-            export LFA_USB_INSTANCE="$_id"
-            export LFA_USB_USER="$_user"
-            LFA_USB_PD_FLAGS="$(pd_login_flags)"
-            export LFA_USB_PD_FLAGS
-            export LFA_USB_OUT="/tmp/lfa-usb/prep-$_bus-$_devn.json"
-            export LFA_USB_TSV="/tmp/lfa-usb/prep-$_bus-$_devn.tsv"
-            export LFA_USB_BLOB="/tmp/lfa-usb/prep-$_bus-$_devn.bin"
-            export LFA_USB_SYSFS_OUT="/tmp/lfa-usb/sysroot/bus/usb/devices"
-            export LFA_USB_BUS="$_bus"
-            export LFA_USB_DEV="$_devn"
-            export LFA_USB_PATH="$_dev"
-            export LFA_USB_SPEED="$_speed"
-            lfa_android_timeout 120 termux-usb -r -E -e "$LFA_USB_CALLBACK" "$_dev"
-        ) > "$LFA_USB_BRIDGE/prep.log" 2>&1 || _prep_rc=$?
-        # libudev enumerates /sys/bus and /sys/class before it looks at
-        # /sys/bus/usb/devices, and Android's /sys is not readable for an
-        # app, so a bind of the devices dir alone fails with EACCES. Bind a
-        # small readable /sys/bus (which contains our usb/devices tree) and
-        # an empty /sys/class instead.
-        if [ -d "$LFA_USB_BRIDGE/sysroot/bus/usb/devices" ] && \
-           [ -n "$(ls -A "$LFA_USB_BRIDGE/sysroot/bus/usb/devices" 2>/dev/null)" ]; then
-            mkdir -p "$LFA_USB_BRIDGE/sysroot/class" 2>/dev/null || true
-            _bind="$LFA_USB_BRIDGE/sysroot/bus:/sys/bus"
-        else
-            echo "[!] Descriptors could not be read; libusb will not see the device." >&2
-            if [ -s "$LFA_USB_BRIDGE/prep.log" ]; then
-                sed 's/^/    /' "$LFA_USB_BRIDGE/prep.log" >&2
-            fi
-        fi
+        lfa_usb_prep_sysfs "$_id" "$_user" "$_bus" "$_devn" "$_dev" "$_speed" || true
+        _bind="$(lfa_usb_sys_bind)"
     fi
 
     if [ -n "$_bind" ] && [ -d "$LFA_USB_BRIDGE/sysroot/class" ]; then
@@ -4386,6 +4935,14 @@ lfa_cli_usb() {
         watch|monitor) lfa_usb_watch "$@" ;;
         enable|install) lfa_usb_enable "$@" ;;
         disable|remove) lfa_usb_disable "$@" ;;
+        storage|sdcard) lfa_usb_storage "$@" ;;
+        bot|bot-probe) lfa_usb_bot "$@" ;;
+        block|bdev)
+            case "${1:-}" in
+                write) shift; lfa_usb_block_write "$@" ;;
+                *) lfa_usb_block "$@" ;;
+            esac ;;
+        auto) lfa_usb_auto "$@" ;;
         exec|run) lfa_usb_exec "$@" ;;
         attach|shell) lfa_usb_attach "$@" ;;
         tty|serial) lfa_usb_tty "$@" ;;
@@ -7291,6 +7848,44 @@ if ! proot --help 2>&1 | grep -q "sysvipc"; then
     fi
 fi
 
+# USB auto mode: `lfa usb enable` is enough. When it is on, lfa-usb-auto
+# prepares the device view and re-runs this launcher with the bindings
+# exported; without a device it just runs the launcher.
+if [ "${LFA_USB_AUTO_DONE:-}" != "1" ] && [ -x "$PREFIX/bin/lfa-usb-auto" ]; then
+    exec "$PREFIX/bin/lfa-usb-auto" -- "$0" "$@"
+fi
+USB_BIND=()
+[ -n "${LFA_USB_BIND:-}" ] && USB_BIND+=(--bind "$LFA_USB_BIND")
+if [ -n "${LFA_USB_DEVBIND:-}" ]; then
+    _ub_ifs="$IFS"; IFS=';'
+    for _ub in $LFA_USB_DEVBIND; do [ -n "$_ub" ] && USB_BIND+=(--bind "$_ub"); done
+    IFS="$_ub_ifs"; unset _ub_ifs _ub
+fi
+if [ -n "${LFA_STORAGE_BIND:-}" ]; then
+    _st_ifs="$IFS"; IFS=';'
+    for _st in $LFA_STORAGE_BIND; do [ -n "$_st" ] && USB_BIND+=(--bind "$_st"); done
+    IFS="$_st_ifs"; unset _st_ifs _st
+fi
+USB_WRAP=""
+if [ -n "${LFA_USB_PRELOAD:-}" ] && [ -n "${LFA_USB_MAP:-}" ]; then
+    USB_WRAP="export LD_PRELOAD=$LFA_USB_PRELOAD; export LFA_USB_MAP=$LFA_USB_MAP; "
+fi
+
+pd_login() {
+    if [ -n "${LFA_STORAGE_BIND:-}" ]; then
+        _st_rfs="$(lfa_rootfs "$DISTRO" 2>/dev/null || true)"
+        if [ -n "$_st_rfs" ]; then
+            _st_ifs="$IFS"; IFS=';'
+            for _st in $LFA_STORAGE_BIND; do
+                [ -n "$_st" ] && mkdir -p "$_st_rfs${_st##*:}" 2>/dev/null || true
+            done
+            IFS="$_st_ifs"; unset _st_ifs _st
+        fi
+        unset _st_rfs
+    fi
+    proot-distro login "${USB_BIND[@]}" "$@"
+}
+
 # GUI installs can boot the full desktop or drop straight to a shell.
 # CLI-only installs go directly to a root terminal.
 LAST_SERVER_FILE="$HOME/.config/linux-for-android/last-server-$INSTANCE_NAME"
@@ -7401,10 +7996,10 @@ if [ "$SERVER_MODE" = "both" ] && [ "$MODE" == "desktop" ]; then
 fi
 
 if [ "$MODE" == "root" ]; then
-    proot-distro login $NO_SYSVIPC $DISTRO --shared-tmp -- /bin/bash -l
+    pd_login $NO_SYSVIPC $DISTRO --shared-tmp -- /bin/bash -l
     exit 0
 elif [ "$MODE" == "user" ]; then
-    proot-distro login $NO_SYSVIPC $DISTRO --user "$X11_USER" --shared-tmp -- /bin/bash -l
+    pd_login $NO_SYSVIPC $DISTRO --user "$X11_USER" --shared-tmp -- /bin/bash -l
     exit 0
 fi
 
@@ -7498,15 +8093,15 @@ if [ "$SERVER" == "x11" ]; then
     # visible instead of hidden.
     echo "Starting $DISTRO desktop as '$X11_USER' (session log: ~/start-linux-session.log)..."
     if [ "$DE" == "xfce4" ]; then
-        nohup proot-distro login $NO_SYSVIPC $DISTRO --user "$X11_USER" --shared-tmp -- bash -c "mkdir -p /tmp/.X11-unix; chmod 1777 /tmp/.X11-unix; export XDG_RUNTIME_DIR=/tmp/xdg-\$USER-$DISTRO; mkdir -p "\$XDG_RUNTIME_DIR"; chmod 700 "\$XDG_RUNTIME_DIR"; export LANG=\${LANG:-C.UTF-8}; export PULSE_SERVER=127.0.0.1; export DISPLAY=:1; export XCURSOR_THEME=Adwaita; export XCURSOR_SIZE=24; $VIRGL_ENV if command -v dbus-run-session >/dev/null 2>&1; then dbus-run-session -- startxfce4 > \$HOME/start-linux-session.log 2>&1; elif command -v dbus-launch >/dev/null 2>&1; then dbus-launch --exit-with-session startxfce4 > \$HOME/start-linux-session.log 2>&1; else startxfce4 > \$HOME/start-linux-session.log 2>&1; fi" &
+        nohup pd_login $NO_SYSVIPC $DISTRO --user "$X11_USER" --shared-tmp -- bash -c "${USB_WRAP}mkdir -p /tmp/.X11-unix; chmod 1777 /tmp/.X11-unix; export XDG_RUNTIME_DIR=/tmp/xdg-\$USER-$DISTRO; mkdir -p "\$XDG_RUNTIME_DIR"; chmod 700 "\$XDG_RUNTIME_DIR"; export LANG=\${LANG:-C.UTF-8}; export PULSE_SERVER=127.0.0.1; export DISPLAY=:1; export XCURSOR_THEME=Adwaita; export XCURSOR_SIZE=24; $VIRGL_ENV if command -v dbus-run-session >/dev/null 2>&1; then dbus-run-session -- startxfce4 > \$HOME/start-linux-session.log 2>&1; elif command -v dbus-launch >/dev/null 2>&1; then dbus-launch --exit-with-session startxfce4 > \$HOME/start-linux-session.log 2>&1; else startxfce4 > \$HOME/start-linux-session.log 2>&1; fi" &
     elif [ "$DE" == "lxde" ]; then
-        nohup proot-distro login $NO_SYSVIPC $DISTRO --user "$X11_USER" --shared-tmp -- bash -c "mkdir -p /tmp/.X11-unix; chmod 1777 /tmp/.X11-unix; export XDG_RUNTIME_DIR=/tmp/xdg-\$USER-$DISTRO; mkdir -p "\$XDG_RUNTIME_DIR"; chmod 700 "\$XDG_RUNTIME_DIR"; export LANG=\${LANG:-C.UTF-8}; export PULSE_SERVER=127.0.0.1; export DISPLAY=:1; export XCURSOR_THEME=Adwaita; export XCURSOR_SIZE=24; $VIRGL_ENV if command -v dbus-run-session >/dev/null 2>&1; then dbus-run-session -- startlxde > \$HOME/start-linux-session.log 2>&1; elif command -v dbus-launch >/dev/null 2>&1; then dbus-launch --exit-with-session startlxde > \$HOME/start-linux-session.log 2>&1; else startlxde > \$HOME/start-linux-session.log 2>&1; fi" &
+        nohup pd_login $NO_SYSVIPC $DISTRO --user "$X11_USER" --shared-tmp -- bash -c "${USB_WRAP}mkdir -p /tmp/.X11-unix; chmod 1777 /tmp/.X11-unix; export XDG_RUNTIME_DIR=/tmp/xdg-\$USER-$DISTRO; mkdir -p "\$XDG_RUNTIME_DIR"; chmod 700 "\$XDG_RUNTIME_DIR"; export LANG=\${LANG:-C.UTF-8}; export PULSE_SERVER=127.0.0.1; export DISPLAY=:1; export XCURSOR_THEME=Adwaita; export XCURSOR_SIZE=24; $VIRGL_ENV if command -v dbus-run-session >/dev/null 2>&1; then dbus-run-session -- startlxde > \$HOME/start-linux-session.log 2>&1; elif command -v dbus-launch >/dev/null 2>&1; then dbus-launch --exit-with-session startlxde > \$HOME/start-linux-session.log 2>&1; else startlxde > \$HOME/start-linux-session.log 2>&1; fi" &
     elif [ "$DE" == "mate" ]; then
-        nohup proot-distro login $NO_SYSVIPC $DISTRO --user "$X11_USER" --shared-tmp -- bash -c "mkdir -p /tmp/.X11-unix; chmod 1777 /tmp/.X11-unix; export XDG_RUNTIME_DIR=/tmp/xdg-\$USER-$DISTRO; mkdir -p "\$XDG_RUNTIME_DIR"; chmod 700 "\$XDG_RUNTIME_DIR"; export LANG=\${LANG:-C.UTF-8}; export PULSE_SERVER=127.0.0.1; export DISPLAY=:1; export XCURSOR_THEME=Adwaita; export XCURSOR_SIZE=24; $VIRGL_ENV if command -v dbus-run-session >/dev/null 2>&1; then dbus-run-session -- mate-session > \$HOME/start-linux-session.log 2>&1; elif command -v dbus-launch >/dev/null 2>&1; then dbus-launch --exit-with-session mate-session > \$HOME/start-linux-session.log 2>&1; else mate-session > \$HOME/start-linux-session.log 2>&1; fi" &
+        nohup pd_login $NO_SYSVIPC $DISTRO --user "$X11_USER" --shared-tmp -- bash -c "${USB_WRAP}mkdir -p /tmp/.X11-unix; chmod 1777 /tmp/.X11-unix; export XDG_RUNTIME_DIR=/tmp/xdg-\$USER-$DISTRO; mkdir -p "\$XDG_RUNTIME_DIR"; chmod 700 "\$XDG_RUNTIME_DIR"; export LANG=\${LANG:-C.UTF-8}; export PULSE_SERVER=127.0.0.1; export DISPLAY=:1; export XCURSOR_THEME=Adwaita; export XCURSOR_SIZE=24; $VIRGL_ENV if command -v dbus-run-session >/dev/null 2>&1; then dbus-run-session -- mate-session > \$HOME/start-linux-session.log 2>&1; elif command -v dbus-launch >/dev/null 2>&1; then dbus-launch --exit-with-session mate-session > \$HOME/start-linux-session.log 2>&1; else mate-session > \$HOME/start-linux-session.log 2>&1; fi" &
     elif [ "$DE" == "gnome" ]; then
         # Experimental: gnome-session is skipped (no systemd/logind in proot);
         # start-gnome-session runs lfa-set-wallpaper then `gnome-shell --x11`.
-        nohup proot-distro login $NO_SYSVIPC $DISTRO --user "$X11_USER" --shared-tmp -- bash -c "mkdir -p /tmp/.X11-unix; chmod 1777 /tmp/.X11-unix; export XDG_RUNTIME_DIR=/tmp/xdg-\$USER-$DISTRO; mkdir -p "\$XDG_RUNTIME_DIR"; chmod 700 "\$XDG_RUNTIME_DIR"; export PULSE_SERVER=127.0.0.1; export DISPLAY=:1; export XCURSOR_THEME=Adwaita; export XCURSOR_SIZE=24; $VIRGL_ENV if command -v dbus-run-session >/dev/null 2>&1; then dbus-run-session -- /usr/local/bin/start-gnome-session > \$HOME/start-linux-session.log 2>&1; else /usr/local/bin/start-gnome-session > \$HOME/start-linux-session.log 2>&1; fi" &
+        nohup pd_login $NO_SYSVIPC $DISTRO --user "$X11_USER" --shared-tmp -- bash -c "${USB_WRAP}mkdir -p /tmp/.X11-unix; chmod 1777 /tmp/.X11-unix; export XDG_RUNTIME_DIR=/tmp/xdg-\$USER-$DISTRO; mkdir -p "\$XDG_RUNTIME_DIR"; chmod 700 "\$XDG_RUNTIME_DIR"; export PULSE_SERVER=127.0.0.1; export DISPLAY=:1; export XCURSOR_THEME=Adwaita; export XCURSOR_SIZE=24; $VIRGL_ENV if command -v dbus-run-session >/dev/null 2>&1; then dbus-run-session -- /usr/local/bin/start-gnome-session > \$HOME/start-linux-session.log 2>&1; else /usr/local/bin/start-gnome-session > \$HOME/start-linux-session.log 2>&1; fi" &
     fi
     echo "If the screen stays on the X cursor, the desktop failed to start:"
     echo "  cat ~/start-linux-session.log   (inside the distro) for the reason."
@@ -7539,7 +8134,7 @@ elif [ "$SERVER" == "vnc" ]; then
         [ "$DE" = "lxde" ] && VNC_SES="startlxde"
         [ "$DE" = "mate" ] && VNC_SES="mate-session"
         [ "$DE" = "gnome" ] && VNC_SES="/usr/local/bin/start-gnome-session"
-        nohup proot-distro login $NO_SYSVIPC $DISTRO --user "$X11_USER" --shared-tmp -- bash -c "export PULSE_SERVER=127.0.0.1; mkdir -p \$HOME/.vnc \$HOME/.config/tigervnc; printf 'geometry=%s\n' '$RESOLUTION' > \$HOME/.vnc/config; printf 'geometry=%s\n' '$RESOLUTION' > \$HOME/.config/tigervnc/config; if command -v vncserver >/dev/null 2>&1; then $VIRGL_ENV vncserver :1; rc=\$?; [ \$rc -eq 0 ] || exit \$rc; else $VIRGL_ENV Xvnc :1 -geometry $RESOLUTION -depth 24 -rfbauth \$HOME/.config/tigervnc/passwd -SecurityTypes VncAuth > \$HOME/.vnc-xvnc.log 2>&1 & sleep 2; export XCURSOR_THEME=Adwaita; export XCURSOR_SIZE=24; DISPLAY=:1 dbus-run-session -- $VNC_SES > \$HOME/start-linux-session.log 2>&1; fi; exec sleep 2147483647" > "$VNC_LOG" 2>&1 &
+        nohup pd_login $NO_SYSVIPC $DISTRO --user "$X11_USER" --shared-tmp -- bash -c "${USB_WRAP}export PULSE_SERVER=127.0.0.1; mkdir -p \$HOME/.vnc \$HOME/.config/tigervnc; printf 'geometry=%s\n' '$RESOLUTION' > \$HOME/.vnc/config; printf 'geometry=%s\n' '$RESOLUTION' > \$HOME/.config/tigervnc/config; if command -v vncserver >/dev/null 2>&1; then $VIRGL_ENV vncserver :1; rc=\$?; [ \$rc -eq 0 ] || exit \$rc; else $VIRGL_ENV Xvnc :1 -geometry $RESOLUTION -depth 24 -rfbauth \$HOME/.config/tigervnc/passwd -SecurityTypes VncAuth > \$HOME/.vnc-xvnc.log 2>&1 & sleep 2; export XCURSOR_THEME=Adwaita; export XCURSOR_SIZE=24; DISPLAY=:1 dbus-run-session -- $VNC_SES > \$HOME/start-linux-session.log 2>&1; fi; exec sleep 2147483647" > "$VNC_LOG" 2>&1 &
         echo $! > "$VNC_PIDFILE"
         printf 'Waiting for VNC on port 5901'
         for _i in $(seq 1 20); do
@@ -7759,6 +8354,29 @@ else
     lfa_clear_stale_x1() { local _p=999999; [ -f "$PREFIX/tmp/.X1-lock" ] && _p=$(tr -dc '0-9' < "$PREFIX/tmp/.X1-lock" 2>/dev/null); [ -n "$_p" ] && kill -0 "$_p" 2>/dev/null && return 0; rm -f "$PREFIX/tmp/.X11-unix/X1" "$PREFIX/tmp/.X1-lock" 2>/dev/null; }
 fi
 
+# USB auto mode: `lfa usb enable` is enough. When it is on, lfa-usb-auto
+# prepares the device view and re-runs this launcher with the bindings
+# exported; without a device it just runs the launcher.
+if [ "${LFA_USB_AUTO_DONE:-}" != "1" ] && [ -x "$PREFIX/bin/lfa-usb-auto" ]; then
+    exec "$PREFIX/bin/lfa-usb-auto" -- "$0" "$@"
+fi
+USB_BIND=()
+[ -n "${LFA_USB_BIND:-}" ] && USB_BIND+=(--bind "$LFA_USB_BIND")
+if [ -n "${LFA_USB_DEVBIND:-}" ]; then
+    _ub_ifs="$IFS"; IFS=';'
+    for _ub in $LFA_USB_DEVBIND; do [ -n "$_ub" ] && USB_BIND+=(--bind "$_ub"); done
+    IFS="$_ub_ifs"; unset _ub_ifs _ub
+fi
+if [ -n "${LFA_STORAGE_BIND:-}" ]; then
+    _st_ifs="$IFS"; IFS=';'
+    for _st in $LFA_STORAGE_BIND; do [ -n "$_st" ] && USB_BIND+=(--bind "$_st"); done
+    IFS="$_st_ifs"; unset _st_ifs _st
+fi
+USB_WRAP=""
+if [ -n "${LFA_USB_PRELOAD:-}" ] && [ -n "${LFA_USB_MAP:-}" ]; then
+    USB_WRAP="export LD_PRELOAD=$LFA_USB_PRELOAD; export LFA_USB_MAP=$LFA_USB_MAP; "
+fi
+
 TERM_MODE=""
 EXPLICIT_INSTANCE=0
 PRESELECT_INSTANCE=""
@@ -7838,10 +8456,29 @@ else
     echo "2) User terminal ('$TERM_USER' account)"
     read -p "Select [1-2, default 1]: " TERM_CHOICE
 fi
+if [ -n "${LFA_STORAGE_BIND:-}" ]; then
+    _st_rfs="$(lfa_rootfs "$DISTRO" 2>/dev/null || true)"
+    if [ -n "$_st_rfs" ]; then
+        _st_ifs="$IFS"; IFS=';'
+        for _st in $LFA_STORAGE_BIND; do
+            [ -n "$_st" ] && mkdir -p "$_st_rfs${_st##*:}" 2>/dev/null || true
+        done
+        IFS="$_st_ifs"; unset _st_ifs _st
+    fi
+    unset _st_rfs
+fi
 if [ "$TERM_CHOICE" == "2" ]; then
-    proot-distro login $NO_SYSVIPC $DISTRO --user "$TERM_USER" --shared-tmp -- /bin/bash -l
+    if [ -n "$USB_WRAP" ]; then
+        proot-distro login $NO_SYSVIPC "${USB_BIND[@]}" $DISTRO --user "$TERM_USER" --shared-tmp -- bash -c "${USB_WRAP}exec /bin/bash -l"
+    else
+        proot-distro login $NO_SYSVIPC "${USB_BIND[@]}" $DISTRO --user "$TERM_USER" --shared-tmp -- /bin/bash -l
+    fi
 else
-    proot-distro login $NO_SYSVIPC $DISTRO --shared-tmp -- /bin/bash -l
+    if [ -n "$USB_WRAP" ]; then
+        proot-distro login $NO_SYSVIPC "${USB_BIND[@]}" $DISTRO --shared-tmp -- bash -c "${USB_WRAP}exec /bin/bash -l"
+    else
+        proot-distro login $NO_SYSVIPC "${USB_BIND[@]}" $DISTRO --shared-tmp -- /bin/bash -l
+    fi
 fi
 EOF
     chmod +x $PREFIX/bin/terminal-linux
