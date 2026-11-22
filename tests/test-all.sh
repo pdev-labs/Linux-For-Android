@@ -1204,6 +1204,39 @@ check "Y1 notice now off" 'notice: off' "$T/y1-notice2.log"
 check "Y1 notice back on" 'notice: on' "$T/y1-notice4.log"
 "$LFA" bogus > "$T/y1-bogus.log" 2>&1; rc=$?; [ "$rc" = "2" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y1 bogus exit $rc"; }
 check "Y1 bogus message" 'Unknown command: bogus' "$T/y1-bogus.log"
+
+# Short commands must reach the same handler as the long form.
+alias_same() {  # $1 = label, $2 = short words, $3 = long words
+    # shellcheck disable=SC2086
+    "$LFA" $2 > "$T/y1-alias-short.log" 2>&1
+    # shellcheck disable=SC2086
+    "$LFA" $3 > "$T/y1-alias-long.log" 2>&1
+    if cmp -s "$T/y1-alias-short.log" "$T/y1-alias-long.log"; then
+        pass=$((pass+1))
+    else
+        fail=$((fail+1)); echo "FAIL: Y1 alias '$2' differs from '$3' ($1)"
+    fi
+}
+alias_same "version" "ver" "version"
+alias_same "list" "ls" "list"
+alias_same "compat list" "cx ls" "compat list"
+alias_same "appimage list" "appimage ls" "appimage list"
+alias_same "notice status" "notice st" "notice status"
+alias_same "android status" "android st" "android status"
+alias_same "storage status" "storage st" "storage status"
+alias_same "usb list" "usb ls" "usb list"
+# Commands whose first letter is shared with another one stay long: `s` and
+# `usb st` must be rejected, not guessed.
+"$LFA" s > "$T/y1-alias-ambiguous.log" 2>&1; rc=$?
+[ "$rc" = "2" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y1 short 's' should be rejected, exit $rc"; }
+check "Y1 ambiguous short refused" 'Unknown command: s' "$T/y1-alias-ambiguous.log"
+"$LFA" usb st > "$T/y1-alias-usbst.log" 2>&1; rc=$?
+[ "$rc" = "2" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y1 'usb st' should be rejected, exit $rc"; }
+check "Y1 usb status stays long" 'Unknown usb command: st' "$T/y1-alias-usbst.log"
+# desktop is documented as start; an option error proves it reached that parser.
+"$LFA" desktop --bogus > "$T/y1-alias-desktop.log" 2>&1; rc=$?
+[ "$rc" = "2" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y1 desktop alias exit $rc"; }
+check "Y1 desktop alias" 'Unknown option: --bogus' "$T/y1-alias-desktop.log"
 check "Y1 notice text generated" 'start-linux now opens the advanced menu' "$T/prefix/bin/start-linux"
 check "Y1 notice bypass env" 'LFA_NO_NOTICE' "$T/prefix/bin/start-linux"
 check "Y1 linux wrapper desktop" '--desktop' "$T/prefix/bin/linux"
@@ -1492,7 +1525,7 @@ printf 'DISTRO="debian"\nUSER_NAME="user"\nDE="xfce4"\n' \
     > "$UROOT/etc/termux-linux-manager.conf"
 
 "$LFA" help > "$T/y11-help.log" 2>&1
-check "Y11 top-level help" 'usb           real USB devices' "$T/y11-help.log"
+check "Y11 top-level help" 'real USB devices' "$T/y11-help.log"
 "$LFA" usb help > "$T/y11-usbhelp.log" 2>&1; rc=$?
 [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y11 usb help exit $rc"; }
 check "Y11 usb help exec" 'exec DEV -- COMMAND' "$T/y11-usbhelp.log"

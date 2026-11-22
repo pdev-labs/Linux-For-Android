@@ -7,7 +7,7 @@ Status values:
 
 | Status | Meaning |
 |---|---|
-| `done` | code changed, suite green (`PASS=858 FAIL=0`), lint clean |
+| `done` | code changed, suite green (`PASS=872 FAIL=0`), lint clean |
 | `partial` | the main risk is addressed; a documented remainder is listed |
 | `deferred` | deliberately not fixed in this pass, with the reason recorded |
 | `device` | also exercised on the Vivo V2437 |
@@ -53,7 +53,7 @@ Lint: `shellcheck -S warning` clean, `bash -n` clean, CI workflow added.
 | Android 5/6 refusal | `done` | explicit explanation, `--remove-old` warning, VNC restore command |
 | `start-linux` notice | `done` | stderr, interactive classic runs only; `lfa notice`, `--no-notice`, `LFA_NO_NOTICE` |
 | Boot script ownership | `done` | switching a non-autostart instance no longer hijacks another instance's boot script |
-| Host suite | `done` | `PASS=858 FAIL=0`; Y1-Y11 cover CLI, switch, removal, guard, `-i`, legacy, SDK 24/25, compat/android, matrix, AppImage, USB bridge (attach/tty/flash) |
+| Host suite | `done` | `PASS=872 FAIL=0`; Y1-Y11 cover CLI, switch, removal, guard, `-i`, legacy, SDK 24/25, compat/android, matrix, AppImage, USB bridge (attach/tty/flash), and the short commands |
 | Device verification | `done` | Vivo V2437 (SDK 36): VNC `PASS=14`, Both switch `PASS=22`, X11 `PASS=14`, VirGL fallback, shims, bridge, `--software`; Oppo SDK 22 pending (off network) |
 
 ## Android CI and compatibility layers (2026-11-05)
@@ -81,8 +81,19 @@ Lint: `shellcheck -S warning` clean, `bash -n` clean, CI workflow added.
 | sysfs view | `done` | `lib/usb-desc.py --sysfs` writes device, configuration, interface and endpoint files from the real descriptors; `attach` binds it over `/sys/bus/usb/devices`; preload reports `SYSFS_MAGIC` and stubs the udev monitor |
 | libusb enumeration | `done` | host `lsusb`/libusb 1.0.27 enumerated the synthetic tree with strings, interface class, endpoint and packet size; `lsusb -t` stays empty without a root hub |
 | serial bridge | `done` | `lib/lfa-usb-tty.py` bridges bulk endpoints to a pty; CDC-ACM/CP210x/CH340 baud, DTR/RTS, and line-state merging; fake-device plumbing test relays bytes both ways |
-| flashing | `done` | `lfa usb flash` installs and runs `esptool` inside the guest; `probe`/`write`/... map to v4 `write_flash` or v5 `write-flash` |
+| flashing | `done` | `lfa usb flash` installs and runs `esptool` inside the guest; `probe`, `flash_id`, and `write` map to v4 `write_flash` or v5 `write-flash` |
 | real hardware | `pending` | needs a phone with OTG: `lfa usb attach` + `lsusb -v`, `lfa usb tty`, then a board flash |
+
+## Short commands and options (2026-11-22)
+
+| Item | Status | Notes |
+|---|---|---|
+| Top-level commands | `done` | `i`, `in`, `ls`, `l`, `sh`, `sw`, `as`, `upg`, `fx`, `doc`, `bk`, `rs`, `rm`, `cx`, `ai`, `diag`, `ver`, `desktop` resolve to the long handlers; `status`, `stop`, `usb`, `storage`, and `android` stay spelled out |
+| USB commands | `done` | `ls`, `l`, `rf`, `sc`, `w`, `en`, `dis`, `at`, `t`, `x`, `fl`, `bt`, `blk`; `storage` has the full synonym `sdcard` |
+| Storage, Android, compat, AppImage, notice | `done` | `st`, `fx`, `x`, `o`, `d`, `pl` for storage data; `st`, `in`, `perm`, `rf`, `t`, `en`, `dis`, `br`, `pp` for android; `ls`, `st`, `ex`, `en`, `dis` for compat; `a` for appimage add; `st` for notice status |
+| Options | `done` | `-D`, `-u`, `-H`, `-t`, `-s`, `-a` for install; `-r`, `-k`, `-f` for switch; `-x`, `-v`, `-r` for start; `-j`, `-d`, `-b`, `-C`, `-n`, `-c`, `-v`, `-y`, `-f` for USB |
+| Refusal of ambiguous names | `done` | `lfa s` and `lfa usb st` fail with `Unknown ... command` instead of guessing |
+| Tests and docs | `done` | table-driven checks compare each short form with its long form; `lfa desktop` is exercised; README, `docs/USB.md`, and the help screens show both forms |
 
 ## Security
 

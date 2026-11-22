@@ -203,13 +203,13 @@ valid inside the guest. `lfa usb attach` uses that to build a real port:
   rejects syspaths elsewhere), and replaces the udev hotplug monitor with an
   idle pipe (Android has no udev daemon).
 
-The node name is therefore virtual, but the descriptor and every `ioctl`,
-`read`, and `write` are the real ones. A plain regular-file placeholder would
+The node name is virtual. The descriptor, and every `ioctl`, `read` and
+`write` on it, are real. A plain regular-file placeholder would
 open successfully and then fail every `USBDEVFS_*` request, which is why LFA
 does not use one. `lfa usb tty` builds on the same descriptor: it claims the
 bulk interface and bridges it to a pty, with baud and DTR/RTS forwarded, so
 serial tools see `/dev/ttyUSB0`. `lfa usb exec` remains the raw-descriptor
-door for guests where the preload cannot be built.
+route for guests where the preload cannot be built.
 
 ## Storage model
 

@@ -124,7 +124,7 @@ It is not a kernel or root bridge.
 | Clipboard, notifications, vibrate, torch, share | yes | Android-side actions |
 | Wi-Fi information | yes | connection/scan data, not full control |
 | Telephony / SMS / contacts | yes, with permissions | Android APIs |
-| USB | partial, implemented | `lfa usb` lists real devices, maps the Termux:API descriptor to `/dev/bus/usb` and `/dev/ttyUSB0` with a preload, and runs esptool in the guest; kernel drivers still do not attach (see [USB.md](USB.md)) |
+| USB | partial | `lfa usb` lists real devices, maps the Termux:API descriptor to `/dev/bus/usb` and `/dev/ttyUSB0` with a preload, and runs esptool in the guest; kernel drivers still do not attach (see [USB.md](USB.md)) |
 | Bluetooth | partial / version dependent | some Android APIs, not BlueZ HCI |
 | Kernel modules, `mount`, namespaces, cgroups | no | unavailable |
 | Raw sockets, TUN/TAP, iptables | no | unavailable |

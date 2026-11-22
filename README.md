@@ -133,7 +133,7 @@ hardware, not simulated. Full details, root causes, and evidence are in
 | Alpine 3.18 (Android 5) | Yes | Yes | legacy VNC desktop, panel works; X11 and Both hidden | v1.7.1 |
 | Ubuntu GNOME 46 (experimental) | Yes | Yes | shell and apps run; session services missing | v1.7.0 |
 
-> The test suite runs `858` checks with 0 failures. The same suite runs on the
+> The test suite runs `872` checks with 0 failures. The same suite runs on the
 > devices (`tests/device-matrix.sh`). The table is as of v1.7.1. Ubuntu was
 > re-verified on v1.7.1, and Alpine 3.18 was re-verified on Android 5 on
 > 2026-11-04; the other rows were last verified on v1.7.0. A row is
@@ -459,29 +459,33 @@ is accepted.
 
 | Command | What it does |
 | --- | --- |
-| `lfa install` | install without menus; accepts `--distro`, `--desktop`, `--backend`, `--autostart`, `--user`, `--hostname`, `--timezone`, `--software`, and `-i` |
-| `lfa list` | list installed distributions (`--json` for scripts) |
-| `lfa status` | show desktop, backend, autostart, and running state (`--json`) |
-| `lfa start` | start the desktop; `--x11` or `--vnc` forces a backend, `--restart` replaces a running session |
-| `lfa shell` | open a terminal; `--root` or `--user` picks the account |
+| `lfa install` (`i`, `in`) | install without menus; accepts `-d/--distro`, `-D/--desktop`, `-b/--backend`, `-a/--autostart`, `-u/--user`, `-H/--hostname`, `-t/--timezone`, `-s/--software`, and `-i` |
+| `lfa list` (`ls`, `l`) | list installed distributions (`-j/--json` for scripts) |
+| `lfa status` | show desktop, backend, autostart, and running state (`-j/--json`) |
+| `lfa start` (`desktop`) | start the desktop; `-x/--x11` or `-v/--vnc` forces a backend, `-r/--restart` replaces a running session |
+| `lfa shell` (`sh`) | open a terminal; `--root` or `-u/--user` picks the account |
 | `lfa stop` | stop a desktop; `--all` stops every instance |
-| `lfa switch` | switch `x11`, `vnc`, or `both`; see below |
-| `lfa autostart` | set boot desktop to `x11`, `vnc`, or `none` |
-| `lfa update` | update one distribution |
-| `lfa fix` | apply the latest manager fixes to one distribution, no menus |
-| `lfa doctor` | repair apt/dpkg and the manager files |
-| `lfa backup` | write `~/<instance>-backup.tar.gz` |
-| `lfa restore` | restore a backup file |
-| `lfa remove` | delete a distribution (`-y` skips the question) |
-| `lfa compat` | list, explain, enable, or disable compatibility shims |
+| `lfa switch` (`sw`) | switch `x11`, `vnc`, or `both`; `-r` removes the old backend's packages, `-k` keeps them, `-f` forces |
+| `lfa autostart` (`as`) | set boot desktop to `x11`, `vnc`, or `none` |
+| `lfa update` (`upg`) | update one distribution |
+| `lfa fix` (`fx`) | apply the latest manager fixes to one distribution, no menus |
+| `lfa doctor` (`doc`) | repair apt/dpkg and the manager files |
+| `lfa backup` (`bk`) | write `~/<instance>-backup.tar.gz` |
+| `lfa restore` (`rs`) | restore a backup file |
+| `lfa remove` (`rm`) | delete a distribution (`-y` skips the question) |
+| `lfa compat` (`cx`) | list, explain, enable, or disable compatibility shims |
 | `lfa android` | check, install, test, and enable the Termux:API bridge |
 | `lfa usb` | list, scan, attach, tty, flash, and exec real USB devices through Termux:API |
-| `lfa appimage` / `lfa app` | extract an AppImage once and add a menu entry |
+| `lfa appimage` (`app`, `ai`) | extract an AppImage once and add a menu entry |
 | `lfa run` | run an AppImage once without installing it |
 | `lfa storage` | Android storage status, repair, run, and protected data helpers |
-| `lfa diagnostics` | write a redacted support bundle |
+| `lfa diagnostics` (`diag`) | write a redacted support bundle |
 | `lfa notice` | `on`, `off`, or `status` for the `start-linux` change notice |
-| `lfa version` / `lfa help` | version and command list |
+| `lfa version` (`ver`) / `lfa help` | version and command list |
+
+Short commands exist only where they cannot be confused with another one:
+`status`, `stop`, `usb`, `storage`, and `android` stay spelled out. The long
+forms always work.
 
 Examples:
 
@@ -538,9 +542,9 @@ The full list, with reasons, is in
 
 ### USB devices
 
-`lfa usb` shows the USB devices Android actually exposes and gives a guest a
-real userspace USB port. Enumeration, descriptors and transfers go through
-Termux:API; nothing is simulated at the transfer level.
+`lfa usb` shows the USB devices Android exposes and gives a guest a real
+userspace USB port. Enumeration, descriptors and transfers go through
+Termux:API to the device itself.
 
 ```bash
 lfa usb status                  # Termux:API, host mode, bridge state
@@ -557,6 +561,10 @@ lfa usb watch --interval 5      # poll for hotplug
 lfa usb exec 001/002 -- lfa-usb desc
 ```
 
+Short forms work for the uncluttered ones: `lfa usb ls`, `sc`, `rf`, `en`,
+`dis`, `at`, `t`, `x`, `fl`, `bt`, `blk`. `status` and `storage` stay spelled
+out because `st` fits both.
+
 `attach` maps the real usbfs descriptor onto `/dev/bus/usb/BBB/DDD` with a
 small preload and binds a sysfs tree built from the real descriptors, so
 `lsusb`, PyUSB, dfu-util and other libusb tools work unmodified. `tty` bridges
@@ -564,9 +572,8 @@ the device's bulk endpoints to a pty, so `picocom` and `esptool` see a normal
 `/dev/ttyUSB0`; DTR/RTS and baud changes are forwarded to the chip. `exec`
 stays available for the raw descriptor in `TERMUX_USB_FD`.
 
-proot still cannot create device nodes; the node comes from the preload, not
-from `mknod`. Kernel drivers, USB audio, and printer queues therefore still do
-not attach. The full model, requirements, security notes, and troubleshooting
+proot cannot create device nodes, so the node comes from the preload. Kernel
+drivers, USB audio and printer queues therefore still do not attach. The full model, requirements, security notes, and troubleshooting
 are in [docs/USB.md](docs/USB.md).
 
 ### AppImages
@@ -1554,7 +1561,7 @@ plus `script` from util-linux for the pty test, which is skipped if absent:
 
 ```bash
 chmod +x tests/test-all.sh
-./tests/test-all.sh   # expect: PASS=858 FAIL=0
+./tests/test-all.sh   # expect: PASS=872 FAIL=0
 ```
 
 The suite is deliberately stubbed. It cannot prove a desktop actually appears.

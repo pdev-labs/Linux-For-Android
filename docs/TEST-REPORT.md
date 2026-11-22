@@ -1,6 +1,6 @@
 # Test report for v1.7.1
 
-> Current development suite: `PASS=858 FAIL=0`.
+> Current development suite: `PASS=872 FAIL=0`.
 
 ## USB bridge, 2026-11-18
 
@@ -11,7 +11,7 @@ phone with an OTG adapter; do not claim them before that run.
 
 | Check | Result |
 |---|---|
-| Host suite (`./tests/test-all.sh`) | `PASS=858 FAIL=0` |
+| Host suite (`./tests/test-all.sh`) | `PASS=872 FAIL=0` |
 | Descriptor parser (`python3 lib/usb-desc.py --selftest`) | device and configuration descriptors parsed; sysfs blob built |
 | Serial bridge (`python3 lib/lfa-usb-tty.py --selftest`) | CH340 divisor encoding, CDC/CP210x detection, endpoint selection |
 | Preload build | `lib/lfa-usb-node.c` built for the guest architecture, no `DT_NEEDED`; aarch64 prebuilt bundled |
@@ -49,7 +49,7 @@ storage changes.
 
 | Check | Result |
 |---|---|
-| Host suite | `PASS=742 FAIL=0` |
+| Host suite | `PASS=627 FAIL=0` |
 | Thunar false X | gid 1023; folder icons normal; screenshot checked |
 | `lfa storage exec` | shell and Python scripts from `/storage/emulated/0` ran from a `/tmp` copy |
 | `lfa storage data` | adb at `127.0.0.1:5555`; `list` and `pull` worked for `Android/data` and `Android/obb`; guest read the copy |
@@ -73,7 +73,7 @@ the network during this pass, so the legacy-device rows remain pending.
 
 | Check | Result |
 |---|---|
-| Host suite (`./tests/test-all.sh`) | `PASS=742 FAIL=0` |
+| Host suite (`./tests/test-all.sh`) | `PASS=627 FAIL=0` |
 | On-device VNC scenario (`termux-e2e.sh`) | `PASS=14 FAIL=0` |
 | On-device Both → VNC/X11 switch | `PASS=22 FAIL=0` |
 | On-device X11 scenario | `PASS=14 FAIL=0` |

@@ -1,17 +1,17 @@
 # USB devices through Termux:API
 
-LFA gives the Linux guest a **real userspace USB port**: the device list comes
+LFA gives the Linux guest a real userspace USB port. The device list comes
 from Android, the descriptors come from the device, and every transfer goes
 through the usbfs descriptor that Termux:API opened. Inside the guest you get
 `/dev/bus/usb/001/002` for libusb programs and `/dev/ttyUSB0` for serial
 programs, so unmodified tools such as `lsusb`, PyUSB, dfu-util, picocom and
 `esptool` work the way they do on a desktop.
 
-Nothing is simulated at the transfer level. What *is* virtualised is the
-filesystem name: proot cannot create device nodes (`mknod` needs root), so a
-small preload object maps `open()` on the node path to the inherited usbfs
-descriptor. Everything after `open()` — `ioctl`, `read`, `write`, `close` — is
-the real kernel object.
+Transfers go to the real kernel object. Only the filesystem name is virtual:
+proot cannot create device nodes (`mknod` needs root), so a small preload
+object maps `open()` on the node path to the inherited usbfs descriptor.
+Everything after that (`ioctl`, `read`, `write`, `close`) uses the real
+descriptor.
 
 ## What is real, and what is not
 
@@ -19,17 +19,17 @@ the real kernel object.
 |---|---|
 | Device list (`Bus`, `Device`, path) | real, from `termux-usb -l` |
 | Descriptors, strings, interfaces, endpoints | real, read with `USBDEVFS_CONTROL` |
-| `/dev/bus/usb/BBB/DDD` | a real device path (shadow tree bound over `/dev/bus/usb`) plus a preload that opens the inherited descriptor; proot cannot mknod |
+| `/dev/bus/usb/BBB/DDD` | a device path (shadow tree bound over `/dev/bus/usb`) plus a preload that opens the inherited descriptor; proot cannot mknod |
 | Data transfers, control/bulk/interrupt requests | real, straight to the kernel driver |
-| `/sys/bus/usb/devices` | synthetic files filled with the **real** descriptors; a session binds a minimal readable `/sys/bus` and `/sys/class` so libudev can scan them |
+| `/sys/bus/usb/devices` | synthetic files filled with the real descriptors; a session binds a minimal readable `/sys/bus` and `/sys/class` so libudev can scan them |
 | `/dev/ttyUSB0` | pty bridged to the device's real bulk endpoints |
 | Hotplug events | polled with `lfa usb watch`; Termux:API has no event stream |
 | Kernel drivers (`usbhid`, `usb-storage`, ALSA USB audio) | not attached; userspace access only |
 
-The mental model is "a real USB client with a real port name", not "a second
-kernel USB stack". Programs that need a kernel driver (mounting a USB stick,
-USB audio, a printer queue) still cannot use the device, because Android owns
-the kernel side.
+This is a real USB client with a real port name. It is not a second kernel
+USB stack: programs that need a kernel driver (mounting a USB stick, USB
+audio, a printer queue) still cannot use the device, because Android owns the
+kernel side.
 
 ## Requirements
 
@@ -96,9 +96,9 @@ reads the published bridge and needs no permission dialog.
 ## Automatic mode: enable once
 
 `lfa usb enable -i NAME` also turns on automatic mode. After that, every
-session LFA starts — `lfa shell`, `lfa desktop` (and the Terminal shortcut,
-which use the same launchers) — is opened with the device already inside:
-no `lfa usb attach`, no `lfa usb scan`, no environment variables.
+session LFA starts (`lfa shell`, `lfa desktop`, and the Terminal shortcut,
+which use the same launchers) is opened with the device already inside: no
+`lfa usb attach`, no `lfa usb scan`, no environment variables.
 
 ```bash
 lfa usb enable -i ubuntu-5623     # once
@@ -129,27 +129,34 @@ Limits of automatic mode:
 ## Commands
 
 ```
-lfa usb status                 Termux:API, host feature, bridge, preload state
-lfa usb list [--json]          live devices; descriptors when already cached
-lfa usb refresh                re-read `termux-usb -l` and rewrite the guest view
-lfa usb scan [DEV...]          request permission and read real descriptors
-lfa usb storage [--json]       list storage cards Android exposes to apps
-lfa usb watch [--interval N]   poll for hotplug, print add/remove events
-lfa usb enable [-i NAME]       install helpers, preload, tty bridge, auto mode
-lfa usb disable [-i NAME]      remove those helpers
-lfa usb attach [DEV] [-- CMD]  session with /dev/bus/usb/BBB/DDD and sysfs
-lfa usb tty [DEV] [-- CMD]     session with /dev/ttyUSB0
-lfa usb exec DEV -- CMD        raw descriptor only (no preload, no node)
-lfa usb flash [--install] ...  run esptool in the guest through the tty bridge
+lfa usb status                   Termux:API, host feature, bridge, preload state
+lfa usb list | ls | l [--json]   live devices; descriptors when already cached
+lfa usb refresh | rf             re-read `termux-usb -l` and rewrite the guest view
+lfa usb scan | sc [DEV...]       request permission and read real descriptors
+lfa usb storage | sdcard         list storage cards Android exposes to apps
+lfa usb watch | w [--interval N] poll for hotplug, print add/remove events
+lfa usb enable | en [-i NAME]    install helpers, preload, tty bridge, auto mode
+lfa usb disable | dis [-i NAME]  remove those helpers
+lfa usb attach | at [DEV] [-- CMD...]
+                                 session with /dev/bus/usb/BBB/DDD and sysfs
+lfa usb tty | t [DEV] [-- CMD...]
+                                 session with /dev/ttyUSB0
+lfa usb exec | x DEV -- CMD      raw descriptor only (no preload, no node)
+lfa usb flash | fl [--install]   run esptool in the guest through the tty bridge
+lfa usb bot | bt [--probe]       read the card's sectors over USB (no block node)
+lfa usb block | blk              show why raw block access needs root
 ```
+
+`status` and `storage` have no short form: `st` would fit both. `sdcard` is a
+full synonym for `storage`.
 
 `DEV` is exactly what `termux-usb -l` reports (`/dev/bus/usb/001/002`).
 `001/002` and `001:002` are accepted too. With one device attached, `DEV` may
 be omitted.
 
-Sessions accept `-i NAME`, `--user NAME`, `--root`, `--cwd DIR`,
+Sessions accept `-i NAME`, `-u/--user NAME`, `-C/--cwd DIR`, `--root`,
 `--no-permission`, and (for `attach`) `--no-sysfs`. `tty` and `flash` also
-accept `--baud N` and `--device DEV`.
+accept `-b/--baud N` and `-d/--device DEV`.
 
 `lfa usb enable -i NAME` remembers that instance, so later `scan`, `attach`,
 `tty` and `flash` work without repeating `-i` even when several distributions
@@ -227,9 +234,9 @@ The bridge understands the usual USB-UART chips:
 
 Baud changes made by the client are read from the pty termios and forwarded to
 the real chip. DTR/RTS changes (`TIOCMBIS`/`TIOCMBIC`/`TIOCMSET`) are caught by
-the preload and sent to the bridge, which keeps the two lines in step —
-setting one does not clear the other — so esptool's automatic reset sequence
-reaches the board. `TIOCMGET` reports DTR and RTS as set and CTS/DSR as
+the preload and sent to the bridge, which keeps the two lines in step (setting
+one does not clear the other), so esptool's automatic reset sequence reaches
+the board. `TIOCMGET` reports DTR and RTS as set and CTS/DSR as
 asserted, which is what a board with a working auto-reset circuit looks like
 to pyserial. If a board has no auto-reset circuit, hold **BOOT**, tap
 **EN/RST**, release **BOOT**, then run the flash command.
@@ -262,10 +269,10 @@ have no bound driver, which is why they work.
 
 ## Storage cards (SD, card readers, USB sticks)
 
-A mass-storage device is the one thing this bridge cannot turn into
-`/dev/sdb1`. Android's own `usb-storage` driver claims the reader's
-interface and mounts the card at the kernel level; proot has no block
-layer, cannot create block nodes, and the guest has no kernel of its own.
+A mass-storage device cannot become `/dev/sdb1` in this bridge. Android's
+own `usb-storage` driver claims the reader's interface and mounts the card at
+the kernel level; proot has no block layer, cannot create block nodes, and the
+guest has no kernel of its own.
 Bulk transfers to a claimed interface fail with `EBUSY`, so a userspace
 reader cannot reach the files either without root.
 
@@ -310,7 +317,7 @@ is root/media_rw-only and unusable from Termux.
 
 ## Raw block devices (`dd`, Ventoy, Etcher)
 
-The card *is* a block device: Android's `vold` mounts it from
+The card is a block device. Android's `vold` mounts it from
 `/dev/block/vold/public:8,65`. That node belongs to `vold` and `init`; an
 unprivileged app is refused at three separate doors:
 
@@ -333,11 +340,10 @@ lfa usb block
 # still fully usable through Android's mount (lfa usb storage).
 ```
 
-Note the last lines: LFA **refuses to fake** the device. A simulated
-`/dev/sdb1` would make `dd`, `Ventoy2Disk` and `Etcher` report success while
-writing to a plain file, leaving the card untouched — the worst possible
-outcome for a flashing tool. Directory access (`lfa usb storage`) is honest;
-raw block access is not available here and says so.
+LFA does not fake the device. A simulated `/dev/sdb1` would make `dd`,
+`Ventoy2Disk` and `Etcher` report success while writing to a plain file, and
+the card would stay untouched. Directory access through `lfa usb storage`
+works. Raw block access is not available here, and the command says so.
 
 ### With root
 
@@ -352,19 +358,19 @@ It unmounts the volume with `sm`, writes with `dd conv=fsync`, reads the same
 number of bytes back, compares SHA-256, and remounts. On a non-rooted phone
 this exits `3` and prints why.
 
-Even with root the write happens in Termux, not in the guest: proot's `/dev`
-is a synthetic tree, so a guest session cannot see `/dev/block`. If you want
+Even with root, the write happens in Termux. Proot's `/dev` is a synthetic
+tree, so a guest session cannot see `/dev/block`. If you want
 the writer inside the guest, bind the node in from Termux as root
 (`su -c 'mount --bind /dev/block/vold/public:8,65 ...'`) and start the
 session with that bind.
 
 ### Without root: talk to the reader directly
 
-A block node is not the only way to reach the sectors. It is only the way
-the kernel offers. Apps like EtchDroid flash drives on unrooted phones by
-asking Android to **detach its `usb-storage` driver** from the reader, then
-speaking USB Mass Storage Bulk-Only Transport (BOT) over the descriptor
-`termux-usb` handed over. No `/dev` node is involved.
+The kernel's block node is one route to the sectors. Another is to speak USB
+Mass Storage directly. Apps like EtchDroid flash drives on unrooted phones by
+asking Android to detach its `usb-storage` driver from the reader, then
+sending USB Mass Storage Bulk-Only Transport (BOT) commands over the
+descriptor `termux-usb` handed over. No `/dev` node is involved.
 
 LFA does the same:
 
@@ -392,25 +398,25 @@ it, so a truncated or refused transfer cannot pass as success.
 Things to know:
 
 - While the command runs, Android's mount of the card is gone: it will
-  disappear from `/storage` and from `lfa usb storage`. That is unavoidable,
-  because only one owner can have the device. Replug the reader afterwards
+  disappear from `/storage` and from `lfa usb storage`. Only one owner can
+  have the device, so this cannot be avoided. Replug the reader afterwards
   and Android mounts it again.
 - The detach is a permission the Android USB host API grants to the app that
   owns the descriptor. If a ROM refuses it, the probe fails with the exact
-  errno (`EBUSY`, `EPERM`) instead of pretending.
+  errno (`EBUSY`, `EPERM`).
 - `--write` always needs `--yes`; without it the tool only explains what it
   would erase. There is no dry-run that writes part of an image.
 - Do not run `--write` while the card is mounted and in use. LFA detaches the
   driver, so vold cannot flush anything after that point.
 
-If the detach is refused, the honest fallbacks remain: `lfa usb block` with
-root, or a PC for the one-time Ventoy install.
+If the detach is refused, the options are `lfa usb block` with root, or a PC
+for the one-time Ventoy install.
 
 ### From a desktop session: the card as an image file
 
-The guest still cannot have `/dev/sdb`: proot has no block layer, no
-`mknod`, no `/dev/loop*` and no `mount(2)`. What it *can* have is the card's
-bytes as a file, and the real tools accept files:
+The guest cannot have `/dev/sdb`: proot has no block layer, no `mknod`, no
+`/dev/loop*` and no `mount(2)`. It can have the card's bytes as a file, and
+the real tools accept files:
 
 ```bash
 lfa usb bot --export ~/card.img      # read-only, sparse
@@ -426,18 +432,18 @@ exit
 lfa usb bot --import ~/card.img --yes   # write back only changed chunks
 ```
 
-`--export` writes a **sparse** file: 1 MiB chunks that are entirely zero
-become holes, so a mostly empty 8 GB card costs only a few MB on disk. The
-read is still the whole card over USB, so expect minutes, not seconds.
+`--export` writes a sparse file: 1 MiB chunks that are entirely zero become
+holes, so a mostly empty 8 GB card costs a few MB on disk. Reading the card
+still takes minutes over USB.
 
 `--import` compares each 1 MiB chunk with the card and writes only the ones
 that differ, then reads those back to confirm. A small edit writes a small
 amount; a brand-new image writes everything.
 
-What works this way: `fdisk`, `sfdisk`, `parted`, `mkfs.*` (files are valid
-targets), `dd`, `fsck`, `debugfs`, byte patching. What does not:
-`losetup`, `mount -o loop`, and installers that insist on `S_ISBLK`
-(Ventoy2Disk). The kernel is still missing; only the storage moved.
+This works with `fdisk`, `sfdisk`, `parted`, `mkfs.*` (files are valid
+targets), `dd`, `fsck`, `debugfs` and byte patching. It does not work with
+`losetup`, `mount -o loop`, or installers that insist on `S_ISBLK`
+(Ventoy2Disk), because those need a kernel block device.
 
 ### Checking an existing Ventoy card
 
@@ -450,11 +456,11 @@ names the filesystem and the volume label:
 This card already has Ventoy: put ISOs on the data partition (/mnt/card).
 ```
 
-`VTOYEFI` is the 32 MB partition Ventoy creates; when it is present the card
-is already bootable and nothing needs flashing. Watch the data partition's
-filesystem: **FAT32 cannot hold an ISO larger than 4 GiB**, so a card with a
-FAT32 data partition needs small ISOs, or a reinstall with Ventoy's default
-exFAT (a PC job, since the installer wants a block device).
+`VTOYEFI` is the 32 MB partition Ventoy creates. When it is present the card
+is already bootable and nothing needs flashing. Check the data partition's
+filesystem: a FAT32 partition cannot hold an ISO larger than 4 GiB, so such a
+card needs small ISOs, or a reinstall with Ventoy's default exFAT (a PC job,
+since the installer wants a block device).
 
 A Bulk-Only session unbinds `usb-storage`, and the driver core only looks
 again when the device re-enumerates. LFA asks for a USB reset afterwards and
@@ -463,16 +469,16 @@ reports whether Android remounted the card; if it did not, replug the reader.
 ### Ventoy without raw writes
 
 Copying ISOs onto an existing Ventoy card works without root, because the
-exFAT data partition is the volume Android mounts:
+data partition is the volume Android mounts:
 
 ```bash
 cp ubuntu.iso /media/CABC-1701/    # or /mnt/card
 sync
 ```
 
-Creating or updating Ventoy itself needs the card's boot sectors, so it is a
-PC job (`Ventoy2Disk.sh -i /dev/sdX`) or a rooted-phone job. There is no
-userspace trick that avoids this: Ventoy boots from its own MBR/GPT code.
+Creating or updating Ventoy needs the card's boot sectors, so it is a PC job
+(`Ventoy2Disk.sh -i /dev/sdX`) or a rooted-phone job. Ventoy boots from its
+own MBR/GPT code, and no userspace tool can replace that.
 
 ## Raw descriptor mode: `lfa usb exec`
 
@@ -520,13 +526,13 @@ events.log      add/remove lines from `lfa usb watch`
 ```
 
 `lfa usb enable` also creates `/run/lfa-usb -> /tmp/lfa-usb` in the guest so
-scripts have a stable-looking path. It is a symlink, not a mount.
+scripts have a stable-looking path. The path is a symlink, not a mount.
 
 Preload builds are cached in `~/.cache/linux-for-android/usb/build/`. The
 descriptor cache lives in `~/.cache/linux-for-android/usb/`. It is keyed by
-bus and device number. **Bus/device numbers are reused** when devices are
-swapped; run `lfa usb scan` again after replacing a device if you need fresh
-strings.
+bus and device number. Bus and device numbers are reused when devices are
+swapped, so run `lfa usb scan` again after replacing a device if you need
+fresh strings.
 
 ## One device at a time
 
@@ -539,7 +545,7 @@ Termux shells if you need two devices; `lfa usb watch` still shows all of them.
 - Android grants USB access per app, per device, per connection. LFA cannot
   bypass that dialog.
 - Sessions run as the desktop user by default. `--root` is explicit for a
-  reason: a USB device is untrusted input. A malicious device can exploit a
+  reason: a USB device is untrusted input, and a malicious one can exploit a
   buggy driver or program.
 - Everyone in the guest can read `/tmp/lfa-usb`, including serial numbers.
   Do not put secrets in the bridge directory.
@@ -588,5 +594,5 @@ and the real libusb/lsusb from the host.
 
 Real hardware still needs a device test: connect a known stick or keyboard,
 run `lfa usb scan`, then `lfa usb attach DEV -- lsusb -v` and compare the
-output with a PC. Flashing a board is the other end-to-end check. Those are
-deliberately not claimed until they are run on a phone.
+output with a PC. Flashing a board is the other end-to-end check. Neither is
+claimed here until it has been run on a phone.

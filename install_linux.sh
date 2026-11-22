@@ -1354,30 +1354,34 @@ Linux for Android - command line
 
 Usage: lfa <command> [options]
 
-  install       install a distro without menus
-  list          list installed distributions
-  status        show backend and autostart state
-  start         start the desktop
-  shell         open a terminal
-  stop          stop the desktop
-  switch        change backend and optionally remove old packages
-  autostart     set the boot backend
-  update        update a distro
-  fix           apply latest fixes to an existing distro
-  doctor        repair a distro
-  backup        create a backup
-  restore       restore a backup
-  remove        delete a distro
-  compat        inspect or enable compatibility shims
-  android       inspect or enable the Termux:API bridge
-  usb           real USB devices: list, scan, attach, tty, flash
-  storage       Android shared storage: status, repair, run helpers
-  appimage      extract and run an AppImage (alias: app)
-  run           run an AppImage once without installing it
-  diagnostics   write a support bundle
-  notice        show, hide, or query the start-linux notice
-  version       print the version
-  help          show this help
+  install (i, in)          install a distro without menus
+  list (ls, l)             list installed distributions
+  status                   show backend and autostart state
+  start (desktop)          start the desktop
+  shell (sh)               open a terminal
+  stop                     stop the desktop
+  switch (sw)              change backend and optionally remove old packages
+  autostart (as)           set the boot backend
+  update (upg)             update a distro
+  fix (fx)                 apply latest fixes to an existing distro
+  doctor (doc)             repair a distro
+  backup (bk)              create a backup
+  restore (rs)             restore a backup
+  remove (rm)              delete a distro
+  compat (cx)              inspect or enable compatibility shims
+  android                  inspect or enable the Termux:API bridge
+  usb                      real USB devices: list, scan, attach, tty, flash
+  storage                  Android shared storage: status, repair, run helpers
+  appimage (app, ai)       extract and run an AppImage
+  run                      run an AppImage once without installing it
+  diagnostics (diag)       write a support bundle
+  notice                   show, hide, or query the start-linux notice
+  version (ver)            print the version
+  help (-h)                show this help
+
+Short commands exist only where they cannot be confused with another one:
+status, stop, usb, storage and android stay spelled out; `desktop` is a
+synonym for `start`.
 
 Global short option:
   -i, --instance NAME
@@ -1385,20 +1389,20 @@ Global short option:
 Install options:
   -d, --distro NAME       ubuntu, debian, kali, fedora, opensuse,
                           void, archlinux, alpine
-      --desktop NAME      xfce4, lxde, mate, gnome, none
+  -D, --desktop NAME      xfce4, lxde, mate, gnome, none
   -b, --backend NAME      x11, vnc, both, none
-      --autostart NAME    x11, vnc, none
-      --user NAME         desktop username
-      --hostname NAME     guest hostname
-      --timezone AREA/CITY
-      --software LIST     comma-separated apps (python,git,node,curl,wget,
+  -a, --autostart NAME    x11, vnc, none
+  -u, --user NAME         desktop username
+  -H, --hostname NAME     guest hostname
+  -t, --timezone AREA/CITY
+  -s, --software LIST     comma-separated apps (python,git,node,curl,wget,
                           antigravity,firefox,chromium,libreoffice,vlc,gimp,
                           htop,neofetch,vscode)
 
 Switch options:
-      --remove-old        remove the packages of the backend being left
-      --keep-packages     keep them (default)
-      --force             remove shared Termux:X11 despite another distro
+  -r, --remove-old        remove the packages of the backend being left
+  -k, --keep-packages     keep them (default)
+  -f, --force             remove shared Termux:X11 despite another distro
 
 Compatibility options:
   lfa compat list|status|explain ID|enable ID|disable ID
@@ -1826,6 +1830,13 @@ lfa_cli_compat() {
     done
     CLI_INSTANCE="$_inst"
     case "$_sub" in
+        ls) _sub=list ;;
+        st) _sub=status ;;
+        ex) _sub=explain ;;
+        en) _sub=enable ;;
+        dis) _sub=disable ;;
+    esac
+    case "$_sub" in
         list|help)
             echo "LFA compatibility layer"
             echo ""
@@ -1834,8 +1845,8 @@ lfa_cli_compat() {
                 printf '  %-10s %-18s %-24s %-12s %s\n' "$_i" "$_s" "$_q" "$_r" "$_d"
             done
             echo ""
-            echo "Enable a shim with: lfa compat enable ID [-i NAME]"
-            echo "Explain one with:   lfa compat explain ID"
+            echo "Enable a shim with: lfa compat enable ID [-i NAME]  (en)"
+            echo "Explain one with:   lfa compat explain ID          (ex)"
             ;;
         status)
             local _root
@@ -1918,7 +1929,7 @@ lfa_cli_compat() {
             lfa_compat_remove_shims "$_id"
             echo "[*] Disabled LFA compatibility shim '$_id'."
             ;;
-        *) echo "Unknown compat command: $_sub" >&2; echo "Usage: lfa compat list|status|explain ID|enable ID|disable ID" >&2; return 2 ;;
+        *) echo "Unknown compat command: $_sub" >&2; echo "Usage: lfa compat list|status|explain ID|enable ID|disable ID" >&2; echo "Short: lfa compat ls|st|ex ID|en ID|dis ID" >&2; return 2 ;;
     esac
 }
 
@@ -1980,19 +1991,30 @@ lfa_android_cmd() {
     CLI_INSTANCE="$_inst"
     local _bridge="$PREFIX/tmp"
     case "$_sub" in
+        st) _sub=status ;;
+        in|i) _sub=install ;;
+        perm) _sub=permissions ;;
+        rf) _sub=refresh ;;
+        t) _sub="test" ;;
+        en) _sub=enable ;;
+        dis) _sub=disable ;;
+        br) _sub=bridge ;;
+        pp) _sub=pump ;;
+    esac
+    case "$_sub" in
         help)
             cat <<'HELP'
 Usage: lfa android COMMAND
 
-  status                 show Termux:API and bridge state
-  install                install the termux-api client package
-  permissions            list the Android permissions to grant
-  test                   run read-only probes (battery, location, clipboard)
-  refresh                write fresh bridge files into $PREFIX/tmp
-  enable CAP             enable battery, location, clipboard or notifications
-  disable CAP            disable a capability
-  bridge CAP             enable CAP and refresh its data now
-  pump                   deliver queued guest notifications
+  status | st            show Termux:API and bridge state
+  install | in, i        install the termux-api client package
+  permissions | perm     list the Android permissions to grant
+  test | t               run read-only probes (battery, location, clipboard)
+  refresh | rf           write fresh bridge files into $PREFIX/tmp
+  enable | en CAP        enable battery, location, clipboard or notifications
+  disable | dis CAP      disable a capability
+  bridge | br CAP        enable CAP and refresh its data now
+  pump | pp              deliver queued guest notifications
 
 The guest sees bridge files under /tmp because proot uses --shared-tmp.
 HELP
@@ -2747,25 +2769,36 @@ lfa_usb_usage() {
 Usage: lfa usb <command> [options]
 
   status                   show Termux:API, USB host, bridge, and shim state
-  list [--json]            list real devices visible through Termux:API
-  refresh                  re-read `termux-usb -l` and rebuild the guest view
-  scan [DEV...]            request permission and read real descriptors
-  storage [--json]         list storage cards Android exposes to apps
-  block [write IMAGE]      show the card's raw block device / write an image
-  bot [DEV] [--probe|--write IMAGE|--export FILE|--import FILE]
+  list | ls | l [--json]   list real devices visible through Termux:API
+  refresh | rf             re-read `termux-usb -l` and rebuild the guest view
+  scan | sc [DEV...]       request permission and read real descriptors
+  storage | sdcard [--json]
+                           list storage cards Android exposes to apps
+  block | blk [write IMAGE]
+                           show the card's raw block device / write an image
+  bot | bt [DEV] [--probe|--write IMAGE|--export FILE|--import FILE]
                            talk USB mass storage directly (no block node)
-  watch [--interval N] [--count N]
+  watch | w [--interval N] [--count N]
                            poll for hotplug and print add/remove events
-  enable [-i NAME]         install helpers, preload, tty bridge, auto mode
-  disable [-i NAME]        remove those guest helpers
+  enable | en [-i NAME]    install helpers, preload, tty bridge, auto mode
+  disable | dis [-i NAME]  remove those guest helpers
   attach [DEV] [-- CMD...] open a guest session with /dev/bus/usb/BBB/DDD
+                           (short: at)
   tty [DEV] [-- CMD...]    open a session with /dev/ttyUSB0 (serial bridge)
+                           (short: t)
   exec DEV -- COMMAND...   run COMMAND with the raw USB fd (no preload)
-  flash [--install] ARGS   flash ESP32/ESP8266 with esptool in the guest
-  help                     show this help
+                           (short: x)
+  flash | fl [--install] ARGS
+                           flash ESP32/ESP8266 with esptool in the guest
+  auto | au                used by the launchers; not needed by hand
+  help | -h                show this help
 
 DEV is /dev/bus/usb/001/002, 001/002, or 001:002. The device path is exactly
 what `termux-usb -l` reports. With one device attached, DEV may be omitted.
+
+Short names exist where they cannot be confused. `status` and `storage` stay
+spelled out because `st` would fit both; `sdcard` is a full synonym for
+`storage`.
 
 Examples:
   lfa usb status
@@ -2793,14 +2826,20 @@ which is why the node comes from the preload instead of mknod.
 
 Options:
   -i, --instance NAME      distribution to use (enable/disable/scan/attach/tty)
-      --user NAME          guest account for attach/tty/exec
+  -u, --user NAME          guest account for attach/tty/exec/bot
+  -C, --cwd DIR            guest working directory (default: user's home)
       --root               run the command as root in the guest
-      --cwd DIR            guest working directory (default: user's home)
-      --device DEV         device for tty/flash (same forms as DEV)
+  -d, --device DEV         device for tty/flash/bot (same forms as DEV)
+  -b, --baud N             serial baud rate for tty/flash (default 115200)
+  -j, --json               machine-readable output of list/scan/storage/block
+  -n, --interval N         watch poll interval in seconds
+  -c, --count N            stop watching after N events
+  -v, --volume ID          block: the card to use
+  -y, --yes                bot: confirm that the card will be erased
+  -f, --full               bot --import: write every chunk
+      --no-verify          bot --write: skip the read-back check
       --no-permission      do not show the Android permission dialog
       --no-sysfs           attach without the synthetic /sys/bus/usb tree
-      --baud N             serial baud rate for tty/flash (default 115200)
-      --json               machine-readable output of list/scan
 USBHELP
 }
 
@@ -2808,7 +2847,7 @@ lfa_usb_list() {
     local _json=0 _unknown=0 _shown=0 _row _b _d
     while [ $# -gt 0 ]; do
         case "$1" in
-            --json) _json=1; shift ;;
+            -j|--json) _json=1; shift ;;
             -h|--help) lfa_usb_usage; return 0 ;;
             *) echo "Unknown option: $1" >&2; return 2 ;;
         esac
@@ -3038,8 +3077,8 @@ lfa_usb_scan() {
     while [ $# -gt 0 ]; do
         case "$1" in
             -i|--instance) _inst="${2:-}"; shift 2 ;;
-            --user) _user="${2:-}"; shift 2 ;;
-            --json) _json=1; shift ;;
+            -u|--user) _user="${2:-}"; shift 2 ;;
+            -j|--json) _json=1; shift ;;
             -h|--help) lfa_usb_usage; return 0 ;;
             --) shift; while [ $# -gt 0 ]; do _devs+=("$1"); shift; done ;;
             -*) echo "Unknown option: $1" >&2; return 2 ;;
@@ -3556,9 +3595,9 @@ lfa_usb_exec() {
     while [ $# -gt 0 ]; do
         case "$1" in
             -i|--instance) _inst="${2:-}"; shift 2 ;;
-            --user) _user="${2:-}"; shift 2 ;;
+            -u|--user) _user="${2:-}"; shift 2 ;;
             --root) _user="root"; shift ;;
-            --cwd) _cwd="${2:-}"; shift 2 ;;
+            -C|--cwd) _cwd="${2:-}"; shift 2 ;;
             --no-permission) _perm=0; shift ;;
             -h|--help) lfa_usb_usage; return 0 ;;
             --) shift; break ;;
@@ -3573,9 +3612,9 @@ lfa_usb_exec() {
     while [ $# -gt 0 ]; do
         case "$1" in
             -i|--instance) _inst="${2:-}"; shift 2 ;;
-            --user) _user="${2:-}"; shift 2 ;;
+            -u|--user) _user="${2:-}"; shift 2 ;;
             --root) _user="root"; shift ;;
-            --cwd) _cwd="${2:-}"; shift 2 ;;
+            -C|--cwd) _cwd="${2:-}"; shift 2 ;;
             --no-permission) _perm=0; shift ;;
             --) shift; break ;;
             *) break ;;
@@ -3674,7 +3713,7 @@ lfa_usb_watch() {
     while [ $# -gt 0 ]; do
         case "$1" in
             --interval|-n) _interval="${2:-3}"; shift 2 ;;
-            --count) _count="${2:-0}"; shift 2 ;;
+            -c|--count) _count="${2:-0}"; shift 2 ;;
             -h|--help) lfa_usb_usage; return 0 ;;
             *) echo "Unknown option: $1" >&2; return 2 ;;
         esac
@@ -4016,7 +4055,7 @@ lfa_usb_storage() {  # [--json]
     local _json=0 _rows _id _path _fs _size _avail _rw
     while [ $# -gt 0 ]; do
         case "$1" in
-            --json) _json=1; shift ;;
+            -j|--json) _json=1; shift ;;
             -h|--help) echo "Usage: lfa usb storage [--json]" >&2; return 0 ;;
             *) echo "Unknown option: $1" >&2; return 2 ;;
         esac
@@ -4127,7 +4166,7 @@ lfa_usb_block() {  # [--json]  — raw block access for the storage cards
     local _json=0 _rows="" _id _node _fs _state _root=no _any=0
     while [ $# -gt 0 ]; do
         case "$1" in
-            --json) _json=1; shift ;;
+            -j|--json) _json=1; shift ;;
             -h|--help) echo "Usage: lfa usb block [--json]" >&2; return 0 ;;
             *) echo "Unknown option: $1" >&2; return 2 ;;
         esac
@@ -4297,11 +4336,11 @@ lfa_usb_bot() {  # [DEV] [--probe|--write IMAGE|--export FILE|--import FILE]
                 _mode="--import"; _file="${2:-}"
                 if [ $# -ge 2 ]; then shift 2; else shift; fi ;;
             --import=*) _mode="--import"; _file="${1#*=}"; shift ;;
-            --full) _full="--full"; shift ;;
+            -f|--full) _full="--full"; shift ;;
             --no-verify) _no_verify="--no-verify"; shift ;;
-            --json) _json="--json"; shift ;;
+            -j|--json) _json="--json"; shift ;;
             --yes|-y) _yes="--yes"; shift ;;
-            --device)
+            -d|--device)
                 _dev="${2:-}"
                 if [ $# -ge 2 ]; then shift 2; else shift; fi ;;
             -h|--help) lfa_usb_usage; return 0 ;;
@@ -4523,10 +4562,10 @@ lfa_usb_attach() {
     while [ $# -gt 0 ]; do
         case "$1" in
             -i|--instance) _inst="${2:-}"; shift 2 ;;
-            --user) _user="${2:-}"; shift 2 ;;
+            -u|--user) _user="${2:-}"; shift 2 ;;
             --root) _user="root"; shift ;;
-            --cwd) _cwd="${2:-}"; shift 2 ;;
-            --device) _dev="${2:-}"; shift 2 ;;
+            -C|--cwd) _cwd="${2:-}"; shift 2 ;;
+            -d|--device) _dev="${2:-}"; shift 2 ;;
             --no-permission) _perm=0; shift ;;
             --no-sysfs) _sysfs=0; shift ;;
             -h|--help) lfa_usb_usage; return 0 ;;
@@ -4543,10 +4582,10 @@ lfa_usb_attach() {
     while [ $# -gt 0 ]; do
         case "$1" in
             -i|--instance) _inst="${2:-}"; shift 2 ;;
-            --user) _user="${2:-}"; shift 2 ;;
+            -u|--user) _user="${2:-}"; shift 2 ;;
             --root) _user="root"; shift ;;
-            --cwd) _cwd="${2:-}"; shift 2 ;;
-            --device) _dev="${2:-}"; shift 2 ;;
+            -C|--cwd) _cwd="${2:-}"; shift 2 ;;
+            -d|--device) _dev="${2:-}"; shift 2 ;;
             --no-permission) _perm=0; shift ;;
             --no-sysfs) _sysfs=0; shift ;;
             -h|--help) lfa_usb_usage; return 0 ;;
@@ -4675,11 +4714,11 @@ lfa_usb_tty() {
     while [ $# -gt 0 ]; do
         case "$1" in
             -i|--instance) _inst="${2:-}"; shift 2 ;;
-            --user) _user="${2:-}"; shift 2 ;;
+            -u|--user) _user="${2:-}"; shift 2 ;;
             --root) _user="root"; shift ;;
-            --cwd) _cwd="${2:-}"; shift 2 ;;
-            --device) _dev="${2:-}"; shift 2 ;;
-            --baud) _baud="${2:-}"; shift 2 ;;
+            -C|--cwd) _cwd="${2:-}"; shift 2 ;;
+            -d|--device) _dev="${2:-}"; shift 2 ;;
+            -b|--baud) _baud="${2:-}"; shift 2 ;;
             --no-permission) _perm=0; shift ;;
             -h|--help) lfa_usb_usage; return 0 ;;
             --) shift; break ;;
@@ -4695,11 +4734,11 @@ lfa_usb_tty() {
     while [ $# -gt 0 ]; do
         case "$1" in
             -i|--instance) _inst="${2:-}"; shift 2 ;;
-            --user) _user="${2:-}"; shift 2 ;;
+            -u|--user) _user="${2:-}"; shift 2 ;;
             --root) _user="root"; shift ;;
-            --cwd) _cwd="${2:-}"; shift 2 ;;
-            --device) _dev="${2:-}"; shift 2 ;;
-            --baud) _baud="${2:-}"; shift 2 ;;
+            -C|--cwd) _cwd="${2:-}"; shift 2 ;;
+            -d|--device) _dev="${2:-}"; shift 2 ;;
+            -b|--baud) _baud="${2:-}"; shift 2 ;;
             --no-permission) _perm=0; shift ;;
             -h|--help) lfa_usb_usage; return 0 ;;
             --) shift; break ;;
@@ -4813,9 +4852,9 @@ lfa_usb_flash() {
     while [ $# -gt 0 ]; do
         case "$1" in
             --install) _install=1; shift ;;
-            --baud) _baud="${2:-}"; shift 2 ;;
+            -b|--baud) _baud="${2:-}"; shift 2 ;;
             -i|--instance) _inst="${2:-}"; shift 2 ;;
-            --device) _dev="${2:-}"; shift 2 ;;
+            -d|--device) _dev="${2:-}"; shift 2 ;;
             -h|--help) lfa_usb_flash_usage; return 0 ;;
             --) shift; break ;;
             *) break ;;
@@ -4924,6 +4963,21 @@ FLASHHELP
 lfa_cli_usb() {
     local _sub="${1:-status}"
     [ $# -gt 0 ] && shift || true
+    case "$_sub" in
+        l) _sub=list ;;
+        rf) _sub=refresh ;;
+        sc) _sub=scan ;;
+        w) _sub=watch ;;
+        en) _sub=enable ;;
+        dis|off) _sub=disable ;;
+        at) _sub=attach ;;
+        t) _sub="tty" ;;
+        x) _sub="exec" ;;
+        fl) _sub=flash ;;
+        bt) _sub=bot ;;
+        blk) _sub=block ;;
+        au) _sub=auto ;;
+    esac
     case "$_sub" in
         status) lfa_usb_status "$@" ;;
         list|ls) lfa_usb_list "$@" ;;
@@ -5180,10 +5234,10 @@ lfa_appimage_usage() {
     cat <<'APPHELP'
 Usage: lfa appimage <command> [options]   (alias: lfa app)
 
-  add FILE [--name NAME]   extract an AppImage once and add a menu entry
-  list                     show installed AppImages
+  add FILE [--name NAME]   extract once and add a menu entry (short: a)
+  list                     show installed AppImages (short: ls)
   run NAME|FILE            launch an installed AppImage, or run a file once
-  remove NAME [-y]         delete an installed AppImage
+  remove NAME [-y]         delete an installed AppImage (short: rm)
   help                     show this help
 
 Options:
@@ -5425,14 +5479,16 @@ lfa_storage_usage() {
     cat <<'STOHELP'
 Usage: lfa storage <command> [options]
 
-  status                   check Termux permission, guest access, and chmod
-  fix                      repair links, bookmarks, and the storage group
-  exec FILE [args...]      run a file from shared storage without chmod
-  open                     show where shared storage is and how to open it
+  status | st              check Termux permission, guest access, and chmod
+  fix | fx                 repair links, bookmarks, and the storage group
+  exec | x FILE [args...]  run a file from shared storage without chmod
+  open | o                 show where shared storage is and how to open it
   data status              check adb access to Android/data and Android/obb
+                           (short: d st)
   data list                list packages under Android/data and Android/obb
+                           (short: d ls)
   data pull PKG [data|obb|both] [--dest DIR]
-                           copy an app's folders into shared storage
+                           copy an app's folders into shared storage (short: d pl)
   help                     show this help
 
 Options:
@@ -5741,6 +5797,10 @@ lfa_storage_data() {
     local _sub="${1:-status}"
     [ $# -gt 0 ] && shift || true
     case "$_sub" in
+        st) _sub=status ;;
+        pl) _sub=pull ;;
+    esac
+    case "$_sub" in
         status) lfa_storage_data_status ;;
         list|ls) lfa_storage_data_list ;;
         pull|copy) lfa_storage_data_pull "$@" ;;
@@ -5752,6 +5812,13 @@ lfa_storage_data() {
 lfa_cli_storage() {
     local _sub="${1:-status}"
     [ $# -gt 0 ] && shift || true
+    case "$_sub" in
+        st) _sub=status ;;
+        fx) _sub=fix ;;
+        x) _sub="exec" ;;
+        o) _sub=open ;;
+        d) _sub=data ;;
+    esac
     case "$_sub" in
         status) lfa_storage_status "$@" ;;
         fix) lfa_storage_fix "$@" ;;
@@ -5766,6 +5833,9 @@ lfa_cli_storage() {
 lfa_cli_appimage() {
     local _sub="${1:-help}"
     [ $# -gt 0 ] && shift || true
+    case "$_sub" in
+        a) _sub=add ;;
+    esac
     case "$_sub" in
         help|-h|--help|"") lfa_appimage_usage ;;
         add|install) lfa_appimage_add "$@" ;;
@@ -5808,14 +5878,14 @@ lfa_cli_install() {
     while [ $# -gt 0 ]; do
         case "$1" in
             --distro|-d) _distro="${2:-}"; shift 2 ;;
-            --desktop) _de="${2:-}"; shift 2 ;;
+            --desktop|-D) _de="${2:-}"; shift 2 ;;
             --backend|-b) _backend="${2:-}"; shift 2 ;;
             -i|--instance) _inst="${2:-}"; shift 2 ;;
-            --autostart) _auto="${2:-}"; shift 2 ;;
-            --user) _user="${2:-}"; shift 2 ;;
-            --timezone) _tz="${2:-}"; shift 2 ;;
-            --hostname) _host="${2:-}"; shift 2 ;;
-            --software) _software="${2:-}"; shift 2 ;;
+            --autostart|-a) _auto="${2:-}"; shift 2 ;;
+            --user|-u) _user="${2:-}"; shift 2 ;;
+            --timezone|-t) _tz="${2:-}"; shift 2 ;;
+            --hostname|-H) _host="${2:-}"; shift 2 ;;
+            --software|-s) _software="${2:-}"; shift 2 ;;
             -h|--help) lfa_cli_usage; return 0 ;;
             *) echo "Unknown option: $1" >&2; return 2 ;;
         esac
@@ -5905,12 +5975,31 @@ lfa_cli() {
         lfa_cli_usage
         return 0
     fi
+    # Short commands are resolved here so every handler keeps one name.
+    case "$_cmd" in
+        i|in) _cmd=install ;;
+        ls|l) _cmd=list ;;
+        sh) _cmd=shell ;;
+        sw) _cmd=switch ;;
+        as) _cmd=autostart ;;
+        upg) _cmd=update ;;
+        fx) _cmd=fix ;;
+        doc) _cmd=doctor ;;
+        bk) _cmd=backup ;;
+        rs) _cmd=restore ;;
+        rm) _cmd=remove ;;
+        cx) _cmd=compat ;;
+        ai) _cmd=appimage ;;
+        diag) _cmd=diagnostics ;;
+        ver) _cmd=version ;;
+        desktop) _cmd=start ;;
+    esac
     case "$_cmd" in
         help|-h|--help) lfa_cli_usage ;;
         version|-V|--version) echo "Linux for Android Manager $LFA_VERSION" ;;
         list)
             local _json=0 _n _first _i
-            [ "${1:-}" = "--json" ] && _json=1
+            case "${1:-}" in -j|--json) _json=1 ;; esac
             _n="$(pd_instances)"
             if [ "$_json" = "1" ]; then
                 printf '['
@@ -5928,7 +6017,7 @@ lfa_cli() {
             local _json=0 _inst=""
             while [ $# -gt 0 ]; do
                 case "$1" in
-                    --json) _json=1; shift ;;
+                    -j|--json) _json=1; shift ;;
                     -i|--instance) _inst="${2:-}"; shift 2 ;;
                     *) echo "Unknown option: $1" >&2; return 2 ;;
                 esac
@@ -5958,9 +6047,9 @@ lfa_cli() {
                 case "$1" in
                     -i|--instance) _a+=(--instance "${2:-}"); shift 2 ;;
                     -b|--backend|--server) _a+=(--server "${2:-}"); shift 2 ;;
-                    --x11) _a+=(--server x11); shift ;;
-                    --vnc) _a+=(--server vnc); shift ;;
-                    --restart) _a+=(--restart); shift ;;
+                    -x|--x11) _a+=(--server x11); shift ;;
+                    -v|--vnc) _a+=(--server vnc); shift ;;
+                    -r|--restart) _a+=(--restart); shift ;;
                     --desktop) shift ;;
                     --no-notice) shift ;;
                     *) echo "Unknown option: $1" >&2; return 2 ;;
@@ -6000,7 +6089,7 @@ lfa_cli() {
             case "${1:-status}" in
                 off) lfa_cli_notice_write off; echo "start-linux notice disabled. Re-enable with: lfa notice on" ;;
                 on) lfa_cli_notice_write on; echo "start-linux notice enabled." ;;
-                status)
+                st|status)
                     _v=1
                     # shellcheck disable=SC1090
                     [ -r "$LFA_PREFS" ] && . "$LFA_PREFS" 2>/dev/null || true
@@ -6722,9 +6811,9 @@ change_backend() {  # change_backend TARGET [flags]
     while [ $# -gt 0 ]; do
         case "$1" in
             -i|--instance) CLI_INSTANCE="${2:-}"; shift 2 ;;
-            --remove-old|--remove-packages) _remove_old=1; shift ;;
-            --keep-packages) _remove_old=0; shift ;;
-            --force) _force=1; shift ;;
+            --remove-old|--remove-packages|-r) _remove_old=1; shift ;;
+            --keep-packages|-k) _remove_old=0; shift ;;
+            --force|-f) _force=1; shift ;;
             --no-start) _no_start=1; shift ;;
             *) echo "Unknown option: $1" >&2; return 2 ;;
         esac
