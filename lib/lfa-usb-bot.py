@@ -310,7 +310,8 @@ class Bot:
         clear_halt(self.fd, self.ep_out)
 
     def command(self, cdb: bytes, length: int = 0, direction_in: bool = False,
-                data: Optional[bytes] = None, retries: int = 1) -> Tuple[bytes, int]:
+                data: Optional[bytes] = None, retries: int = 1,
+                timeout: int = 15000) -> Tuple[bytes, int]:
         """Run one SCSI command; return (payload_in, data_residue)."""
         attempt = 0
         while True:
@@ -318,17 +319,17 @@ class Bot:
             tag = self._next_tag()
             cbw = build_cbw(tag, length, direction_in, self.lun, cdb)
             try:
-                sent = bulk_out(self.fd, self.ep_out, cbw)
+                sent = bulk_out(self.fd, self.ep_out, cbw, timeout)
                 if sent != len(cbw):
                     raise BotError("short CBW write (%d of %d)" % (sent, len(cbw)))
                 payload = b""
                 if direction_in and length:
-                    payload = bulk_in(self.fd, self.ep_in, length)
+                    payload = bulk_in(self.fd, self.ep_in, length, timeout)
                 elif (not direction_in) and length and data is not None:
-                    sent = bulk_out(self.fd, self.ep_out, data)
+                    sent = bulk_out(self.fd, self.ep_out, data, timeout)
                     if sent != length:
                         raise BotError("short data write (%d of %d)" % (sent, length))
-                csw = bulk_in(self.fd, self.ep_in, 13)
+                csw = bulk_in(self.fd, self.ep_in, 13, timeout)
             except BotError:
                 if attempt > retries:
                     raise
@@ -396,8 +397,11 @@ class Bot:
         if residue:
             raise BotError("WRITE(10) residue %d" % residue)
 
-    def sync_cache(self) -> None:
-        self.command(b"\x35" + b"\x00" * 9, 0, False)
+    def sync_cache(self, timeout: int = 4000) -> None:
+        # Many cheap bridges stall on this command instead of rejecting it.
+        # Fail fast and let the caller recover rather than burning 15 s twice.
+        self.command(b"\x35" + b"\x00" * 9, 0, False, retries=0,
+                     timeout=timeout)
 
 
 # --------------------------------------------------------------------------
@@ -812,9 +816,17 @@ def import_image(fd: int, path: str, full: bool) -> int:
             try:
                 bot.sync_cache()
             except BotError as exc:
-                print("[!] the card refused SYNCHRONIZE CACHE (%s); the read-back"
-                      " below is the real check" % exc, file=sys.stderr)
-        print("[+] wrote %s in %d chunk(s)" % (human(changed_bytes), len(changed)))
+                print("[!] the card refused SYNCHRONIZE CACHE (%s); resetting the"
+                      " transport and verifying by read-back" % exc, file=sys.stderr)
+                try:
+                    bot.reset_recovery()
+                    bot.wait_ready()
+                except BotError:
+                    pass
+        where = ", ".join(str(off) for off, _ in changed[:4])
+        print("[+] wrote %s in %d chunk(s)%s"
+              % (human(changed_bytes), len(changed),
+                 (" at byte " + where) if where else ""))
         if not changed:
             print("[*] card already matched the image; nothing to verify")
             restore_android(fd)
@@ -826,9 +838,23 @@ def import_image(fd: int, path: str, full: bool) -> int:
                 expect = src.read(length)
                 if len(expect) < length:
                     expect += b"\x00" * (length - len(expect))
-                back = bot.read10(offset // block, length // block, block)
+                back = b""
+                for attempt in (1, 2):
+                    try:
+                        back = bot.read10(offset // block, length // block, block)
+                        break
+                    except BotError as exc:
+                        if attempt == 2:
+                            raise BotError("verification read failed at byte %d: %s"
+                                           % (offset, exc)) from exc
+                        try:
+                            bot.reset_recovery()
+                            bot.wait_ready()
+                        except BotError:
+                            pass
                 if back != expect:
-                    print("[!] verification failed at byte %d" % offset,
+                    print("[!] verification failed at byte %d: the card returned"
+                          " different bytes than the image" % offset,
                           file=sys.stderr)
                     return 4
         print("[+] verified %d chunk(s)" % len(changed))
