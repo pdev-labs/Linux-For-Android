@@ -301,9 +301,9 @@ ui_multi() {
                 IFS='|' read -r _k _l _d <<< "${_items[$_sel]}"
                 case " ${_chosen[*]} " in
                     *" $_k "*)
-                        local -a _new=()
-                        for _c in "${_chosen[@]}"; do [ "$_c" != "$_k" ] && _new+=("$_c"); done
-                        _chosen=("${_new[@]}")
+                        local -a _next=()
+                        for _c in "${_chosen[@]}"; do [ "$_c" != "$_k" ] && _next+=("$_c"); done
+                        _chosen=("${_next[@]}")
                         ;;
                     *) _chosen+=("$_k") ;;
                 esac
@@ -1258,11 +1258,13 @@ lfa_check_update() {
     local cache="$HOME/.config/linux-for-android/update-check" latest=""
     mkdir -p "$(dirname "$cache")" 2>/dev/null || true
     if [ -s "$cache" ] && [ -n "$(find "$cache" -mtime -1 2>/dev/null)" ]; then
-        latest="$(cat "$cache" 2>/dev/null)"
+        latest="$(cat "$cache" 2>/dev/null)" || latest=""
     elif command -v curl >/dev/null 2>&1; then
+        # The check is advisory: a timeout (curl 28), DNS failure, or a
+        # missing release must not abort the installer through `set -e`.
         latest="$(curl -fsSL --max-time 3 \
             https://api.github.com/repos/pdev-labs/Linux-For-Android/releases/latest 2>/dev/null \
-            | sed -n 's/.*"tag_name": *"v\([^"]*\)".*/\1/p' | head -n1)"
+            | sed -n 's/.*"tag_name": *"v\([^"]*\)".*/\1/p' | head -n1)" || latest=""
         case "$latest" in ''|*[!0-9.]*) latest="" ;; esac
         if [ -n "$latest" ]; then
             printf '%s' "$latest" > "$cache" 2>/dev/null || true
@@ -1368,6 +1370,7 @@ Usage: lfa <command> [options]
   remove        delete a distro
   compat        inspect or enable compatibility shims
   android       inspect or enable the Termux:API bridge
+  usb           real USB devices: list, scan, attach, tty, flash
   storage       Android shared storage: status, repair, run helpers
   appimage      extract and run an AppImage (alias: app)
   run           run an AppImage once without installing it
@@ -1411,6 +1414,9 @@ Examples:
   lfa compat list
   lfa compat enable upower -i ubuntu
   lfa android test
+  lfa usb status
+  lfa usb scan
+  lfa usb exec 001/002 -- lfa-usb desc
   lfa appimage add ~/Foo.AppImage
   lfa appimage list
   lfa appimage run Foo
@@ -1933,6 +1939,14 @@ lfa_android_pm_has() {  # $1 = package name
 lfa_android_timeout() {  # $1 = seconds, rest = command
     local _secs="$1"
     shift
+    # 0 means "no limit". Do not wrap it in timeout: GNU timeout puts the
+    # child in its own process group, so an interactive guest shell would
+    # become a background job and lose the terminal (reads stop with
+    # SIGTTIN, or fail with EIO).
+    if [ "$_secs" = "0" ]; then
+        "$@"
+        return $?
+    fi
     if command -v timeout >/dev/null 2>&1; then
         timeout "$_secs" "$@"
     else
@@ -2167,6 +2181,2218 @@ lfa_android_pump() {
         lfa_android_timeout 8 termux-notification --title "$_title" --content "$_body" >/dev/null 2>&1 || true
         rm -f "$_f" "$_base.body"
     done
+}
+
+# ------------------------------------------------------------
+# USB bridge: real Android USB devices in the guest.
+#
+# Termux:API is the only supported way to see USB hardware from Termux. It
+# returns usbdevfs paths (`termux-usb -l`) and can hand a process the real
+# file descriptor for one device (`termux-usb -E -e`). LFA does two things:
+#
+#   * publishes the live device list and its descriptors into $PREFIX/tmp,
+#     which every guest sees as /tmp, so `lsusb` shows real devices;
+#   * forwards the real descriptor into the guest for `lfa usb exec`.
+#
+# It never invents a /dev/bus/usb node: proot cannot create device nodes,
+# and a fake node would break programs in a more confusing way than an
+# honest "use lfa usb exec" message.
+# ------------------------------------------------------------
+LFA_USB_BRIDGE="$PREFIX/tmp/lfa-usb"
+LFA_USB_CACHE="$HOME/.cache/linux-for-android/usb"
+LFA_USB_CONF="$HOME/.config/linux-for-android/usb.conf"
+LFA_USB_CALLBACK="$PREFIX/bin/lfa-usb-callback"
+LFA_USB_SYSFS="${LFA_USB_SYSFS:-/sys/bus/usb/devices}"
+
+lfa_usb_pad3() {
+    case "${1:-}" in
+        ''|*[!0-9]*) printf '%s' "${1:-}" ;;
+        *) printf '%03d' "$((10#${1:-0}))" ;;
+    esac
+}
+
+lfa_usb_clean() {
+    printf '%s' "${1:-}" | tr '\t\r\n' '   '
+}
+
+lfa_usb_json_escape() {
+    printf '%s' "${1:-}" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' | tr '\t\r\n' '   '
+}
+
+lfa_usb_bus_dev() {  # $1 = /dev/bus/usb/001/002 -> "001 002"
+    printf '%s\n' "${1:-}" | sed -n 's#.*/\([0-9][0-9]*\)/\([0-9][0-9]*\)$#\1 \2#p'
+}
+
+lfa_usb_api_ok() {
+    command -v termux-usb >/dev/null 2>&1
+}
+
+lfa_usb_host_feature() {
+    local _features
+    if ! command -v pm >/dev/null 2>&1; then
+        echo unknown
+        return 0
+    fi
+    _features="$(lfa_android_timeout 5 pm list features 2>/dev/null || true)"
+    case "$_features" in
+        *android.hardware.usb.host*) echo yes ;;
+        '') echo unknown ;;
+        *) echo "not advertised" ;;
+    esac
+}
+
+lfa_usb_raw_json() {
+    lfa_android_timeout 12 termux-usb -l 2>/dev/null || true
+}
+
+# `-E` (descriptor as TERMUX_USB_FD) arrived in termux-api-package 0.57.
+# Without it there is no safe way to hand the real device to the guest.
+lfa_usb_export_ok() {
+    local _help
+    lfa_usb_api_ok || return 1
+    _help="$(lfa_android_timeout 5 termux-usb -h 2>&1 || true)"
+    case "$_help" in *-E*) return 0 ;; esac
+    return 1
+}
+
+lfa_usb_names_from_json() {
+    tr -d '\r' \
+        | tr '\n' ' ' \
+        | sed -e 's/^[[:space:]]*\[//' -e 's/\][[:space:]]*$//' \
+              -e 's/"//g' -e 's/,/\n/g' \
+        | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' \
+        | grep '^/' || true
+}
+
+lfa_usb_live_names() {
+    lfa_usb_raw_json | lfa_usb_names_from_json
+}
+
+lfa_usb_cache_file() {  # $1 bus, $2 dev
+    printf '%s/dev-%s-%s.tsv' "$LFA_USB_CACHE" "$1" "$2"
+}
+
+lfa_usb_cache_row() {  # $1 bus, $2 dev
+    local _f
+    _f="$(lfa_usb_cache_file "$1" "$2")"
+    [ -s "$_f" ] || return 1
+    head -n1 "$_f"
+}
+
+lfa_usb_cache_put() {  # $1 bus, $2 dev, $3 row
+    local _f
+    mkdir -p "$LFA_USB_CACHE" 2>/dev/null || return 1
+    _f="$(lfa_usb_cache_file "$1" "$2")"
+    printf '%s\n' "$3" > "$_f"
+}
+
+lfa_usb_ifaces_from_sysfs() {  # $1 = /sys/bus/usb/devices/X-Y
+    local _dir="$1" _if _num _cls _sub _proto _eps=0 _out="" _sep=""
+    for _if in "$_dir":*.*; do
+        [ -d "$_if" ] || continue
+        _num="$(cat "$_if/bInterfaceNumber" 2>/dev/null || true)"
+        [ -n "$_num" ] || _num="${_if##*:}"
+        _num="${_num%%.*}"
+        case "$_num" in
+            ''|*[!0-9a-fA-F]*) ;;
+            *) _num=$((16#$_num)) ;;
+        esac
+        _cls="$(cat "$_if/bInterfaceClass" 2>/dev/null || true)"
+        _sub="$(cat "$_if/bInterfaceSubClass" 2>/dev/null || true)"
+        _proto="$(cat "$_if/bInterfaceProtocol" 2>/dev/null || true)"
+        _eps=0
+        for _ep in "$_if"/ep_*; do
+            [ -e "$_ep" ] && _eps=$((_eps + 1))
+        done
+        _out="${_out}${_sep}${_num}:${_cls}:${_sub}:${_proto}:${_eps}"
+        _sep=";"
+    done
+    printf '%s' "$_out"
+}
+
+lfa_usb_sysfs_row() {  # $1 bus, $2 dev, $3 path
+    local _bus="$1" _dev="$2" _path="$3" _dir _b _n _vid _pid _ver _cls _sub _proto
+    local _man _prod _ser _ifaces
+    for _dir in "$LFA_USB_SYSFS"/*; do
+        [ -r "$_dir/busnum" ] || continue
+        _b="$(cat "$_dir/busnum" 2>/dev/null || true)"
+        _n="$(cat "$_dir/devnum" 2>/dev/null || true)"
+        [ "$(lfa_usb_pad3 "$_b")" = "$_bus" ] || continue
+        [ "$(lfa_usb_pad3 "$_n")" = "$_dev" ] || continue
+        _vid="$(cat "$_dir/idVendor" 2>/dev/null || true)"
+        _pid="$(cat "$_dir/idProduct" 2>/dev/null || true)"
+        _ver="$(tr -d '[:space:]' < "$_dir/version" 2>/dev/null || true)"
+        _cls="$(cat "$_dir/bDeviceClass" 2>/dev/null || true)"
+        _sub="$(cat "$_dir/bDeviceSubClass" 2>/dev/null || true)"
+        _proto="$(cat "$_dir/bDeviceProtocol" 2>/dev/null || true)"
+        _man="$(cat "$_dir/manufacturer" 2>/dev/null || true)"
+        _prod="$(cat "$_dir/product" 2>/dev/null || true)"
+        _ser="$(cat "$_dir/serial" 2>/dev/null || true)"
+        _ifaces="$(lfa_usb_ifaces_from_sysfs "$_dir")"
+        printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\tsysfs\n' \
+            "$_bus" "$_dev" "$_path" "$_vid" "$_pid" "$_ver" "$_cls" "$_sub" \
+            "$_proto" "$(lfa_usb_clean "$_man")" "$(lfa_usb_clean "$_prod")" \
+            "$(lfa_usb_clean "$_ser")" "$_ifaces"
+        return 0
+    done
+    return 1
+}
+
+lfa_usb_publish() {  # $1 = visible device count
+    local _count="${1:-0}" _row _bus _dev _dir _vid _pid _ver _cls _sub _proto
+    local _man _prod _ser _ifaces _n
+    rm -rf "$LFA_USB_BRIDGE/sys" 2>/dev/null || true
+    mkdir -p "$LFA_USB_BRIDGE/sys" 2>/dev/null || true
+    while IFS= read -r _row; do
+        case "$_row" in ''|'#'*) continue ;; esac
+        _bus="$(printf '%s' "$_row" | cut -f1)"
+        _dev="$(printf '%s' "$_row" | cut -f2)"
+        [ -n "$_bus" ] && [ -n "$_dev" ] || continue
+        _vid="$(printf '%s' "$_row" | cut -f4)"
+        _pid="$(printf '%s' "$_row" | cut -f5)"
+        _ver="$(printf '%s' "$_row" | cut -f6)"
+        _cls="$(printf '%s' "$_row" | cut -f7)"
+        _sub="$(printf '%s' "$_row" | cut -f8)"
+        _proto="$(printf '%s' "$_row" | cut -f9)"
+        _man="$(printf '%s' "$_row" | cut -f10)"
+        _prod="$(printf '%s' "$_row" | cut -f11)"
+        _ser="$(printf '%s' "$_row" | cut -f12)"
+        _ifaces="$(printf '%s' "$_row" | cut -f13)"
+        _dir="$LFA_USB_BRIDGE/sys/${_bus}-${_dev}"
+        mkdir -p "$_dir" 2>/dev/null || continue
+        printf '%s\n' "$_bus" > "$_dir/busnum"
+        printf '%s\n' "$_dev" > "$_dir/devnum"
+        printf '%s\n' "$_vid" > "$_dir/idVendor"
+        printf '%s\n' "$_pid" > "$_dir/idProduct"
+        printf '%s\n' "$_ver" > "$_dir/version"
+        printf '%s\n' "$_cls" > "$_dir/bDeviceClass"
+        printf '%s\n' "$_sub" > "$_dir/bDeviceSubClass"
+        printf '%s\n' "$_proto" > "$_dir/bDeviceProtocol"
+        printf '%s\n' "$_man" > "$_dir/manufacturer"
+        printf '%s\n' "$_prod" > "$_dir/product"
+        printf '%s\n' "$_ser" > "$_dir/serial"
+        _n=0
+        if [ -n "$_ifaces" ]; then
+            _n="$(printf '%s' "$_ifaces" | tr ';' '\n' | grep -c . || true)"
+        fi
+        printf '%s\n' "$_n" > "$_dir/bNumInterfaces"
+    done < "$LFA_USB_BRIDGE/devices.tsv"
+    {
+        printf 'USB_COUNT=%s\n' "$_count"
+        printf 'USB_UPDATED=%s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || date)"
+        printf 'USB_SOURCE=termux-api\n'
+    } > "$LFA_USB_BRIDGE/state.env"
+    cat > "$LFA_USB_BRIDGE/README" <<'USBREADME'
+LFA USB bridge
+==============
+
+Written by `lfa usb refresh` in Termux. Every LFA guest sees this directory
+as /tmp/lfa-usb because proot uses --shared-tmp.
+
+devices.tsv   live devices from `termux-usb -l`, one tab-separated row each:
+              bus, dev, android path, idVendor, idProduct, USB version,
+              class, subclass, protocol, manufacturer, product, serial,
+              interfaces, source
+devices.json  raw output of `termux-usb -l`
+sys/BUS-DEV/  the same values as small files, shaped like sysfs
+scan-*.json   full descriptors read by `lfa usb scan` (permission required)
+scan-*.tsv    the one-line form of the same descriptors
+state.env     USB_COUNT, USB_UPDATED, USB_SOURCE
+
+Sessions get a real port without mknod. From Termux:
+
+    lfa usb attach DEV -- COMMAND   /dev/bus/usb/BBB/DDD + sysfs
+    lfa usb tty DEV -- COMMAND      /dev/ttyUSB0 serial bridge
+    lfa usb exec DEV -- COMMAND     raw descriptor in TERMUX_USB_FD
+
+`attach` duplicates the descriptor Termux:API opened with a preload, and
+fills a sysfs tree from the real descriptors. proot cannot create device
+nodes, so the name is virtual even though the descriptor and every ioctl
+are real. `lfa-usb fd` prints the raw descriptor number.
+USBREADME
+    chmod 644 "$LFA_USB_BRIDGE"/devices.tsv "$LFA_USB_BRIDGE"/devices.json \
+        "$LFA_USB_BRIDGE"/README "$LFA_USB_BRIDGE"/state.env 2>/dev/null || true
+    chmod 755 "$LFA_USB_BRIDGE" 2>/dev/null || true
+}
+
+lfa_usb_refresh() {
+    local _json _names _path _bd _bus _dev _row _tmp _count=0
+    if ! lfa_usb_api_ok; then
+        echo "[!] termux-usb is not installed. Install the client first:" >&2
+        echo "      lfa android install" >&2
+        return 1
+    fi
+    _json="$(lfa_usb_raw_json)"
+    if [ -z "$_json" ]; then
+        echo "[!] termux-usb returned nothing. Open Termux:API once, then retry." >&2
+        return 1
+    fi
+    case "$(printf '%s' "$_json" | tr -d '[:space:]')" in
+        \[*) ;;
+        *)
+            echo "[!] termux-usb did not return a device list:" >&2
+            printf '    %s\n' "$(printf '%s' "$_json" | head -n1)" >&2
+            echo "    Check Termux:API, then run: lfa android test" >&2
+            return 1 ;;
+    esac
+    mkdir -p "$LFA_USB_BRIDGE" "$LFA_USB_CACHE" 2>/dev/null || return 1
+    printf '%s\n' "$_json" > "$LFA_USB_BRIDGE/devices.json"
+    _names="$(printf '%s' "$_json" | lfa_usb_names_from_json)"
+    _tmp="$LFA_USB_BRIDGE/.devices.tmp.$$"
+    {
+        printf '# LFA USB bridge v1 - generated by lfa usb refresh\n'
+        printf '# bus\tdev\tpath\tvid\tpid\tusbver\tclass\tsubclass\tprotocol\tmanufacturer\tproduct\tserial\tinterfaces\tsource\n'
+    } > "$_tmp" || return 1
+    while IFS= read -r _path; do
+        [ -n "$_path" ] || continue
+        _bd="$(lfa_usb_bus_dev "$_path")"
+        [ -n "$_bd" ] || continue
+        _bus="$(lfa_usb_pad3 "${_bd%% *}")"
+        _dev="$(lfa_usb_pad3 "${_bd##* }")"
+        [ -n "$_bus" ] && [ -n "$_dev" ] || continue
+        _row="$(lfa_usb_sysfs_row "$_bus" "$_dev" "$_path" 2>/dev/null || true)"
+        if [ -z "$_row" ]; then
+            _row="$(lfa_usb_cache_row "$_bus" "$_dev" 2>/dev/null || true)"
+        fi
+        if [ -z "$_row" ]; then
+            _row="$(printf '%s\t%s\t%s\t\t\t\t\t\t\t\t\t\t\tenum' \
+                "$_bus" "$_dev" "$_path")"
+        else
+            _row="$(printf '%s\t%s\t%s\t%s' "$_bus" "$_dev" "$_path" \
+                "$(printf '%s' "$_row" | cut -f4-)")"
+        fi
+        printf '%s\n' "$_row" >> "$_tmp"
+        _count=$((_count + 1))
+    done <<< "$_names"
+    mv -f "$_tmp" "$LFA_USB_BRIDGE/devices.tsv" || {
+        rm -f "$_tmp" 2>/dev/null || true
+        return 1
+    }
+    lfa_usb_publish "$_count"
+    printf '%s\n' "$_count"
+}
+
+lfa_usb_count() {
+    [ -f "$LFA_USB_BRIDGE/devices.tsv" ] || { echo 0; return 0; }
+    awk -F '\t' '!/^#/ && NF >= 3 {n++} END {print n + 0}' \
+        "$LFA_USB_BRIDGE/devices.tsv"
+}
+
+lfa_usb_described_count() {
+    [ -f "$LFA_USB_BRIDGE/devices.tsv" ] || { echo 0; return 0; }
+    awk -F '\t' '!/^#/ && NF >= 5 && $4 != "" && $5 != "" {n++} END {print n + 0}' \
+        "$LFA_USB_BRIDGE/devices.tsv"
+}
+
+lfa_usb_conf_instance() {
+    [ -r "$LFA_USB_CONF" ] || return 0
+    sed -n 's/^USB_INSTANCE="\{0,1\}\([^"]*\)"\{0,1\}$/\1/p' \
+        "$LFA_USB_CONF" 2>/dev/null | tail -n1
+}
+
+lfa_usb_conf_get() {  # $1 = key (USB_INSTANCE|USB_SHIMS)
+    [ -r "$LFA_USB_CONF" ] || return 0
+    sed -n "s/^$1=\"\\{0,1\\}\\([^\"]*\\)\"\\{0,1\\}$/\\1/p" \
+        "$LFA_USB_CONF" 2>/dev/null | tail -n1
+}
+
+lfa_usb_conf_set() {  # $1 = key, $2 = value
+    local _key="$1" _val="$2"
+    mkdir -p "$(dirname "$LFA_USB_CONF")" 2>/dev/null || return 1
+    if grep -q "^$_key=" "$LFA_USB_CONF" 2>/dev/null; then
+        sed -i "s|^$_key=.*|$_key=\"$_val\"|" "$LFA_USB_CONF"
+    else
+        printf '%s="%s"\n' "$_key" "$_val" >> "$LFA_USB_CONF"
+    fi
+}
+
+lfa_usb_write_callback() {
+    if ! mkdir -p "$PREFIX/bin" 2>/dev/null; then
+        echo "[!] Could not create $PREFIX/bin." >&2
+        return 1
+    fi
+    if ! cat > "$LFA_USB_CALLBACK" <<'USBCALLBACK'
+#!/bin/bash
+# LFA USB bridge callback. Started by `termux-usb -E -e`, which puts the
+# real usbdevfs descriptor in TERMUX_USB_FD. Forward it into the guest.
+set -u
+FD="${TERMUX_USB_FD:-}"
+if [ -z "$FD" ]; then
+    echo "lfa-usb: Termux:API did not pass a file descriptor." >&2
+    exit 1
+fi
+PD="${LFA_USB_PD:-}"
+if [ -z "$PD" ]; then
+    PD="$(command -v proot-distro 2>/dev/null || true)"
+fi
+if [ -z "$PD" ]; then
+    echo "lfa-usb: proot-distro not found on the Termux side." >&2
+    exit 1
+fi
+INST="${LFA_USB_INSTANCE:-}"
+if [ -z "$INST" ]; then
+    echo "lfa-usb: no instance was selected." >&2
+    exit 1
+fi
+USER_NAME="${LFA_USB_USER:-user}"
+FLAGS="${LFA_USB_PD_FLAGS:-}"
+MODE="${LFA_USB_MODE:-exec}"
+# `termux-usb` runs this callback inside `OUTPUT="$(...)"`, so the guest's
+# stdout would be swallowed by a command substitution and only printed when
+# the session ends. When stdout is a pipe but stderr is still the terminal,
+# point stdout at the terminal so output is live and the guest sees a tty.
+# `cmd > file 2>&1` still redirects both and captures everything.
+if [ ! -t 1 ] && [ -t 2 ]; then
+    exec >&2
+fi
+# shellcheck disable=SC2086  # flags are a word list such as --no-sysvipc
+run_guest() {
+    local _bind=() _oldifs _d
+    [ -n "${LFA_USB_BIND:-}" ] && _bind=(--bind "$LFA_USB_BIND")
+    # proot-distro binds the host /dev over the guest /dev, which hides any
+    # node stored in the rootfs. The host tree passed here restores the
+    # device path so `ls` and stat() see it as well as open().
+    if [ -n "${LFA_USB_DEVBIND:-}" ]; then
+        _oldifs="$IFS"; IFS=';'
+        # shellcheck disable=SC2086  # ';' separates the specs, not spaces
+        for _d in $LFA_USB_DEVBIND; do
+            [ -n "$_d" ] && _bind+=(--bind "$_d")
+        done
+        IFS="$_oldifs"
+    fi
+    exec "$PD" login $FLAGS "${_bind[@]}" "$INST" --user "$USER_NAME" \
+        --shared-tmp -- "$@"
+}
+# The node path is derived from the descriptor number the kernel gave
+# Termux:API, so the map must be built here, not before `termux-usb` runs.
+USB_MAP=""
+if [ -n "${LFA_USB_BUS:-}" ] && [ -n "${LFA_USB_DEV:-}" ]; then
+    USB_MAP="${LFA_USB_BUS}/${LFA_USB_DEV}=${FD}"
+fi
+case "$MODE" in
+    exec)
+        SCRIPT="${LFA_USB_RUN_SCRIPT:-}"
+        if [ -z "$SCRIPT" ]; then
+            echo "lfa-usb: no command was staged for the guest." >&2
+            exit 1
+        fi
+        run_guest /bin/sh -c '
+            export TERMUX_USB_FD="$1"
+            LFA_USB_PATH="$4"; export LFA_USB_PATH
+            if [ -n "$5" ]; then LFA_USB_MAP="$5"; export LFA_USB_MAP; fi
+            if [ -n "$6" ]; then LD_PRELOAD="$6"; export LD_PRELOAD; fi
+            cd "$2" 2>/dev/null || cd /
+            exec bash "$3"
+        ' sh "$FD" "${LFA_USB_CWD:-/}" "$SCRIPT" "${LFA_USB_PATH:-}" \
+           "$USB_MAP" "${LFA_USB_PRELOAD:-}"
+        ;;
+    prep)
+        OUT="${LFA_USB_OUT:-}"
+        TSV="${LFA_USB_TSV:-}"
+        BLOB="${LFA_USB_BLOB:-}"
+        SYSFS="${LFA_USB_SYSFS_OUT:-}"
+        if [ -z "$OUT" ]; then
+            echo "lfa-usb: no descriptor output path was set." >&2
+            exit 1
+        fi
+        run_guest env "TERMUX_USB_FD=$FD" \
+            "LFA_USB_PATH=${LFA_USB_PATH:-}" \
+            python3 /usr/local/libexec/lfa-usb-desc.py \
+            --json --out "$OUT" --tsv "$TSV" --blob "$BLOB" --sysfs "$SYSFS" \
+            --speed "${LFA_USB_SPEED:-480}" \
+            --bus "${LFA_USB_BUS:-}" --dev "${LFA_USB_DEV:-}" \
+            --path "${LFA_USB_PATH:-}"
+        ;;
+    scan)
+        OUT="${LFA_USB_OUT:-}"
+        TSV="${LFA_USB_TSV:-}"
+        if [ -z "$OUT" ]; then
+            echo "lfa-usb: no scan output path was set." >&2
+            exit 1
+        fi
+        if [ -n "$TSV" ]; then
+            run_guest env "TERMUX_USB_FD=$FD" \
+                "LFA_USB_PATH=${LFA_USB_PATH:-}" \
+                python3 /usr/local/libexec/lfa-usb-desc.py \
+                --json --out "$OUT" --tsv "$TSV" \
+                --bus "${LFA_USB_BUS:-}" --dev "${LFA_USB_DEV:-}" \
+                --path "${LFA_USB_PATH:-}"
+        else
+            run_guest env "TERMUX_USB_FD=$FD" \
+                "LFA_USB_PATH=${LFA_USB_PATH:-}" \
+                python3 /usr/local/libexec/lfa-usb-desc.py \
+                --json --out "$OUT" \
+                --bus "${LFA_USB_BUS:-}" --dev "${LFA_USB_DEV:-}" \
+                --path "${LFA_USB_PATH:-}"
+        fi
+        ;;
+    *)
+        echo "lfa-usb: unknown callback mode '$MODE'." >&2
+        exit 1
+        ;;
+esac
+USBCALLBACK
+    then
+        echo "[!] Could not write $LFA_USB_CALLBACK." >&2
+        return 1
+    fi
+    chmod 755 "$LFA_USB_CALLBACK" 2>/dev/null || true
+}
+
+lfa_usb_stage_desc() {  # $1 = guest rootfs
+    local _src="$LFA_DIR/lib/usb-desc.py"
+    local _dst="$1/usr/local/libexec/lfa-usb-desc.py"
+    if [ ! -f "$_src" ]; then
+        echo "[!] lib/usb-desc.py is missing; run menu 12 or reinstall." >&2
+        return 1
+    fi
+    if ! mkdir -p "$(dirname "$_dst")" 2>/dev/null; then
+        echo "[!] Could not create $(dirname "$_dst") in the guest rootfs." >&2
+        return 1
+    fi
+    if ! cp -f "$_src" "$_dst" 2>/dev/null; then
+        echo "[!] Could not copy lib/usb-desc.py to $_dst." >&2
+        return 1
+    fi
+    chmod 755 "$_dst" 2>/dev/null || true
+}
+
+lfa_usb_guest_python_ok() {  # $1 = instance
+    local _inst="$1" _user _flags
+    _user="$(lfa_appimage_user "$_inst")"
+    _flags="$(pd_login_flags)"
+    # shellcheck disable=SC2086  # flags are a word list
+    proot-distro login $_flags "$_inst" --user "$_user" --shared-tmp -- \
+        /bin/sh -c 'command -v python3 >/dev/null 2>&1 && python3 -c "import ctypes" >/dev/null 2>&1' \
+        >/dev/null 2>&1
+}
+
+lfa_usb_pick_instance() {  # $1 = optional instance name; sets INSTANCE_NAME
+    local _want="${1:-}" _root _name _saved=""
+    if [ -n "$_want" ]; then
+        CLI_INSTANCE="$_want"
+    elif [ -z "${CLI_INSTANCE:-}" ]; then
+        # Fall back to the instance `lfa usb enable` remembered, so plain
+        # `lfa usb scan` keeps working when more than one distro is installed.
+        _saved="$(lfa_usb_conf_instance)"
+        [ -n "$_saved" ] && CLI_INSTANCE="$_saved"
+    fi
+    _root="$(lfa_shim_rootfs 2>/dev/null)" || _root=""
+    if [ -z "$_root" ]; then
+        if [ -n "$_want" ]; then
+            echo "No installed distribution named '$_want'." >&2
+        elif [ -n "$_saved" ]; then
+            echo "[!] The saved USB instance '$_saved' is not installed." >&2
+            echo "    Pick another with: lfa usb <command> -i NAME" >&2
+        else
+            echo "[!] Choose a distribution: lfa usb <command> -i NAME" >&2
+            echo "    Installed: $(pd_instances 2>/dev/null | tr '\n' ' ')" >&2
+        fi
+        return 1
+    fi
+    INSTANCE_NAME=""
+    while IFS= read -r _name; do
+        [ -n "$_name" ] || continue
+        if [ "$(pd_rootfs "$_name")" = "$_root" ]; then
+            INSTANCE_NAME="$_name"
+            break
+        fi
+    done < <(pd_instances)
+    if [ -z "$INSTANCE_NAME" ]; then
+        echo "[!] Could not match the rootfs to an installed instance." >&2
+        echo "    Pass -i NAME (see: proot-distro list)." >&2
+        return 1
+    fi
+    CONF_FILE="$(pd_conf "$INSTANCE_NAME")"
+    if [ -f "$CONF_FILE" ]; then
+        # shellcheck disable=SC1090  # instance config path is computed at runtime
+        . "$CONF_FILE"
+    fi
+    return 0
+}
+
+lfa_usb_line_for() {  # $1 bus, $2 dev -> lsusb-style line
+    awk -F '\t' -v b="$1" -v d="$2" '
+        /^#/ || NF < 3 { next }
+        $1 == b && $2 == d {
+            name = $10
+            if (name != "" && $11 != "") name = name " " $11
+            else if (name == "") name = $11
+            if (name == "") name = "Unknown device"
+            id = ($4 != "" && $5 != "") ? $4 ":" $5 : "----:----"
+            printf "Bus %s Device %s: ID %s %s\n", $1, $2, id, name
+            found = 1
+            exit
+        }
+        END { if (!found) exit 1 }
+    ' "$LFA_USB_BRIDGE/devices.tsv" 2>/dev/null
+}
+
+lfa_usb_normalize_dev() {  # 001/002 or 001:002 or a full path -> full path
+    local _v="${1:-}"
+    case "$_v" in
+        /dev/bus/usb/*) printf '%s' "$_v" ;;
+        */*)
+            printf '/dev/bus/usb/%s/%s' \
+                "$(lfa_usb_pad3 "${_v%%/*}")" "$(lfa_usb_pad3 "${_v##*/}")" ;;
+        *:*)
+            printf '/dev/bus/usb/%s/%s' \
+                "$(lfa_usb_pad3 "${_v%%:*}")" "$(lfa_usb_pad3 "${_v##*:}")" ;;
+        *) printf '%s' "$_v" ;;
+    esac
+}
+
+lfa_usb_usage() {
+    cat <<'USBHELP'
+Usage: lfa usb <command> [options]
+
+  status                   show Termux:API, USB host, bridge, and shim state
+  list [--json]            list real devices visible through Termux:API
+  refresh                  re-read `termux-usb -l` and rebuild the guest view
+  scan [DEV...]            request permission and read real descriptors
+  watch [--interval N] [--count N]
+                           poll for hotplug and print add/remove events
+  enable [-i NAME]         install the guest helpers, libusb preload, tty bridge
+  disable [-i NAME]        remove those guest helpers
+  attach [DEV] [-- CMD...] open a guest session with /dev/bus/usb/BBB/DDD
+  tty [DEV] [-- CMD...]    open a session with /dev/ttyUSB0 (serial bridge)
+  exec DEV -- COMMAND...   run COMMAND with the raw USB fd (no preload)
+  flash [--install] ARGS   flash ESP32/ESP8266 with esptool in the guest
+  help                     show this help
+
+DEV is /dev/bus/usb/001/002, 001/002, or 001:002. The device path is exactly
+what `termux-usb -l` reports. With one device attached, DEV may be omitted.
+
+Examples:
+  lfa usb status
+  lfa usb refresh
+  lfa usb scan
+  lfa usb enable -i ubuntu
+  lfa usb attach                  # shell with a real /dev/bus/usb + sysfs
+  lfa usb attach 001/002 -- lsusb -v
+  lfa usb tty                     # shell with /dev/ttyUSB0
+  lfa usb tty 001/002 -- picocom -b 115200 /dev/ttyUSB0
+  lfa usb flash --install
+  lfa usb flash --baud 460800 write 0x0 /sdcard/firmware.bin
+  lfa usb exec 001/002 -- lfa-usb desc
+
+How it works: Termux:API owns USB access on Android and can hand one process
+the real usbfs descriptor (`termux-usb -E`). `lfa usb attach` forwards that
+descriptor into the guest, publishes the device's real descriptors as a small
+sysfs tree, and preloads liblfa-usb-node.so. open() on /dev/bus/usb/BBB/DDD
+then returns the real descriptor, so lsusb, pyusb, dfu-util and other libusb
+tools work unchanged, with real ioctls and transfers. `lfa usb tty` bridges
+the bulk endpoints to a pty so esptool and other serial tools see
+/dev/ttyUSB0. Nothing is simulated: proot still cannot create device nodes,
+which is why the node comes from the preload instead of mknod.
+
+Options:
+  -i, --instance NAME      distribution to use (enable/disable/scan/attach/tty)
+      --user NAME          guest account for attach/tty/exec
+      --root               run the command as root in the guest
+      --cwd DIR            guest working directory (default: user's home)
+      --device DEV         device for tty/flash (same forms as DEV)
+      --no-permission      do not show the Android permission dialog
+      --no-sysfs           attach without the synthetic /sys/bus/usb tree
+      --baud N             serial baud rate for tty/flash (default 115200)
+      --json               machine-readable output of list/scan
+USBHELP
+}
+
+lfa_usb_list() {
+    local _json=0 _unknown=0 _shown=0 _row _b _d
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) _json=1; shift ;;
+            -h|--help) lfa_usb_usage; return 0 ;;
+            *) echo "Unknown option: $1" >&2; return 2 ;;
+        esac
+    done
+    if ! lfa_usb_api_ok; then
+        echo "[!] termux-usb is not installed. Run: lfa android install" >&2
+        return 1
+    fi
+    if ! lfa_usb_refresh >/dev/null; then
+        return 1
+    fi
+    if [ ! -s "$LFA_USB_BRIDGE/devices.tsv" ]; then
+        echo "No USB devices are visible to Termux:API." >&2
+        return 1
+    fi
+    if [ "$_json" = "1" ]; then
+        local _first=1 _path _vid _pid _ver _cls _sub _proto _man _prod _ser _ifaces _src
+        printf '['
+        while IFS= read -r _row; do
+            case "$_row" in ''|'#'*) continue ;; esac
+            _b="$(printf '%s' "$_row" | cut -f1)"
+            _d="$(printf '%s' "$_row" | cut -f2)"
+            [ -n "$_b" ] && [ -n "$_d" ] || continue
+            _path="$(printf '%s' "$_row" | cut -f3)"
+            _vid="$(printf '%s' "$_row" | cut -f4)"
+            _pid="$(printf '%s' "$_row" | cut -f5)"
+            _ver="$(printf '%s' "$_row" | cut -f6)"
+            _cls="$(printf '%s' "$_row" | cut -f7)"
+            _sub="$(printf '%s' "$_row" | cut -f8)"
+            _proto="$(printf '%s' "$_row" | cut -f9)"
+            _man="$(printf '%s' "$_row" | cut -f10)"
+            _prod="$(printf '%s' "$_row" | cut -f11)"
+            _ser="$(printf '%s' "$_row" | cut -f12)"
+            _ifaces="$(printf '%s' "$_row" | cut -f13)"
+            _src="$(printf '%s' "$_row" | cut -f14)"
+            [ "$_first" = "1" ] || printf ','
+            _first=0
+            printf '{"bus":"%s","dev":"%s","path":"%s","vid":"%s","pid":"%s","usb_version":"%s","class":"%s","subclass":"%s","protocol":"%s","manufacturer":"%s","product":"%s","serial":"%s","interfaces":"%s","source":"%s"}' \
+                "$(lfa_usb_json_escape "$_b")" "$(lfa_usb_json_escape "$_d")" \
+                "$(lfa_usb_json_escape "$_path")" "$(lfa_usb_json_escape "$_vid")" \
+                "$(lfa_usb_json_escape "$_pid")" "$(lfa_usb_json_escape "$_ver")" \
+                "$(lfa_usb_json_escape "$_cls")" "$(lfa_usb_json_escape "$_sub")" \
+                "$(lfa_usb_json_escape "$_proto")" "$(lfa_usb_json_escape "$_man")" \
+                "$(lfa_usb_json_escape "$_prod")" "$(lfa_usb_json_escape "$_ser")" \
+                "$(lfa_usb_json_escape "$_ifaces")" "$(lfa_usb_json_escape "$_src")"
+        done < "$LFA_USB_BRIDGE/devices.tsv"
+        printf ']\n'
+        return 0
+    fi
+    while IFS= read -r _row; do
+        case "$_row" in ''|'#'*) continue ;; esac
+        _b="$(printf '%s' "$_row" | cut -f1)"
+        _d="$(printf '%s' "$_row" | cut -f2)"
+        [ -n "$_b" ] && [ -n "$_d" ] || continue
+        lfa_usb_line_for "$_b" "$_d" || true
+        _shown=$((_shown + 1))
+        [ -n "$(printf '%s' "$_row" | cut -f4)" ] || _unknown=$((_unknown + 1))
+    done < "$LFA_USB_BRIDGE/devices.tsv"
+    if [ "$_shown" -eq 0 ]; then
+        echo "No USB devices are visible to Termux:API." >&2
+        return 1
+    fi
+    if [ "$_unknown" -gt 0 ] 2>/dev/null; then
+        echo "" >&2
+        echo "[i] $_unknown device(s) have no descriptors yet. Run: lfa usb scan" >&2
+        echo "    Android shows one permission dialog per device." >&2
+    fi
+}
+
+lfa_usb_status() {
+    local _api="missing" _app="not detected" _host _count=0 _described=0
+    local _inst _shims="not enabled" _last="never" _fd_now="no" _root=""
+    local _export="no" _refresh="no" _preload="not installed" _arch="unknown"
+    lfa_usb_api_ok && _api="installed"
+    lfa_android_pm_has 'com.termux.api' && _app="installed"
+    lfa_usb_export_ok && _export="yes"
+    _host="$(lfa_usb_host_feature)"
+    if lfa_usb_api_ok; then
+        lfa_usb_refresh >/dev/null 2>&1 && _refresh="yes"
+    fi
+    # `pm list packages` cannot see other apps on some Android 11+ builds, so
+    # a working `termux-usb -l` is the better proof that the app is present.
+    if [ "$_app" = "not detected" ] && [ "$_refresh" = "yes" ]; then
+        _app="installed (pm cannot list it)"
+    fi
+    _count="$(lfa_usb_count)"
+    _described="$(lfa_usb_described_count)"
+    _inst="$(lfa_usb_conf_instance)"
+    if [ "$(lfa_usb_conf_get USB_SHIMS)" = "1" ] && [ -n "$_inst" ]; then
+        _root="$(pd_rootfs "$_inst" 2>/dev/null || true)"
+        if [ -n "$_root" ] && [ -f "$_root/usr/local/bin/lsusb" ]; then
+            _shims="enabled for $_inst"
+            if [ -f "$_root/usr/local/lib/lfa-usb-node.so" ]; then
+                _arch="$(lfa_usb_elf_arch "$_root")"
+                _preload="yes (${_arch} preload)"
+            fi
+        else
+            _shims="configured for $_inst (helpers missing; run lfa usb enable)"
+        fi
+    fi
+    if ls "$LFA_USB_BRIDGE"/scan-*.json >/dev/null 2>&1; then
+        _last="$(basename "$(ls -t "$LFA_USB_BRIDGE"/scan-*.json 2>/dev/null | head -n1)")"
+    fi
+    [ -n "${TERMUX_USB_FD:-}" ] && _fd_now="yes (fd $TERMUX_USB_FD)"
+    echo "USB bridge"
+    echo "  termux-api package: $_api"
+    echo "  Termux:API app:     $_app"
+    echo "  descriptor export:  $_export (-E)"
+    echo "  USB host feature:   $_host"
+    echo "  devices visible:    $_count"
+    echo "  with descriptors:   $_described (run: lfa usb scan)"
+    echo "  live refresh:       $_refresh"
+    echo "  bridge directory:   $LFA_USB_BRIDGE"
+    echo "  guest helpers:      $_shims"
+    echo "  libusb preload:     $_preload"
+    echo "  last scan:          $_last"
+    echo "  USB fd in this shell: $_fd_now"
+    echo ""
+    echo "Sessions with a real device view:"
+    echo "  lfa usb attach 001/002          /dev/bus/usb/001/002 + real sysfs"
+    echo "  lfa usb tty 001/002             /dev/ttyUSB0 serial bridge"
+    echo "  lfa usb flash write 0x0 FILE    esptool inside the guest"
+    echo ""
+    echo "proot cannot create device nodes, so the node is provided by a"
+    echo "preload that duplicates the descriptor Termux:API opened."
+    if [ "$_api" = "missing" ]; then
+        echo ""
+        echo "[!] Install the client: lfa android install"
+    fi
+    if [ "$_api" = "installed" ] && [ "$_refresh" = "no" ]; then
+        echo ""
+        echo "[!] The live device list could not be read; this is a cached view."
+        echo "    Open Termux:API once, then run: lfa usb refresh"
+    fi
+    if [ "$_app" = "not detected" ]; then
+        echo ""
+        echo "[!] Install the Termux:API app from F-Droid, then run lfa usb status."
+    fi
+    if [ "$_api" = "installed" ] && [ "$_export" = "no" ]; then
+        echo ""
+        echo "[!] This termux-api cannot export a descriptor (-E)."
+        echo "    Update it: pkg upgrade termux-api"
+    fi
+    if [ "$_host" = "not advertised" ]; then
+        echo ""
+        echo "[!] Android does not advertise USB host support in its feature list."
+        echo "    Many phones still work with an OTG adapter; powered hubs help."
+    fi
+}
+
+lfa_usb_scan_one() {  # $1 instance, $2 user, $3 flags, $4 path, $5 quiet
+    local _inst="$1" _user="$2" _flags="$3" _path="$4" _quiet="${5:-0}"
+    local _bd _bus _dev _out _tsv _log _rc _row
+    _bd="$(lfa_usb_bus_dev "$_path")"
+    if [ -z "$_bd" ]; then
+        echo "[!] $_path is not a usbdevfs path; skipping." >&2
+        return 2
+    fi
+    _bus="$(lfa_usb_pad3 "${_bd%% *}")"
+    _dev="$(lfa_usb_pad3 "${_bd##* }")"
+    _out="/tmp/lfa-usb/scan-${_bus}-${_dev}.json"
+    _tsv="/tmp/lfa-usb/scan-${_bus}-${_dev}.tsv"
+    _log="$LFA_USB_BRIDGE/last-scan.log"
+    rm -f "$LFA_USB_BRIDGE/scan-${_bus}-${_dev}.json" \
+          "$LFA_USB_BRIDGE/scan-${_bus}-${_dev}.tsv" "$_log" 2>/dev/null || true
+    (
+        export LFA_USB_MODE=scan
+        export LFA_USB_INSTANCE="$_inst"
+        export LFA_USB_USER="$_user"
+        export LFA_USB_PD_FLAGS="$_flags"
+        export LFA_USB_OUT="$_out"
+        export LFA_USB_TSV="$_tsv"
+        export LFA_USB_BUS="$_bus"
+        export LFA_USB_DEV="$_dev"
+        export LFA_USB_PATH="$_path"
+        lfa_android_timeout 90 termux-usb -r -E -e "$LFA_USB_CALLBACK" "$_path"
+    ) > "$_log" 2>&1
+    _rc=$?
+    if [ "$_rc" -ne 0 ]; then
+        echo "[!] Bus $_bus Device $_dev: permission or read failed." >&2
+        [ -s "$_log" ] && sed 's/^/    /' "$_log" >&2
+        return "$_rc"
+    fi
+    if [ ! -s "$LFA_USB_BRIDGE/scan-${_bus}-${_dev}.tsv" ]; then
+        echo "[!] Bus $_bus Device $_dev: no descriptor row was produced." >&2
+        if [ -s "$LFA_USB_BRIDGE/scan-${_bus}-${_dev}.json" ]; then
+            sed -n 's/.*"error": *"\([^"]*\)".*/    descriptor error: \1/p' \
+                "$LFA_USB_BRIDGE/scan-${_bus}-${_dev}.json" >&2
+        fi
+        if [ -s "$_log" ]; then
+            sed 's/^/    /' "$_log" >&2
+        else
+            echo "    Is python3 (with ctypes) installed in $_inst?" >&2
+        fi
+        return 1
+    fi
+    _row="$(head -n1 "$LFA_USB_BRIDGE/scan-${_bus}-${_dev}.tsv")"
+    lfa_usb_cache_put "$_bus" "$_dev" "$_row" || return 1
+    local _vid _pid _man _prod _name
+    _vid="$(printf '%s' "$_row" | cut -f4)"
+    _pid="$(printf '%s' "$_row" | cut -f5)"
+    [ -n "$_vid" ] || _vid="----"
+    [ -n "$_pid" ] || _pid="----"
+    _man="$(printf '%s' "$_row" | cut -f10)"
+    _prod="$(printf '%s' "$_row" | cut -f11)"
+    _name="$_man"
+    if [ -n "$_man" ] && [ -n "$_prod" ]; then _name="$_man $_prod"
+    elif [ -z "$_man" ]; then _name="$_prod"; fi
+    [ -n "$_name" ] || _name="Unknown device"
+    if [ "$_quiet" = "0" ]; then
+        printf 'Bus %s Device %s: ID %s:%s %s\n' "$_bus" "$_dev" \
+            "$_vid" "$_pid" "$_name"
+    fi
+    return 0
+}
+
+lfa_usb_scan() {
+    local _inst="" _user="" _json=0 _flags _root _id _ok=0 _bad=0 _dev
+    local -a _devs=()
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            -i|--instance) _inst="${2:-}"; shift 2 ;;
+            --user) _user="${2:-}"; shift 2 ;;
+            --json) _json=1; shift ;;
+            -h|--help) lfa_usb_usage; return 0 ;;
+            --) shift; while [ $# -gt 0 ]; do _devs+=("$1"); shift; done ;;
+            -*) echo "Unknown option: $1" >&2; return 2 ;;
+            *) _devs+=("$1"); shift ;;
+        esac
+    done
+    lfa_usb_api_ok || {
+        echo "[!] termux-usb is not installed. Run: lfa android install" >&2
+        return 1
+    }
+    if ! lfa_usb_export_ok; then
+        echo "[!] This termux-api cannot export a USB descriptor (-E)." >&2
+        echo "    Update it first: pkg upgrade termux-api" >&2
+        return 1
+    fi
+    lfa_usb_pick_instance "$_inst" || return 1
+    _id="$INSTANCE_NAME"
+    _root="$(pd_rootfs "$_id")"
+    [ -d "$_root" ] || { echo "[!] Rootfs missing for $_id." >&2; return 1; }
+    command -v proot-distro >/dev/null 2>&1 || {
+        echo "[!] proot-distro is required to enter the guest." >&2
+        return 1
+    }
+    [ -n "$_user" ] || _user="$(lfa_appimage_user "$_id")"
+    _flags="$(pd_login_flags)"
+    lfa_usb_stage_desc "$_root" || return 1
+    lfa_usb_write_callback || return 1
+    if ! lfa_usb_guest_python_ok "$_id"; then
+        echo "[!] $_id needs python3 with ctypes to read descriptors." >&2
+        echo "    Install it in the guest, then retry:" >&2
+        echo "      lfa shell -i $_id --root" >&2
+        echo "      apt-get install -y python3    # or the distro equivalent" >&2
+        return 1
+    fi
+    if [ ${#_devs[@]} -eq 0 ]; then
+        mapfile -t _devs < <(lfa_usb_live_names)
+    fi
+    if [ ${#_devs[@]} -eq 0 ]; then
+        echo "[!] No USB devices are visible. Connect one with an OTG adapter." >&2
+        return 1
+    fi
+    mkdir -p "$LFA_USB_BRIDGE" 2>/dev/null || true
+    local _quiet=0
+    [ "$_json" = "1" ] && _quiet=1
+    [ "$_quiet" = "1" ] || echo "Reading real descriptors through Termux:API..."
+    for _dev in "${_devs[@]}"; do
+        _dev="$(lfa_usb_normalize_dev "$_dev")"
+        lfa_usb_scan_one "$_id" "$_user" "$_flags" "$_dev" "$_quiet" \
+            && _ok=$((_ok + 1)) || _bad=$((_bad + 1))
+    done
+    lfa_usb_refresh >/dev/null 2>&1 || true
+    if [ "$_json" = "1" ]; then
+        local _f _first=1 _bd _bus _devn
+        printf '['
+        for _dev in "${_devs[@]}"; do
+            _bd="$(lfa_usb_bus_dev "$(lfa_usb_normalize_dev "$_dev")")"
+            [ -n "$_bd" ] || continue
+            _bus="$(lfa_usb_pad3 "${_bd%% *}")"
+            _devn="$(lfa_usb_pad3 "${_bd##* }")"
+            _f="$LFA_USB_BRIDGE/scan-${_bus}-${_devn}.json"
+            [ -f "$_f" ] || continue
+            [ "$_first" = "1" ] || printf ','
+            _first=0
+            cat "$_f"
+        done
+        printf ']\n'
+    else
+        echo ""
+        echo "Scanned: $_ok succeeded, $_bad failed."
+        echo "Cache:   $LFA_USB_CACHE"
+    fi
+    [ "$_bad" -eq 0 ]
+}
+
+lfa_usb_shim_safe() {  # $1 = destination; refuse to overwrite a foreign file
+    local _dest="$1"
+    if [ ! -e "$_dest" ] && [ ! -L "$_dest" ]; then
+        return 0
+    fi
+    if head -n3 "$_dest" 2>/dev/null | grep -q 'LFA USB bridge'; then
+        return 0
+    fi
+    echo "[!] $_dest already exists and was not created by LFA." >&2
+    echo "    Move it aside, then run: lfa usb enable -i NAME" >&2
+    return 1
+}
+
+lfa_usb_enable() {
+    local _inst="" _root="" _id _shim
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            -i|--instance) _inst="${2:-}"; shift 2 ;;
+            -h|--help) lfa_usb_usage; return 0 ;;
+            *) echo "Unknown option: $1" >&2; return 2 ;;
+        esac
+    done
+    if ! lfa_usb_pick_instance "$_inst"; then
+        if [ -n "$_inst" ]; then
+            lfa_usb_conf_set USB_INSTANCE "$_inst"
+            echo "[i] Saved $_inst as the USB instance. Install it, then run:"
+            echo "      lfa usb enable -i $_inst"
+            return 0
+        fi
+        return 1
+    fi
+    _id="$INSTANCE_NAME"
+    _root="$(pd_rootfs "$_id")"
+    if [ ! -d "$_root" ]; then
+        echo "[!] Rootfs missing for $_id." >&2
+        return 1
+    fi
+    mkdir -p "$_root/usr/local/bin" "$_root/usr/local/libexec" 2>/dev/null || true
+    lfa_usb_shim_safe "$_root/usr/local/bin/lsusb" || return 1
+    lfa_usb_shim_safe "$_root/usr/local/bin/lfa-usb" || return 1
+    lfa_shim_write "$_root" "usr/local/bin/lsusb" <<'LSUSB'
+#!/bin/sh
+# LFA USB bridge: lsusb over the real Termux:API device list.
+# The list is written by `lfa usb refresh`; descriptors by `lfa usb scan`.
+#
+# A session started by `lfa usb attach`/`tty` exports LFA_USB_MAP and a real
+# (preloaded) /dev/bus/usb node.  There the distro's usbutils lsusb is the
+# better program, so hand over to it and only fall back to the bridge view.
+if [ -n "${LFA_USB_MAP:-}" ]; then
+    for _real in /usr/bin/lsusb /bin/lsusb; do
+        [ -x "$_real" ] && exec "$_real" "$@"
+    done
+fi
+# An explicit LFA_USB_BRIDGE always wins; the /tmp fallback is only for a
+# guest where the session did not export one (proot shares /tmp).
+if [ -n "${LFA_USB_BRIDGE:-}" ]; then
+    BR="$LFA_USB_BRIDGE"
+else
+    BR=/tmp/lfa-usb
+fi
+DB="$BR/devices.tsv"
+VERSION="1.0"
+
+usage() {
+    cat <<'HELP'
+Usage: lsusb [options]
+  -d VENDOR:PRODUCT   show only matching devices
+  -s [[BUS]:][DEV]    show only matching bus/device
+  -t                  show a simple device tree
+  -v                  show cached descriptor fields
+  -V, --version       print the LFA bridge version
+  -h, --help          show this help
+
+This lsusb reads the real devices enumerated by Termux:API. It is not the
+usbutils binary: full descriptors come from `lfa usb scan` in Termux.
+HELP
+}
+
+vid=""; sel=""; tree=0; verbose=0
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -d) vid="${2:-}"; shift 2 ;;
+        -s) sel="${2:-}"; shift 2 ;;
+        -t) tree=1; shift ;;
+        -v) verbose=1; shift ;;
+        -V|--version) echo "lsusb (LFA USB bridge) $VERSION"; exit 0 ;;
+        -h|--help) usage; exit 0 ;;
+        *) echo "lsusb (LFA): unsupported option '$1'" >&2; exit 2 ;;
+    esac
+done
+
+if [ ! -s "$DB" ]; then
+    echo "lsusb (LFA): the USB bridge has no data." >&2
+    echo "Run this in Termux: lfa usb refresh" >&2
+    exit 1
+fi
+
+sel_bus=""; sel_dev=""
+case "$sel" in
+    '') ;;
+    *:*) sel_bus="${sel%%:*}"; sel_dev="${sel##*:}" ;;
+    *) sel_dev="$sel" ;;
+esac
+
+awk -F '\t' -v want="$vid" -v sb="$sel_bus" -v sd="$sel_dev" \
+    -v tree="$tree" -v verbose="$verbose" '
+function pad(value) {
+    if (value ~ /^[0-9]+$/) return sprintf("%03d", value + 0)
+    return value
+}
+function cname(code) {
+    if (code == "01") return "Audio"
+    if (code == "02") return "Communications"
+    if (code == "03") return "Human Interface Device"
+    if (code == "05") return "Physical"
+    if (code == "06") return "Imaging"
+    if (code == "07") return "Printer"
+    if (code == "08") return "Mass Storage"
+    if (code == "09") return "Hub"
+    if (code == "0a") return "CDC Data"
+    if (code == "0b") return "Smart Card"
+    if (code == "0d") return "Content Security"
+    if (code == "0e") return "Video"
+    if (code == "dc") return "Diagnostic"
+    if (code == "e0") return "Wireless"
+    if (code == "ef") return "Miscellaneous"
+    if (code == "fe") return "Application Specific"
+    if (code == "ff") return "Vendor Specific"
+    return "Class " code
+}
+BEGIN { FS = "\t"; found = 0 }
+/^#/ || NF < 3 { next }
+{
+    b = $1; d = $2
+    if (want != "" && tolower($4 ":" $5) != tolower(want)) next
+    if (sb != "" && b != pad(sb)) next
+    if (sd != "" && d != pad(sd)) next
+    id = ($4 != "" && $5 != "") ? $4 ":" $5 : "----:----"
+    name = $10
+    if (name != "" && $11 != "") name = name " " $11
+    else if (name == "") name = $11
+    if (name == "") name = "Unknown device"
+    if (tree) {
+        printf "/:  Bus %s Device %s: ID %s %s\n", b, d, id, name
+        n = split($13, ifs, ";")
+        for (i = 1; i <= n; i++) {
+            split(ifs[i], f, ":")
+            printf "    |__ Interface %s, Class=%s (%s/%s/%s), %s endpoint(s)\n",
+                f[1], cname(f[2]), f[2], f[3], f[4], f[5]
+        }
+        found = 1
+        next
+    }
+    printf "Bus %s Device %s: ID %s %s\n", b, d, id, name
+    if (verbose) {
+        printf "  bcdUSB        %s\n", $6
+        printf "  idVendor      0x%s\n", $4
+        printf "  idProduct     0x%s\n", $5
+        printf "  bDeviceClass  %s (%s)\n", $7, cname($7)
+        printf "  iManufacturer %s\n", $10
+        printf "  iProduct      %s\n", $11
+        printf "  iSerial       %s\n", $12
+        n = split($13, ifs, ";")
+        for (i = 1; i <= n; i++) {
+            split(ifs[i], f, ":")
+            printf "  Interface %s: class %s (%s), subclass %s, protocol %s, %s endpoint(s)\n",
+                f[1], f[2], cname(f[2]), f[3], f[4], f[5]
+        }
+        if ($14 != "scan")
+            printf "  (descriptor not cached; run \"lfa usb scan\" in Termux)\n"
+        printf "\n"
+    }
+    found = 1
+}
+END {
+    if (!found) {
+        if (want != "" || sb != "" || sd != "") exit 1
+        print "No USB devices are visible to Termux:API."
+        print "Run \"lfa usb refresh\" in Termux after connecting a device."
+        exit 1
+    }
+}
+' "$DB"
+rc=$?
+if [ "$rc" -ne 0 ]; then
+    exit "$rc"
+fi
+if [ "$tree" = "0" ] && [ "$verbose" = "0" ]; then
+    _unknown="$(awk -F '\t' '!/^#/ && NF >= 3 && $4 == "" {n++} END {print n + 0}' "$DB")"
+    if [ "${_unknown:-0}" -gt 0 ] 2>/dev/null; then
+        echo "" >&2
+        echo "[i] $_unknown device(s) have no descriptors yet: run \"lfa usb scan\" in Termux." >&2
+    fi
+fi
+exit 0
+LSUSB
+    cat <<'LFAUSB' | lfa_shim_write "$_root" "usr/local/bin/lfa-usb"
+#!/bin/sh
+# LFA USB bridge helper inside the guest.
+# An explicit LFA_USB_BRIDGE always wins; the /tmp fallback is only for a
+# guest where the session did not export one (proot shares /tmp).
+if [ -n "${LFA_USB_BRIDGE:-}" ]; then
+    BR="$LFA_USB_BRIDGE"
+else
+    BR=/tmp/lfa-usb
+fi
+
+usage() {
+    cat <<'HELP'
+Usage: lfa-usb COMMAND [args]
+
+  list [lsusb options]   list real devices (same as lsusb)
+  info BUS DEV           show cached descriptor fields for one device
+  status                 bridge directory, device count, inherited fd
+  path BUS DEV           print the Android device path
+  fd                     print the inherited USB file descriptor
+  run COMMAND [args]     run COMMAND with TERMUX_USB_FD (set by lfa usb exec)
+  desc [FD]              read descriptors from FD (default: TERMUX_USB_FD)
+  help                   show this help
+
+Start an fd session from Termux:
+  lfa usb exec 001/002 -- lfa-usb info 001 002
+  lfa usb exec 001/002 -- lfa-usb desc
+HELP
+}
+
+pad3() {
+    _v="$1"
+    case "$_v" in
+        ''|*[!0-9]*) printf '%s' "$_v"; return 0 ;;
+    esac
+    while [ "${#_v}" -gt 1 ] && [ "${_v#0}" != "$_v" ]; do
+        _v="${_v#0}"
+    done
+    printf '%03d' "$_v"
+}
+
+case "${1:-help}" in
+    help|-h|--help) usage ;;
+    list|ls)
+        shift
+        if command -v lsusb >/dev/null 2>&1; then
+            exec lsusb "$@"
+        fi
+        if [ -x /usr/local/bin/lsusb ]; then
+            exec /usr/local/bin/lsusb "$@"
+        fi
+        echo "lfa-usb: lsusb helper is missing; run 'lfa usb enable' in Termux." >&2
+        exit 1
+        ;;
+    status)
+        [ -r "$BR/state.env" ] && . "$BR/state.env"
+        echo "LFA USB bridge"
+        echo "  bridge directory: $BR"
+        echo "  devices:          ${USB_COUNT:-0}"
+        echo "  updated:          ${USB_UPDATED:-unknown}"
+        echo "  source:           ${USB_SOURCE:-unknown}"
+        if [ -n "${TERMUX_USB_FD:-}" ]; then
+            echo "  USB fd:           $TERMUX_USB_FD"
+            echo "  device path:      ${LFA_USB_PATH:-unknown}"
+        else
+            echo "  USB fd:           none in this shell"
+        fi
+        echo ""
+        echo "Run in Termux: lfa usb attach DEV -- COMMAND"
+        echo "for /dev/bus/usb/BBB/DDD, or lfa usb tty for /dev/ttyUSB0."
+        echo "The node is a preload over the real Termux:API descriptor."
+        ;;
+    fd)
+        if [ -z "${TERMUX_USB_FD:-}" ]; then
+            echo "lfa-usb: no USB fd. Start with: lfa usb exec DEV -- COMMAND" >&2
+            exit 1
+        fi
+        printf '%s\n' "$TERMUX_USB_FD"
+        ;;
+    run)
+        shift
+        [ $# -gt 0 ] || { usage >&2; exit 2; }
+        if [ -z "${TERMUX_USB_FD:-}" ]; then
+            echo "lfa-usb: warning: TERMUX_USB_FD is not set; start via 'lfa usb exec'." >&2
+        fi
+        exec "$@"
+        ;;
+    desc)
+        shift
+        _desc="${LFA_USB_DESC:-/usr/local/libexec/lfa-usb-desc.py}"
+        if [ ! -f "$_desc" ]; then
+            echo "lfa-usb: descriptor reader missing: $_desc" >&2
+            exit 1
+        fi
+        if ! command -v python3 >/dev/null 2>&1; then
+            echo "lfa-usb: python3 is required for descriptor reads." >&2
+            exit 1
+        fi
+        exec python3 "$_desc" "$@"
+        ;;
+    path)
+        shift
+        _bus="$(pad3 "${1:-}")"
+        _dev="$(pad3 "${2:-}")"
+        if [ -z "$_bus" ] || [ -z "$_dev" ]; then
+            echo "Usage: lfa-usb path BUS DEV" >&2
+            exit 2
+        fi
+        printf '/dev/bus/usb/%s/%s\n' "$_bus" "$_dev"
+        ;;
+    info)
+        shift
+        _bus="$(pad3 "${1:-}")"
+        _dev="${2:-}"
+        if [ -z "$_dev" ]; then
+            case "$_bus" in
+                */*) _dev="$(pad3 "${_bus##*/}")"; _bus="$(pad3 "${_bus%%/*}")" ;;
+                *:*) _dev="$(pad3 "${_bus##*:}")"; _bus="$(pad3 "${_bus%%:*}")" ;;
+            esac
+        else
+            _dev="$(pad3 "$_dev")"
+        fi
+        if [ -z "$_bus" ] || [ -z "$_dev" ]; then
+            echo "Usage: lfa-usb info BUS DEV" >&2
+            exit 2
+        fi
+        _line="$(awk -F '\t' -v b="$_bus" -v d="$_dev" \
+            '!/^#/ && $1 == b && $2 == d { print; exit }' "$BR/devices.tsv" 2>/dev/null)"
+        if [ -z "$_line" ]; then
+            echo "lfa-usb: no cached device Bus $_bus Device $_dev." >&2
+            echo "Run 'lfa usb refresh' in Termux first." >&2
+            exit 1
+        fi
+        _d() { printf '%s' "$_line" | cut -f"$1"; }
+        echo "Bus $_bus Device $_dev"
+        echo "  path:          $(_d 3)"
+        echo "  idVendor:      0x$(_d 4)"
+        echo "  idProduct:     0x$(_d 5)"
+        echo "  USB version:   $(_d 6)"
+        echo "  class:         $(_d 7) ($(_d 8)/$(_d 9))"
+        echo "  manufacturer:  $(_d 10)"
+        echo "  product:       $(_d 11)"
+        echo "  serial:        $(_d 12)"
+        echo "  interfaces:    $(_d 13)"
+        _json="$BR/scan-$_bus-$_dev.json"
+        if [ -f "$_json" ]; then
+            echo ""
+            echo "Full descriptor: $_json"
+            if command -v python3 >/dev/null 2>&1; then
+                python3 -m json.tool "$_json" 2>/dev/null || cat "$_json"
+            else
+                cat "$_json"
+            fi
+        else
+            echo ""
+            echo "No full descriptor cached. Run 'lfa usb scan' in Termux."
+        fi
+        ;;
+    *)
+        echo "lfa-usb: unknown command '$1'" >&2
+        usage >&2
+        exit 2
+        ;;
+esac
+LFAUSB
+    lfa_usb_stage_desc "$_root" || return 1
+    if [ -d "$_root/run" ] || mkdir -p "$_root/run" 2>/dev/null; then
+        if [ ! -e "$_root/run/lfa-usb" ] || [ -L "$_root/run/lfa-usb" ]; then
+            ln -sfn /tmp/lfa-usb "$_root/run/lfa-usb" 2>/dev/null || true
+        fi
+    fi
+    lfa_usb_stage_tty "$_root" 2>/dev/null || true
+    _shim="$(lfa_usb_build_shim "$_root" 2>/dev/null || true)"
+    if [ -n "$_shim" ] && lfa_usb_stage_shim "$_root" "$_shim"; then
+        echo "[*] libusb preload installed for $(lfa_usb_elf_arch "$_root"): $LFA_USB_SHIM_GUEST"
+    else
+        echo "[!] The libusb preload could not be built for this rootfs."
+        echo "    Install clang in Termux (pkg install clang) to enable /dev/bus/usb."
+    fi
+    lfa_usb_write_callback || true
+    lfa_usb_conf_set USB_INSTANCE "$_id"
+    lfa_usb_conf_set USB_SHIMS 1
+    lfa_usb_refresh >/dev/null 2>&1 || true
+    echo "[*] USB helpers installed in $_id: /usr/local/bin/lsusb, /usr/local/bin/lfa-usb"
+    echo "    View:    lfa usb list"
+    echo "    Scan:    lfa usb scan"
+    echo "    Device:  lfa usb attach          (real /dev/bus/usb + sysfs)"
+    echo "    Serial:  lfa usb tty             (real /dev/ttyUSB0)"
+    echo "    Flash:   lfa usb flash --install"
+    echo "    Raw fd:  lfa usb exec 001/002 -- lfa-usb desc"
+}
+
+lfa_usb_disable() {
+    local _inst="" _root _id _f _manifest
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            -i|--instance) _inst="${2:-}"; shift 2 ;;
+            -h|--help) lfa_usb_usage; return 0 ;;
+            *) echo "Unknown option: $1" >&2; return 2 ;;
+        esac
+    done
+    if ! lfa_usb_pick_instance "$_inst"; then
+        echo "[!] Choose a distribution with -i NAME." >&2
+        return 1
+    fi
+    _id="$INSTANCE_NAME"
+    _root="$(pd_rootfs "$_id")"
+    for _f in "usr/local/bin/lsusb" "usr/local/bin/lfa-usb"; do
+        if [ -f "$_root/$_f" ] && grep -q 'LFA USB bridge' "$_root/$_f" 2>/dev/null; then
+            rm -f "$_root/$_f"
+        fi
+    done
+    for _f in "usr/local/libexec/lfa-usb-desc.py" "usr/local/libexec/lfa-usb-tty.py" \
+              "usr/local/lib/lfa-usb-node.so"; do
+        [ -e "$_root/$_f" ] && rm -f "$_root/$_f"
+    done
+    _manifest="$_root/var/lib/lfa-usb/nodes"
+    if [ -f "$_manifest" ]; then
+        while IFS= read -r _f; do
+            case "$_f" in /dev/*) rm -f "$_root$_f" 2>/dev/null || true ;; esac
+        done < "$_manifest"
+        rm -f "$_manifest" 2>/dev/null || true
+    fi
+    if [ -L "$_root/run/lfa-usb" ]; then
+        rm -f "$_root/run/lfa-usb"
+    fi
+    lfa_usb_conf_set USB_SHIMS 0
+    echo "[*] USB helpers removed from $_id."
+    echo "    The published bridge in $LFA_USB_BRIDGE is unchanged."
+}
+
+lfa_usb_exec() {
+    local _inst="" _user="" _root _id _dev _cwd="" _perm=1
+    local -a _cmd=()
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            -i|--instance) _inst="${2:-}"; shift 2 ;;
+            --user) _user="${2:-}"; shift 2 ;;
+            --root) _user="root"; shift ;;
+            --cwd) _cwd="${2:-}"; shift 2 ;;
+            --no-permission) _perm=0; shift ;;
+            -h|--help) lfa_usb_usage; return 0 ;;
+            --) shift; break ;;
+            -*) echo "Unknown option: $1" >&2; return 2 ;;
+            *) break ;;
+        esac
+    done
+    [ $# -gt 0 ] || { echo "Usage: lfa usb exec DEV -- COMMAND..." >&2; return 2; }
+    _dev="$(lfa_usb_normalize_dev "$1")"
+    shift
+    # Options may follow DEV, as long as they come before `--` or the command.
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            -i|--instance) _inst="${2:-}"; shift 2 ;;
+            --user) _user="${2:-}"; shift 2 ;;
+            --root) _user="root"; shift ;;
+            --cwd) _cwd="${2:-}"; shift 2 ;;
+            --no-permission) _perm=0; shift ;;
+            --) shift; break ;;
+            *) break ;;
+        esac
+    done
+    _cmd=("$@")
+    [ ${#_cmd[@]} -gt 0 ] || {
+        echo "Usage: lfa usb exec DEV -- COMMAND..." >&2
+        return 2
+    }
+    lfa_usb_api_ok || {
+        echo "[!] termux-usb is not installed. Run: lfa android install" >&2
+        return 1
+    }
+    if ! lfa_usb_export_ok; then
+        echo "[!] This termux-api cannot export a USB descriptor (-E)." >&2
+        echo "    Update it first: pkg upgrade termux-api" >&2
+        return 1
+    fi
+    lfa_usb_pick_instance "$_inst" || return 1
+    _id="$INSTANCE_NAME"
+    _root="$(pd_rootfs "$_id")"
+    command -v proot-distro >/dev/null 2>&1 || {
+        echo "[!] proot-distro is required to enter the guest." >&2
+        return 1
+    }
+    [ -n "$_user" ] || _user="$(lfa_appimage_user "$_id")"
+    lfa_usb_stage_desc "$_root" 2>/dev/null || true
+    if [ -z "$_cwd" ]; then
+        _cwd="/home/$_user"
+        [ -d "$_root$_cwd" ] || _cwd="/"
+    fi
+    lfa_usb_write_callback || return 1
+    mkdir -p "$LFA_USB_BRIDGE" 2>/dev/null || true
+    local _run_host="$LFA_USB_BRIDGE/run-$$.sh"
+    local _run_guest="/tmp/lfa-usb/run-$$.sh"
+    {
+        printf '#!/bin/bash\n'
+        printf '# Generated by lfa usb exec; removed when this command exits.\n'
+        printf 'exec'
+        printf ' %q' "${_cmd[@]}"
+        printf '\n'
+    } > "$_run_host" || return 1
+    chmod 700 "$_run_host" 2>/dev/null || true
+    local _perm_flag="-r"
+    [ "$_perm" = "1" ] || _perm_flag=""
+    local _rc=0
+    if [ -n "$_perm_flag" ]; then
+        LFA_USB_MODE=exec \
+        LFA_USB_INSTANCE="$_id" \
+        LFA_USB_USER="$_user" \
+        LFA_USB_PD_FLAGS="$(pd_login_flags)" \
+        LFA_USB_RUN_SCRIPT="$_run_guest" \
+        LFA_USB_CWD="$_cwd" \
+        LFA_USB_PATH="$_dev" \
+            termux-usb -r -E -e "$LFA_USB_CALLBACK" "$_dev" || _rc=$?
+    else
+        LFA_USB_MODE=exec \
+        LFA_USB_INSTANCE="$_id" \
+        LFA_USB_USER="$_user" \
+        LFA_USB_PD_FLAGS="$(pd_login_flags)" \
+        LFA_USB_RUN_SCRIPT="$_run_guest" \
+        LFA_USB_CWD="$_cwd" \
+        LFA_USB_PATH="$_dev" \
+            termux-usb -E -e "$LFA_USB_CALLBACK" "$_dev" || _rc=$?
+    fi
+    rm -f "$_run_host" 2>/dev/null || true
+    return "$_rc"
+}
+
+lfa_usb_print_changes() {  # $1 old list, $2 new list
+    local _old="$1" _new="$2" _path _bd _bus _dev _line
+    while IFS= read -r _path; do
+        [ -n "$_path" ] || continue
+        grep -Fxq -- "$_path" <<< "$_old" 2>/dev/null && continue
+        _bd="$(lfa_usb_bus_dev "$_path")"
+        _bus="$(lfa_usb_pad3 "${_bd%% *}")"
+        _dev="$(lfa_usb_pad3 "${_bd##* }")"
+        _line="$(lfa_usb_line_for "$_bus" "$_dev" 2>/dev/null || true)"
+        [ -n "$_line" ] || _line="$_path"
+        echo "[+] $_line"
+        printf '%s added %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$_path" \
+            >> "$LFA_USB_BRIDGE/events.log" 2>/dev/null || true
+    done <<< "$_new"
+    while IFS= read -r _path; do
+        [ -n "$_path" ] || continue
+        grep -Fxq -- "$_path" <<< "$_new" 2>/dev/null && continue
+        echo "[-] removed $_path"
+        printf '%s removed %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$_path" \
+            >> "$LFA_USB_BRIDGE/events.log" 2>/dev/null || true
+    done <<< "$_old"
+}
+
+lfa_usb_watch() {
+    local _interval=3 _count=0 _i=0 _prev _cur
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --interval|-n) _interval="${2:-3}"; shift 2 ;;
+            --count) _count="${2:-0}"; shift 2 ;;
+            -h|--help) lfa_usb_usage; return 0 ;;
+            *) echo "Unknown option: $1" >&2; return 2 ;;
+        esac
+    done
+    case "$_interval" in ''|*[!0-9]*) _interval=3 ;; esac
+    case "$_count" in ''|*[!0-9]*) _count=0 ;; esac
+    lfa_usb_api_ok || {
+        echo "[!] termux-usb is not installed. Run: lfa android install" >&2
+        return 1
+    }
+    mkdir -p "$LFA_USB_BRIDGE" 2>/dev/null || true
+    (
+        trap 'exit 130' INT TERM
+        _prev="$(lfa_usb_live_names)"
+        lfa_usb_refresh >/dev/null 2>&1 || true
+        echo "Watching USB devices every ${_interval}s (Ctrl-C to stop)..."
+        lfa_usb_print_changes "" "$_prev"
+        while :; do
+            if [ "$_count" -gt 0 ] && [ "$_i" -ge "$_count" ]; then
+                break
+            fi
+            sleep "$_interval"
+            _cur="$(lfa_usb_live_names)"
+            if [ "$_cur" != "$_prev" ]; then
+                lfa_usb_refresh >/dev/null 2>&1 || true
+                lfa_usb_print_changes "$_prev" "$_cur"
+                _prev="$_cur"
+            fi
+            _i=$((_i + 1))
+        done
+    )
+}
+
+# ------------------------------------------------------------
+# USB session: a real usbfs view inside the guest.
+#
+# proot cannot create device nodes, but it does inherit descriptors.
+# Termux:API hands the callback the real usbfs descriptor; this session
+# duplicates it as /dev/bus/usb/BBB/DDD with a small preload, writes a
+# sysfs-shaped tree from the real descriptors and binds it over
+# /sys/bus/usb/devices, so unmodified libusb tools work:
+#
+#   * open() on the node returns the inherited usbfs descriptor, and every
+#     ioctl/read/write then talks to the real kernel driver;
+#   * statfs() on /sys reports SYSFS_MAGIC, because libudev refuses
+#     syspaths on other filesystems;
+#   * the udev hotplug monitor becomes an idle pipe, because Android has
+#     no udev daemon to talk to.
+#
+# Nothing is simulated at the transfer level: descriptors and endpoints
+# are read from the device, and data goes through the real descriptor.
+# ------------------------------------------------------------
+LFA_USB_SHIM_SRC="$LFA_DIR/lib/lfa-usb-node.c"
+LFA_USB_TTY_SRC="$LFA_DIR/lib/lfa-usb-tty.py"
+LFA_USB_BUILD="$LFA_USB_CACHE/build"
+LFA_USB_SHIM_GUEST="/usr/local/lib/lfa-usb-node.so"
+LFA_USB_TTY_GUEST="/usr/local/libexec/lfa-usb-tty.py"
+
+lfa_usb_elf_arch() {  # $1 = rootfs; prints aarch64, arm, x86_64, i386, unknown
+    local _root="$1" _elf _class _lo _hi _mach
+    local -a _bytes=()
+    _elf="$_root/bin/sh"
+    [ -r "$_elf" ] || _elf="$_root/usr/bin/sh"
+    [ -r "$_elf" ] || { echo unknown; return 0; }
+    mapfile -t _bytes < <(od -An -tu1 -N20 "$_elf" 2>/dev/null | tr ' ' '\n' | sed '/^$/d' || true)
+    if [ "${#_bytes[@]}" -lt 20 ]; then
+        echo unknown
+        return 0
+    fi
+    _class="${_bytes[4]}"
+    _lo="${_bytes[18]}"
+    _hi="${_bytes[19]}"
+    _mach=$((_lo + _hi * 256))
+    case "$_class:$_mach" in
+        2:183) echo aarch64 ;;
+        1:40) echo arm ;;
+        2:62) echo x86_64 ;;
+        1:3) echo i386 ;;
+        *) echo unknown ;;
+    esac
+}
+
+lfa_usb_build_shim() {  # $1 = rootfs; prints the built .so path
+    local _root="$1" _arch _out _cc="" _target="" _host
+    _arch="$(lfa_usb_elf_arch "$_root")"
+    [ "$_arch" != unknown ] || return 1
+    [ -f "$LFA_USB_SHIM_SRC" ] || return 1
+    mkdir -p "$LFA_USB_BUILD" 2>/dev/null || return 1
+    _out="$LFA_USB_BUILD/lfa-usb-node-$_arch.so"
+    if [ -s "$_out" ] && [ "$_out" -nt "$LFA_USB_SHIM_SRC" ]; then
+        printf '%s\n' "$_out"
+        return 0
+    fi
+    if command -v clang >/dev/null 2>&1; then
+        _cc="clang"
+        case "$_arch" in
+            aarch64) _target="--target=aarch64-linux-gnu" ;;
+            arm) _target="--target=armv7a-linux-gnueabihf" ;;
+            x86_64) _target="--target=x86_64-linux-gnu" ;;
+            i386) _target="--target=i686-linux-gnu" ;;
+        esac
+    elif command -v cc >/dev/null 2>&1; then
+        _host="$(uname -m)"
+        case "$_host" in
+            arm64|arm64-v8a) _host=aarch64 ;;
+            armv7l|armv8l) _host=arm ;;
+        esac
+        [ "$_host" = "$_arch" ] && _cc="cc"
+    fi
+    if [ -n "$_cc" ]; then
+        # shellcheck disable=SC2086  # the target flag is optional
+        "$_cc" $_target -shared -fPIC -nostdlib -fno-builtin -O2 \
+            -fno-stack-protector -Wl,-soname,liblfa-usb-node.so \
+            -o "$_out" "$LFA_USB_SHIM_SRC" >/dev/null 2>&1 || rm -f "$_out"
+    fi
+    if [ ! -s "$_out" ] && [ -s "$LFA_DIR/lib/prebuilt/lfa-usb-node-$_arch.so" ]; then
+        cp -f "$LFA_DIR/lib/prebuilt/lfa-usb-node-$_arch.so" "$_out" 2>/dev/null || true
+    fi
+    [ -s "$_out" ] || return 1
+    printf '%s\n' "$_out"
+}
+
+lfa_usb_stage_shim() {  # $1 = rootfs, $2 = built .so
+    local _root="$1" _so="$2" _dst
+    [ -s "$_so" ] || return 1
+    _dst="$_root$LFA_USB_SHIM_GUEST"
+    mkdir -p "$(dirname "$_dst")" 2>/dev/null || return 1
+    cp -f "$_so" "$_dst" 2>/dev/null || return 1
+    chmod 644 "$_dst" 2>/dev/null || true
+}
+
+lfa_usb_stage_tty() {  # $1 = rootfs
+    local _dst="$1$LFA_USB_TTY_GUEST"
+    [ -f "$LFA_USB_TTY_SRC" ] || return 1
+    mkdir -p "$(dirname "$_dst")" 2>/dev/null || return 1
+    cp -f "$LFA_USB_TTY_SRC" "$_dst" 2>/dev/null || return 1
+    chmod 755 "$_dst" 2>/dev/null || true
+}
+
+lfa_usb_prepare_nodes() {  # $1 rootfs, $2 bus, $3 dev, $4 tty(0/1)
+    local _root="$1" _bus="$2" _dev="$3" _tty="${4:-0}"
+    local _manifest _old _dir _node _ttynode
+    [ -d "$_root/dev" ] || return 0
+    _manifest="$_root/var/lib/lfa-usb/nodes"
+    mkdir -p "$(dirname "$_manifest")" 2>/dev/null || true
+    if [ -f "$_manifest" ]; then
+        while IFS= read -r _old; do
+            [ -n "$_old" ] || continue
+            case "$_old" in /dev/*) rm -f "$_root$_old" 2>/dev/null || true ;; esac
+        done < "$_manifest"
+    fi
+    : > "$_manifest" 2>/dev/null || true
+    _dir="$_root/dev/bus/usb/$_bus"
+    mkdir -p "$_dir" 2>/dev/null || true
+    _node="$_dir/$_dev"
+    if [ ! -e "$_node" ]; then
+        if : > "$_node" 2>/dev/null; then
+            chmod 666 "$_node" 2>/dev/null || true
+            printf '/dev/bus/usb/%s/%s\n' "$_bus" "$_dev" >> "$_manifest" 2>/dev/null || true
+        fi
+    fi
+    # proot-distro v5+ binds the host /dev over the guest /dev, hiding the
+    # placeholder above. Keep the same node in a Termux-side shadow tree and
+    # bind `<shadow>/bus/usb` over /dev/bus/usb, which wins over that bind.
+    _shadow="$LFA_USB_BRIDGE/dev/bus/usb/$_bus"
+    if mkdir -p "$_shadow" 2>/dev/null && : > "$_shadow/$_dev" 2>/dev/null; then
+        chmod 666 "$_shadow/$_dev" 2>/dev/null || true
+    fi
+    if [ "$_tty" = 1 ]; then
+        _ttynode="$_root/dev/ttyUSB0"
+        if [ ! -e "$_ttynode" ] && [ ! -L "$_ttynode" ]; then
+            if : > "$_ttynode" 2>/dev/null; then
+                chmod 666 "$_ttynode" 2>/dev/null || true
+                printf '/dev/ttyUSB0\n' >> "$_manifest" 2>/dev/null || true
+            fi
+        fi
+    fi
+    return 0
+}
+
+lfa_usb_fd_prelude() {  # print the descriptor-inheritance lines of a script
+    cat <<'PRELUDE'
+# The descriptor Termux:API hands over can carry FD_CLOEXEC: this shell has
+# it, but every child (lsusb, python3, esptool) gets EBADF and control
+# transfers fail with ENOTTY while descriptors still come from sysfs. bash's
+# "{var}<&N" form allocates with F_DUPFD_CLOEXEC on some builds, so duplicate
+# with a plain redirection instead: dup2() always clears the flag.
+if [ -n "${TERMUX_USB_FD:-}" ]; then
+    if [ -e "/proc/$$/fd/$TERMUX_USB_FD" ]; then
+        for _lfa_fd in 10 11 12 13 14 15; do
+            [ -e "/proc/$$/fd/$_lfa_fd" ] && continue
+            eval "exec ${_lfa_fd}<&\"\${TERMUX_USB_FD}\"" || continue
+            TERMUX_USB_FD="$_lfa_fd"
+            export TERMUX_USB_FD
+            if [ -n "${LFA_USB_MAP:-}" ]; then
+                LFA_USB_MAP="${LFA_USB_MAP%=*}=$TERMUX_USB_FD"
+                export LFA_USB_MAP
+            fi
+            break
+        done
+        unset _lfa_fd
+    else
+        echo "lfa-usb: TERMUX_USB_FD=$TERMUX_USB_FD is not open in this shell" >&2
+    fi
+    # Say out loud whether children really inherited it. A silent EBADF later
+    # looks like a broken preload and costs a debugging round.
+    if command -v python3 >/dev/null 2>&1; then
+        if python3 -c 'import os,sys; os.fstat(int(sys.argv[1]))' \
+                "$TERMUX_USB_FD" 2>/dev/null; then
+            echo "[*] usb fd $TERMUX_USB_FD: inheritable"
+        else
+            echo "[!] usb fd $TERMUX_USB_FD: NOT inheritable (transfers will fail)" >&2
+        fi
+    fi
+fi
+PRELUDE
+}
+
+lfa_usb_write_script() {  # $1 = host path, $2 = preload (may be empty), rest = command
+    local _dst="$1" _preload="${2:-}"
+    shift 2
+    [ $# -gt 0 ] || return 1
+    {
+        printf '#!/bin/bash\n'
+        printf '# Generated by lfa usb; deleted when the session ends.\n'
+        # Set the preload here, inside the guest. proot-distro v5 removes
+        # LD_PRELOAD from the environment it passes to proot, so setting it
+        # only in the callback's /bin/sh would lose it.
+        if [ -n "$_preload" ]; then
+            printf 'export LD_PRELOAD=%q\n' "$_preload"
+        fi
+        lfa_usb_fd_prelude
+        printf 'exec'
+        printf ' %q' "$@"
+        printf '\n'
+    } > "$_dst" 2>/dev/null || return 1
+    chmod 700 "$_dst" 2>/dev/null || true
+}
+
+lfa_usb_default_dev() {
+    local _path=""
+    [ -s "$LFA_USB_BRIDGE/devices.tsv" ] || lfa_usb_refresh >/dev/null 2>&1 || true
+    _path="$(awk -F '\t' '!/^#/ && NF >= 3 { print $3; exit }' \
+        "$LFA_USB_BRIDGE/devices.tsv" 2>/dev/null || true)"
+    printf '%s' "$_path"
+}
+
+lfa_usb_install_esptool() {  # $1 = optional instance
+    local _id _user _root _rc=0
+    lfa_usb_pick_instance "${1:-}" || return 1
+    _id="$INSTANCE_NAME"
+    _user="$(lfa_appimage_user "$_id")"
+    _root="$(pd_rootfs "$_id")"
+    echo "[*] Installing esptool in $_id (pip)..."
+    # shellcheck disable=SC2046,SC2086  # pd_login_flags is a word list
+    proot-distro login $(pd_login_flags) "$_id" --user "$_user" --shared-tmp -- \
+        /bin/sh -c '
+            if command -v esptool.py >/dev/null 2>&1 || command -v esptool >/dev/null 2>&1; then
+                echo "esptool is already installed."
+                exit 0
+            fi
+            command -v python3 >/dev/null 2>&1 || {
+                echo "python3 is missing in this distribution." >&2
+                exit 1
+            }
+            python3 -m pip install --upgrade esptool 2>/dev/null ||
+                python3 -m pip install --break-system-packages --upgrade esptool
+        ' || _rc=$?
+    if [ "$_rc" -ne 0 ]; then
+        echo "[!] esptool install failed in $_id." >&2
+        echo "    Install python3 and pip first, or run inside the guest:" >&2
+        echo "      python3 -m pip install esptool" >&2
+        return "$_rc"
+    fi
+    echo "[*] esptool is ready in $_id."
+    return 0
+}
+
+lfa_usb_attach() {
+    local _inst="" _user="" _root _id _dev="" _cwd="" _perm=1 _sysfs=1 _rc=0
+    local _devbind=""
+    local _bd _bus _devn _speed _shim _preload="" _bind="" _prep_rc=0
+    local _script_host _script_guest
+    local -a _cmd=()
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            -i|--instance) _inst="${2:-}"; shift 2 ;;
+            --user) _user="${2:-}"; shift 2 ;;
+            --root) _user="root"; shift ;;
+            --cwd) _cwd="${2:-}"; shift 2 ;;
+            --device) _dev="${2:-}"; shift 2 ;;
+            --no-permission) _perm=0; shift ;;
+            --no-sysfs) _sysfs=0; shift ;;
+            -h|--help) lfa_usb_usage; return 0 ;;
+            --) shift; break ;;
+            -*) echo "Unknown option: $1" >&2; return 2 ;;
+            *) break ;;
+        esac
+    done
+    if [ -z "$_dev" ] && [ $# -gt 0 ]; then
+        case "$1" in
+            /dev/bus/usb/*|[0-9]*/*|[0-9]*:*|[0-9]*-[0-9]*) _dev="$1"; shift ;;
+        esac
+    fi
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            -i|--instance) _inst="${2:-}"; shift 2 ;;
+            --user) _user="${2:-}"; shift 2 ;;
+            --root) _user="root"; shift ;;
+            --cwd) _cwd="${2:-}"; shift 2 ;;
+            --device) _dev="${2:-}"; shift 2 ;;
+            --no-permission) _perm=0; shift ;;
+            --no-sysfs) _sysfs=0; shift ;;
+            -h|--help) lfa_usb_usage; return 0 ;;
+            --) shift; break ;;
+            -*) echo "Unknown option: $1" >&2; return 2 ;;
+            *) break ;;
+        esac
+    done
+    _cmd=("$@")
+    if [ -z "$_dev" ]; then
+        _dev="$(lfa_usb_default_dev)"
+        [ -n "$_dev" ] || {
+            echo "[!] No USB device is visible. Connect one and run: lfa usb refresh" >&2
+            return 1
+        }
+        echo "[*] Using $_dev (the only visible device)."
+    fi
+    _dev="$(lfa_usb_normalize_dev "$_dev")"
+    _bd="$(lfa_usb_bus_dev "$_dev")"
+    if [ -z "$_bd" ]; then
+        echo "[!] '$_dev' is not a usbdevfs device path." >&2
+        return 2
+    fi
+    _bus="$(lfa_usb_pad3 "${_bd%% *}")"
+    _devn="$(lfa_usb_pad3 "${_bd##* }")"
+    lfa_usb_api_ok || {
+        echo "[!] termux-usb is not installed. Run: lfa android install" >&2
+        return 1
+    }
+    if ! lfa_usb_export_ok; then
+        echo "[!] This termux-api cannot export a USB descriptor (-E)." >&2
+        echo "    Update it first: pkg upgrade termux-api" >&2
+        return 1
+    fi
+    lfa_usb_pick_instance "$_inst" || return 1
+    _id="$INSTANCE_NAME"
+    _root="$(pd_rootfs "$_id")"
+    [ -d "$_root" ] || { echo "[!] Rootfs missing for $_id." >&2; return 1; }
+    command -v proot-distro >/dev/null 2>&1 || {
+        echo "[!] proot-distro is required to enter the guest." >&2
+        return 1
+    }
+    [ -n "$_user" ] || _user="$(lfa_appimage_user "$_id")"
+    if [ -z "$_cwd" ]; then
+        _cwd="/home/$_user"
+        [ -d "$_root$_cwd" ] || _cwd="/"
+    fi
+
+    lfa_usb_stage_desc "$_root" || return 1
+    lfa_usb_stage_tty "$_root" 2>/dev/null || true
+    _shim="$(lfa_usb_build_shim "$_root" 2>/dev/null || true)"
+    if [ -n "$_shim" ] && lfa_usb_stage_shim "$_root" "$_shim"; then
+        _preload="$LFA_USB_SHIM_GUEST"
+    else
+        echo "[!] The usbfs preload could not be built for $_id." >&2
+        echo "    Install clang in Termux (pkg install clang), or use the raw" >&2
+        echo "    descriptor mode: lfa usb exec $_bus/$_devn -- lfa-usb desc" >&2
+    fi
+    lfa_usb_write_callback || return 1
+    mkdir -p "$LFA_USB_BRIDGE" 2>/dev/null || true
+    lfa_usb_prepare_nodes "$_root" "$_bus" "$_devn" 0
+    [ -f "$LFA_USB_BRIDGE/dev/bus/usb/$_bus/$_devn" ] && \
+        _devbind="$LFA_USB_BRIDGE/dev/bus/usb:/dev/bus/usb"
+
+    _speed="$(cat "$LFA_USB_BRIDGE/sys/${_bus}-${_devn}/speed" 2>/dev/null || true)"
+    case "$_speed" in ''|*[!0-9]*) _speed=480 ;; esac
+
+    if [ "$_sysfs" = 1 ] && [ -n "$_preload" ]; then
+        rm -rf "$LFA_USB_BRIDGE/sysroot" 2>/dev/null || true
+        rm -f "$LFA_USB_BRIDGE/prep-$_bus-$_devn.json" \
+              "$LFA_USB_BRIDGE/prep-$_bus-$_devn.tsv" \
+              "$LFA_USB_BRIDGE/prep-$_bus-$_devn.bin" 2>/dev/null || true
+        (
+            export LFA_USB_MODE=prep
+            export LFA_USB_INSTANCE="$_id"
+            export LFA_USB_USER="$_user"
+            LFA_USB_PD_FLAGS="$(pd_login_flags)"
+            export LFA_USB_PD_FLAGS
+            export LFA_USB_OUT="/tmp/lfa-usb/prep-$_bus-$_devn.json"
+            export LFA_USB_TSV="/tmp/lfa-usb/prep-$_bus-$_devn.tsv"
+            export LFA_USB_BLOB="/tmp/lfa-usb/prep-$_bus-$_devn.bin"
+            export LFA_USB_SYSFS_OUT="/tmp/lfa-usb/sysroot/bus/usb/devices"
+            export LFA_USB_BUS="$_bus"
+            export LFA_USB_DEV="$_devn"
+            export LFA_USB_PATH="$_dev"
+            export LFA_USB_SPEED="$_speed"
+            lfa_android_timeout 120 termux-usb -r -E -e "$LFA_USB_CALLBACK" "$_dev"
+        ) > "$LFA_USB_BRIDGE/prep.log" 2>&1 || _prep_rc=$?
+        # libudev enumerates /sys/bus and /sys/class before it looks at
+        # /sys/bus/usb/devices, and Android's /sys is not readable for an
+        # app, so a bind of the devices dir alone fails with EACCES. Bind a
+        # small readable /sys/bus (which contains our usb/devices tree) and
+        # an empty /sys/class instead.
+        if [ -d "$LFA_USB_BRIDGE/sysroot/bus/usb/devices" ] && \
+           [ -n "$(ls -A "$LFA_USB_BRIDGE/sysroot/bus/usb/devices" 2>/dev/null)" ]; then
+            mkdir -p "$LFA_USB_BRIDGE/sysroot/class" 2>/dev/null || true
+            _bind="$LFA_USB_BRIDGE/sysroot/bus:/sys/bus"
+        else
+            echo "[!] Descriptors could not be read; libusb will not see the device." >&2
+            if [ -s "$LFA_USB_BRIDGE/prep.log" ]; then
+                sed 's/^/    /' "$LFA_USB_BRIDGE/prep.log" >&2
+            fi
+        fi
+    fi
+
+    if [ -n "$_bind" ] && [ -d "$LFA_USB_BRIDGE/sysroot/class" ]; then
+        _devbind="${_devbind:+$_devbind;}$LFA_USB_BRIDGE/sysroot/class:/sys/class"
+    fi
+
+    if [ ${#_cmd[@]} -eq 0 ]; then
+        _cmd=(/bin/bash -l)
+    fi
+    _script_host="$LFA_USB_BRIDGE/run-$$.sh"
+    _script_guest="/tmp/lfa-usb/run-$$.sh"
+    lfa_usb_write_script "$_script_host" "$_preload" "${_cmd[@]}" || return 1
+
+    echo "[*] USB session for $_id"
+    echo "    node:    /dev/bus/usb/$_bus/$_devn"
+    if [ -n "$_bind" ]; then
+        echo "    sysfs:   /sys/bus/usb/devices (real descriptors)"
+    else
+        echo "    sysfs:   not available in this session"
+    fi
+    if [ -n "$_preload" ]; then
+        echo "    preload: $LFA_USB_SHIM_GUEST"
+    fi
+    echo "    Try:     lsusb; lsusb -v -d \$(lsusb | awk '{print \$6}')"
+    echo ""
+
+    (
+        export LFA_USB_MODE=exec
+        export LFA_USB_INSTANCE="$_id"
+        export LFA_USB_USER="$_user"
+        LFA_USB_PD_FLAGS="$(pd_login_flags)"
+        export LFA_USB_PD_FLAGS
+        export LFA_USB_RUN_SCRIPT="$_script_guest"
+        export LFA_USB_CWD="$_cwd"
+        export LFA_USB_PATH="$_dev"
+        export LFA_USB_BUS="$_bus"
+        export LFA_USB_DEV="$_devn"
+        export LFA_USB_PRELOAD="$_preload"
+        export LFA_USB_BIND="$_bind"
+        export LFA_USB_DEVBIND="$_devbind"
+        if [ "$_perm" = "1" ] && { [ -z "$_bind" ] || [ "$_prep_rc" -ne 0 ]; }; then
+            lfa_android_timeout 0 termux-usb -r -E -e "$LFA_USB_CALLBACK" "$_dev"
+        else
+            lfa_android_timeout 0 termux-usb -E -e "$LFA_USB_CALLBACK" "$_dev"
+        fi
+    ) || _rc=$?
+    rm -f "$_script_host" 2>/dev/null || true
+    return "$_rc"
+}
+
+lfa_usb_tty() {
+    local _inst="" _user="" _root _id _dev="" _cwd="" _perm=1 _baud=115200 _rc=0
+    local _devbind=""
+    local _bd _bus _devn _shim _preload="" _script_host _script_guest
+    local -a _cmd=()
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            -i|--instance) _inst="${2:-}"; shift 2 ;;
+            --user) _user="${2:-}"; shift 2 ;;
+            --root) _user="root"; shift ;;
+            --cwd) _cwd="${2:-}"; shift 2 ;;
+            --device) _dev="${2:-}"; shift 2 ;;
+            --baud) _baud="${2:-}"; shift 2 ;;
+            --no-permission) _perm=0; shift ;;
+            -h|--help) lfa_usb_usage; return 0 ;;
+            --) shift; break ;;
+            -*) echo "Unknown option: $1" >&2; return 2 ;;
+            *) break ;;
+        esac
+    done
+    if [ -z "$_dev" ] && [ $# -gt 0 ]; then
+        case "$1" in
+            /dev/bus/usb/*|[0-9]*/*|[0-9]*:*|[0-9]*-[0-9]*) _dev="$1"; shift ;;
+        esac
+    fi
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            -i|--instance) _inst="${2:-}"; shift 2 ;;
+            --user) _user="${2:-}"; shift 2 ;;
+            --root) _user="root"; shift ;;
+            --cwd) _cwd="${2:-}"; shift 2 ;;
+            --device) _dev="${2:-}"; shift 2 ;;
+            --baud) _baud="${2:-}"; shift 2 ;;
+            --no-permission) _perm=0; shift ;;
+            -h|--help) lfa_usb_usage; return 0 ;;
+            --) shift; break ;;
+            -*) echo "Unknown option: $1" >&2; return 2 ;;
+            *) break ;;
+        esac
+    done
+    _cmd=("$@")
+    case "$_baud" in ''|*[!0-9]*) echo "[!] --baud must be a number." >&2; return 2 ;; esac
+    if [ -z "$_dev" ]; then
+        _dev="$(lfa_usb_default_dev)"
+        [ -n "$_dev" ] || {
+            echo "[!] No USB device is visible. Connect one and run: lfa usb refresh" >&2
+            return 1
+        }
+        echo "[*] Using $_dev (the only visible device)."
+    fi
+    _dev="$(lfa_usb_normalize_dev "$_dev")"
+    _bd="$(lfa_usb_bus_dev "$_dev")"
+    if [ -z "$_bd" ]; then
+        echo "[!] '$_dev' is not a usbdevfs device path." >&2
+        return 2
+    fi
+    _bus="$(lfa_usb_pad3 "${_bd%% *}")"
+    _devn="$(lfa_usb_pad3 "${_bd##* }")"
+    lfa_usb_api_ok || {
+        echo "[!] termux-usb is not installed. Run: lfa android install" >&2
+        return 1
+    }
+    if ! lfa_usb_export_ok; then
+        echo "[!] This termux-api cannot export a USB descriptor (-E)." >&2
+        echo "    Update it first: pkg upgrade termux-api" >&2
+        return 1
+    fi
+    lfa_usb_pick_instance "$_inst" || return 1
+    _id="$INSTANCE_NAME"
+    _root="$(pd_rootfs "$_id")"
+    [ -d "$_root" ] || { echo "[!] Rootfs missing for $_id." >&2; return 1; }
+    [ -n "$_user" ] || _user="$(lfa_appimage_user "$_id")"
+    if [ -z "$_cwd" ]; then
+        _cwd="/home/$_user"
+        [ -d "$_root$_cwd" ] || _cwd="/"
+    fi
+    lfa_usb_stage_desc "$_root" || return 1
+    lfa_usb_stage_tty "$_root" || {
+        echo "[!] lib/lfa-usb-tty.py is missing; reinstall Linux-for-Android." >&2
+        return 1
+    }
+    _shim="$(lfa_usb_build_shim "$_root" 2>/dev/null || true)"
+    if [ -n "$_shim" ] && lfa_usb_stage_shim "$_root" "$_shim"; then
+        _preload="$LFA_USB_SHIM_GUEST"
+    else
+        echo "[!] The usbfs preload could not be built; /dev/ttyUSB0 will not" >&2
+        echo "    be visible in this session (auto-reset also needs it)." >&2
+    fi
+    lfa_usb_write_callback || return 1
+    mkdir -p "$LFA_USB_BRIDGE" 2>/dev/null || true
+    lfa_usb_prepare_nodes "$_root" "$_bus" "$_devn" 1
+    [ -f "$LFA_USB_BRIDGE/dev/bus/usb/$_bus/$_devn" ] && \
+        _devbind="$LFA_USB_BRIDGE/dev/bus/usb:/dev/bus/usb"
+
+    _script_host="$LFA_USB_BRIDGE/tty-$$.sh"
+    _script_guest="/tmp/lfa-usb/tty-$$.sh"
+    {
+        printf '#!/bin/bash\n'
+        printf '# Generated by lfa usb tty; deleted when the session ends.\n'
+        # proot-distro v5 drops LD_PRELOAD from the environment; set it in
+        # the guest so the tty node map and DTR/RTS forwarding work.
+        [ -n "$_preload" ] && printf 'export LD_PRELOAD=%q\n' "$_preload"
+        lfa_usb_fd_prelude
+        printf 'exec python3 %q --fd "$TERMUX_USB_FD" --node /dev/ttyUSB0 --baud %q --' \
+            "$LFA_USB_TTY_GUEST" "$_baud"
+        [ ${#_cmd[@]} -gt 0 ] && printf ' %q' "${_cmd[@]}"
+        printf '\n'
+    } > "$_script_host" 2>/dev/null || return 1
+    chmod 700 "$_script_host" 2>/dev/null || true
+
+    echo "[*] USB serial session for $_id"
+    echo "    device: $_dev"
+    echo "    node:   /dev/ttyUSB0 (pty bridged to the real bulk endpoints)"
+    echo "    baud:   $_baud"
+    echo ""
+
+    (
+        export LFA_USB_MODE=exec
+        export LFA_USB_INSTANCE="$_id"
+        export LFA_USB_USER="$_user"
+        LFA_USB_PD_FLAGS="$(pd_login_flags)"
+        export LFA_USB_PD_FLAGS
+        export LFA_USB_RUN_SCRIPT="$_script_guest"
+        export LFA_USB_CWD="$_cwd"
+        export LFA_USB_PATH="$_dev"
+        export LFA_USB_BUS="$_bus"
+        export LFA_USB_DEV="$_devn"
+        export LFA_USB_PRELOAD="$_preload"
+        export LFA_USB_DEVBIND="$_devbind"
+        if [ "$_perm" = "1" ]; then
+            lfa_android_timeout 0 termux-usb -r -E -e "$LFA_USB_CALLBACK" "$_dev"
+        else
+            lfa_android_timeout 0 termux-usb -E -e "$LFA_USB_CALLBACK" "$_dev"
+        fi
+    ) || _rc=$?
+    rm -f "$_script_host" 2>/dev/null || true
+    return "$_rc"
+}
+
+lfa_usb_flash() {
+    local _install=0 _baud=115200 _inst="" _dev="" _rc=0 _i=0 _a
+    local _wrapper_host _wrapper_guest _port_seen=0
+    local -a _args=() _tty_args=() _fwd=()
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --install) _install=1; shift ;;
+            --baud) _baud="${2:-}"; shift 2 ;;
+            -i|--instance) _inst="${2:-}"; shift 2 ;;
+            --device) _dev="${2:-}"; shift 2 ;;
+            -h|--help) lfa_usb_flash_usage; return 0 ;;
+            --) shift; break ;;
+            *) break ;;
+        esac
+    done
+    _args+=("$@")
+    if [ "$_install" = "1" ]; then
+        lfa_usb_install_esptool "$_inst" || return 1
+        if [ ${#_args[@]} -eq 0 ]; then
+            return 0
+        fi
+    fi
+    if [ ${#_args[@]} -eq 0 ]; then
+        lfa_usb_flash_usage
+        return 1
+    fi
+    _fwd=()
+    _i=0
+    while [ "$_i" -lt "${#_args[@]}" ]; do
+        _a="${_args[$_i]}"
+        case "$_a" in
+            --port|-p|--port=*) _port_seen=1; _fwd+=("$_a") ;;
+            --baud) _baud="${_args[$((_i + 1))]:-$_baud}"; _i=$((_i + 1)) ;;
+            --baud=*) _baud="${_a#--baud=}" ;;
+            *) _fwd+=("$_a") ;;
+        esac
+        _i=$((_i + 1))
+    done
+    case "$_baud" in ''|*[!0-9]*) echo "[!] --baud must be a number." >&2; return 2 ;; esac
+    _args=("${_fwd[@]}")
+    if [ ${#_args[@]} -eq 0 ]; then
+        lfa_usb_flash_usage
+        return 1
+    fi
+    mkdir -p "$LFA_USB_BRIDGE" 2>/dev/null || true
+    _wrapper_host="$LFA_USB_BRIDGE/esptool-$$.sh"
+    _wrapper_guest="/tmp/lfa-usb/esptool-$$.sh"
+    {
+        printf '#!/bin/bash\n'
+        printf 'if command -v esptool.py >/dev/null 2>&1; then _esptool=esptool.py\n'
+        printf 'elif command -v esptool >/dev/null 2>&1; then _esptool=esptool\n'
+        printf 'else\n'
+        printf '    echo "lfa: esptool is not installed in the guest." >&2\n'
+        printf '    echo "     Run in Termux: lfa usb flash --install" >&2\n'
+        printf '    exit 1\n'
+        printf 'fi\n'
+        printf 'case "$("$_esptool" version 2>/dev/null | head -n1)" in\n'
+        printf '    *v5*|*" 5."*) _sep=- ;;\n'
+        printf '    *) _sep=_ ;;\n'
+        printf 'esac\n'
+        printf '_first="${1:-}"\n'
+        printf '[ $# -gt 0 ] && shift\n'
+        printf 'case "$_first" in\n'
+        printf '    probe|id) _first="flash${_sep}id" ;;\n'
+        printf '    write) _first="write${_sep}flash" ;;\n'
+        printf '    verify) _first="verify${_sep}flash" ;;\n'
+        printf '    erase) _first="erase${_sep}flash" ;;\n'
+        printf '    read) _first="read${_sep}flash" ;;\n'
+        printf 'esac\n'
+        printf '[ -n "$_first" ] && set -- "$_first" "$@"\n'
+        printf 'exec "$_esptool"'
+        if [ "$_port_seen" = 0 ]; then
+            printf ' --port /dev/ttyUSB0 --baud %q' "$_baud"
+        fi
+        printf ' "$@"\n'
+    } > "$_wrapper_host" 2>/dev/null || return 1
+    chmod 700 "$_wrapper_host" 2>/dev/null || true
+
+    _tty_args=(--baud "$_baud")
+    [ -n "$_inst" ] && _tty_args+=(-i "$_inst")
+    [ -n "$_dev" ] && _tty_args+=(--device "$_dev")
+    lfa_usb_tty "${_tty_args[@]}" -- /bin/bash "$_wrapper_guest" "${_args[@]}" || _rc=$?
+    rm -f "$_wrapper_host" 2>/dev/null || true
+    return "$_rc"
+}
+
+lfa_usb_flash_usage() {
+    cat <<'FLASHHELP'
+Usage: lfa usb flash [--install] [--device DEV] [--baud N] ARGS...
+
+Flash ESP32/ESP8266 firmware through a real serial port in the guest.
+The USB endpoints are bridged to /dev/ttyUSB0, so this runs esptool inside
+the distribution, exactly like on a desktop Linux machine.
+
+  --install           install esptool inside the guest with pip
+  --device DEV        pick the Android device (default: the only one)
+  --baud N            baud rate for the bridge and esptool (default 115200)
+  probe               read the chip ID (esptool flash_id)
+  write ARGS...       esptool write-flash arguments
+  read_mac, erase_flash, ...   any other esptool command
+
+Examples:
+  lfa usb flash --install
+  lfa usb flash probe
+  lfa usb flash write 0x0 /sdcard/firmware.bin
+  lfa usb flash write 0x0 /sdcard/boot.bin 0x10000 /sdcard/app.bin
+  lfa usb flash --baud 460800 write 0x0 /sdcard/firmware.bin
+
+Firmware paths are guest paths. /sdcard is shared with the guest, so it is
+the easiest place to keep a .bin file.
+
+If the board does not reset automatically, hold BOOT while plugging it in;
+esptool still synchronises and flashes.
+FLASHHELP
+}
+lfa_cli_usb() {
+    local _sub="${1:-status}"
+    [ $# -gt 0 ] && shift || true
+    case "$_sub" in
+        status) lfa_usb_status "$@" ;;
+        list|ls) lfa_usb_list "$@" ;;
+        refresh)
+            local _n
+            _n="$(lfa_usb_refresh)" || return $?
+            echo "USB bridge updated: $_n device(s) in $LFA_USB_BRIDGE" ;;
+        scan) lfa_usb_scan "$@" ;;
+        watch|monitor) lfa_usb_watch "$@" ;;
+        enable|install) lfa_usb_enable "$@" ;;
+        disable|remove) lfa_usb_disable "$@" ;;
+        exec|run) lfa_usb_exec "$@" ;;
+        attach|shell) lfa_usb_attach "$@" ;;
+        tty|serial) lfa_usb_tty "$@" ;;
+        flash) lfa_usb_flash "$@" ;;
+        help|-h|--help) lfa_usb_usage ;;
+        *) echo "Unknown usb command: $_sub" >&2; lfa_usb_usage >&2; return 2 ;;
+    esac
 }
 
 # The CLI runs from the private runtime copy, not from the generated
@@ -3228,6 +5454,7 @@ lfa_cli() {
         install) lfa_cli_install "$@" ;;
         compat) lfa_cli_compat "$@" ;;
         android) lfa_android_cmd "$@" ;;
+        usb) lfa_cli_usb "$@" ;;
         appimage|app) lfa_cli_appimage "$@" ;;
         storage) lfa_cli_storage "$@" ;;
         run) lfa_appimage_run "$@" ;;

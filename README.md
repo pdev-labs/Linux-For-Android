@@ -133,7 +133,7 @@ hardware, not simulated. Full details, root causes, and evidence are in
 | Alpine 3.18 (Android 5) | Yes | Yes | legacy VNC desktop, panel works; X11 and Both hidden | v1.7.1 |
 | Ubuntu GNOME 46 (experimental) | Yes | Yes | shell and apps run; session services missing | v1.7.0 |
 
-> The test suite runs `627` checks with 0 failures. The same suite runs on the
+> The test suite runs `811` checks with 0 failures. The same suite runs on the
 > devices (`tests/device-matrix.sh`). The table is as of v1.7.1. Ubuntu was
 > re-verified on v1.7.1, and Alpine 3.18 was re-verified on Android 5 on
 > 2026-11-04; the other rows were last verified on v1.7.0. A row is
@@ -398,6 +398,12 @@ as experimental only.
 - `lfa storage` repairs the shared-storage links and the false Thunar X, runs
   scripts from shared storage without `chmod`, and copies `Android/data` and
   `Android/obb` through adb.
+- `lfa usb` exposes real Android USB devices through Termux:API. `list` and
+  `refresh` show the live device list, `scan` reads descriptors, `attach`
+  opens a guest session with a real `/dev/bus/usb/BBB/DDD` and a sysfs view,
+  `tty` provides `/dev/ttyUSB0` for serial tools, `flash` runs esptool in the
+  guest, `watch` reports hotplug, and `exec DEV -- CMD` passes the raw
+  descriptor in `TERMUX_USB_FD`.
 
 ### Portability and convenience
 
@@ -469,6 +475,7 @@ is accepted.
 | `lfa remove` | delete a distribution (`-y` skips the question) |
 | `lfa compat` | list, explain, enable, or disable compatibility shims |
 | `lfa android` | check, install, test, and enable the Termux:API bridge |
+| `lfa usb` | list, scan, attach, tty, flash, and exec real USB devices through Termux:API |
 | `lfa appimage` / `lfa app` | extract an AppImage once and add a menu entry |
 | `lfa run` | run an AppImage once without installing it |
 | `lfa storage` | Android storage status, repair, run, and protected data helpers |
@@ -487,6 +494,10 @@ lfa autostart vnc -i ubuntu
 lfa install --distro debian --desktop xfce4 --software python,git,htop -i dev
 lfa compat list
 lfa android test
+lfa usb status
+lfa usb scan
+lfa usb enable -i ubuntu
+lfa usb exec 001/002 -- lfa-usb desc
 lfa appimage add ~/Foo.AppImage
 lfa appimage run Foo
 lfa storage status
@@ -524,6 +535,39 @@ Neither layer pretends to provide a kernel feature. Docker, Podman, Flatpak,
 TUN/TAP, iptables, CUDA, ROCm, KVM, and kernel modules remain unavailable.
 The full list, with reasons, is in
 [docs/INCOMPATIBLE.md](docs/INCOMPATIBLE.md).
+
+### USB devices
+
+`lfa usb` shows the USB devices Android actually exposes and gives a guest a
+real userspace USB port. Enumeration, descriptors and transfers go through
+Termux:API; nothing is simulated at the transfer level.
+
+```bash
+lfa usb status                  # Termux:API, host mode, bridge state
+lfa usb list                    # real devices, lsusb-style
+lfa usb scan                    # Android permission + real descriptors
+lfa usb enable -i ubuntu        # helpers, libusb preload, tty bridge
+lfa usb attach -i ubuntu        # shell with /dev/bus/usb/001/002 + sysfs
+lfa usb attach 001/002 -- lsusb -v
+lfa usb tty -i ubuntu           # shell with /dev/ttyUSB0
+lfa usb flash --install         # one-time: esptool in the guest
+lfa usb flash probe
+lfa usb flash write 0x0 /sdcard/firmware.bin
+lfa usb watch --interval 5      # poll for hotplug
+lfa usb exec 001/002 -- lfa-usb desc
+```
+
+`attach` maps the real usbfs descriptor onto `/dev/bus/usb/BBB/DDD` with a
+small preload and binds a sysfs tree built from the real descriptors, so
+`lsusb`, PyUSB, dfu-util and other libusb tools work unmodified. `tty` bridges
+the device's bulk endpoints to a pty, so `picocom` and `esptool` see a normal
+`/dev/ttyUSB0`; DTR/RTS and baud changes are forwarded to the chip. `exec`
+stays available for the raw descriptor in `TERMUX_USB_FD`.
+
+proot still cannot create device nodes; the node comes from the preload, not
+from `mknod`. Kernel drivers, USB audio, and printer queues therefore still do
+not attach. The full model, requirements, security notes, and troubleshooting
+are in [docs/USB.md](docs/USB.md).
 
 ### AppImages
 
@@ -1184,7 +1228,7 @@ short list is:
 - CUDA, ROCm, vendor GPU compute, hardware video encode/decode
 - kernel modules, real `mount`/`chroot`/`unshare`, real root/SELinux control
 - Bluetooth/BlueZ, NFC, camera as `/dev/video*`, sensors, USB host as device
-  nodes
+  nodes (`lfa usb` provides userspace access instead)
 - Wayland compositors, simultaneous X11 + VNC, foreign-architecture binaries
 
 Full reasons, the “works with caveats” list, Android 5/6/7 differences, and
@@ -1510,7 +1554,7 @@ plus `script` from util-linux for the pty test, which is skipped if absent:
 
 ```bash
 chmod +x tests/test-all.sh
-./tests/test-all.sh   # expect: PASS=627 FAIL=0
+./tests/test-all.sh   # expect: PASS=811 FAIL=0
 ```
 
 The suite is deliberately stubbed. It cannot prove a desktop actually appears.
