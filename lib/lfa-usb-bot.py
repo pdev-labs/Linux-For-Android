@@ -579,14 +579,22 @@ def write_image(fd: int, path: str, verify: bool) -> int:
                     break
                 if len(data) % block:
                     data += b"\x00" * (block - len(data) % block)
-                bot.write10(lba, data, block)
+                try:
+                    bot.write10(lba, data, block)
+                except BotError as exc:
+                    raise BotError("write failed at byte %d of %d: %s"
+                                   % (lba * block, size, exc)) from exc
                 written += len(data)
                 lba += len(data) // block
                 pct = min(100, int(written * 100 / max(size, 1)))
                 sys.stderr.write("\r[*] %3d%% %s" % (pct, human(written)))
                 sys.stderr.flush()
         sys.stderr.write("\n")
-        bot.sync_cache()
+        try:
+            bot.sync_cache()
+        except BotError as exc:
+            print("[!] SYNCHRONIZE CACHE failed (%s); verifying anyway" % exc,
+                  file=sys.stderr)
         print("[+] wrote %s" % human(written))
         if verify:
             print("[*] reading the card back")
@@ -728,7 +736,11 @@ def export_image(fd: int, path: str) -> int:
             out.truncate(total)
             while lba < cap["blocks"]:
                 blocks = min(blocks_per_chunk, cap["blocks"] - lba)
-                data = bot.read10(lba, blocks, block)
+                try:
+                    data = bot.read10(lba, blocks, block)
+                except BotError as exc:
+                    raise BotError("read failed at byte %d of %d: %s"
+                                   % (lba * block, total, exc)) from exc
                 if data.count(0) == len(data):
                     holes += len(data)          # leave a hole in the file
                 else:
@@ -779,16 +791,29 @@ def import_image(fd: int, path: str, full: bool) -> int:
                 expect = src.read(want)
                 if len(expect) < blocks * block:
                     expect += b"\x00" * (blocks * block - len(expect))
-                current = bot.read10(offset // block, blocks, block)
+                try:
+                    current = bot.read10(offset // block, blocks, block)
+                except BotError as exc:
+                    raise BotError("read failed at byte %d of %d: %s"
+                                   % (offset, size, exc)) from exc
                 if full or current != expect:
-                    bot.write10(offset // block, expect, block)
+                    try:
+                        bot.write10(offset // block, expect, block)
+                    except BotError as exc:
+                        raise BotError("write failed at byte %d of %d: %s"
+                                       % (offset, size, exc)) from exc
                     changed.append((offset, len(expect)))
                     changed_bytes += len(expect)
                 offset += want
                 _progress(offset, size, "import")
         if sys.stderr.isatty():
             sys.stderr.write("\n")
-        bot.sync_cache()
+        if changed:
+            try:
+                bot.sync_cache()
+            except BotError as exc:
+                print("[!] the card refused SYNCHRONIZE CACHE (%s); the read-back"
+                      " below is the real check" % exc, file=sys.stderr)
         print("[+] wrote %s in %d chunk(s)" % (human(changed_bytes), len(changed)))
         if not changed:
             print("[*] card already matched the image; nothing to verify")
@@ -940,13 +965,20 @@ def main(argv: Optional[List[str]] = None) -> int:
             return import_image(fd, args.import_file, args.full)
         return probe(fd, args.json)
     except BotError as exc:
+        text = str(exc)
         print("[!] %s" % exc, file=sys.stderr)
-        if "ENOTTY" in str(exc):
+        if "ENOTTY" in text:
             print("    ENOTTY means the kernel does not know that ioctl at all;"
                   " this is an LFA bug, not a permission problem.", file=sys.stderr)
-        print("    Android may refuse the driver detach on this device.", file=sys.stderr)
-        print("    If it does, the card's files are still available via"
-              " 'lfa usb storage'.", file=sys.stderr)
+        elif "claim" in text or "detach" in text:
+            print("    Android refused to release the reader's interface.",
+                  file=sys.stderr)
+            print("    The card's files are still available via"
+                  " 'lfa usb storage'.", file=sys.stderr)
+        else:
+            print("    The reader stopped answering mid-transfer. Unplug and"
+                  " replug it, then retry; the offset above says how far it"
+                  " got.", file=sys.stderr)
         return 5
     except Exception as exc:                      # noqa: BLE001 - CLI boundary
         print("[!] unexpected failure: %s: %s" % (type(exc).__name__, exc),
