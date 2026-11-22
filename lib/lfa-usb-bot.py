@@ -380,6 +380,32 @@ class Bot:
         last_lba, block = struct.unpack(">II", payload)
         return {"last_lba": last_lba, "blocks": last_lba + 1, "block_size": block}
 
+    def read10_retry(self, lba: int, blocks: int, block_size: int,
+                     tries: int = 3) -> bytes:
+        """read10, resetting the transport between attempts.
+
+        Cheap bridges drop the link under sustained load (EPROTO/ETIMEDOUT);
+        the read is idempotent, so it is worth asking again before failing.
+        """
+        last: Optional[BotError] = None
+        for attempt in range(tries):
+            try:
+                return self.read10(lba, blocks, block_size)
+            except BotError as exc:
+                last = exc
+                text = str(exc)
+                if "ENODEV" in text or "ESHUTDOWN" in text:
+                    break                    # the reader re-enumerated; stop
+                if attempt + 1 == tries:
+                    break
+                try:
+                    self.reset_recovery()
+                    self.wait_ready(tries=4)
+                except BotError:
+                    pass
+                time.sleep(0.5)
+        raise last if last else BotError("read failed")
+
     def read10(self, lba: int, blocks: int, block_size: int) -> bytes:
         cdb = struct.pack(">BBIBHB", 0x28, 0, lba, 0, blocks, 0)
         payload, residue = self.command(cdb, blocks * block_size, True)
@@ -726,6 +752,7 @@ def _progress_reset() -> None:
 def export_image(fd: int, path: str) -> int:
     """Read the card into a sparse file: holes for all-zero chunks."""
     bot, info = open_bot(fd)
+    state = path + ".lfa-progress"
     try:
         bot.wait_ready()
         cap = bot.capacity()
@@ -735,26 +762,48 @@ def export_image(fd: int, path: str) -> int:
         _progress_reset()
         holes = 0
         written = 0
-        lba = 0
-        with open(path, "wb") as out:
-            out.truncate(total)
-            while lba < cap["blocks"]:
-                blocks = min(blocks_per_chunk, cap["blocks"] - lba)
-                try:
-                    data = bot.read10(lba, blocks, block)
-                except BotError as exc:
-                    raise BotError("read failed at byte %d of %d: %s"
-                                   % (lba * block, total, exc)) from exc
-                if data.count(0) == len(data):
-                    holes += len(data)          # leave a hole in the file
-                else:
-                    out.seek(lba * block)
-                    out.write(data)
-                    written += len(data)
-                lba += blocks
-                _progress(lba * block, total, "export")
-            out.flush()
-            os.fsync(out.fileno())
+        start = 0
+        if os.path.exists(state):
+            try:
+                with open(state, "r") as handle:
+                    start = int(handle.read().strip() or "0")
+            except (OSError, ValueError):
+                start = 0
+            start = max(0, min(start, total))
+            start -= start % chunk_size
+        lba = start // block
+        if start:
+            print("[*] resuming at %s of %s" % (human(start), human(total)))
+        mode = "r+b" if start and os.path.exists(path) else "wb"
+        persisted = lba
+        try:
+            with open(path, mode) as out:
+                if not start:
+                    out.truncate(total)
+                while lba < cap["blocks"]:
+                    blocks = min(blocks_per_chunk, cap["blocks"] - lba)
+                    data = bot.read10_retry(lba, blocks, block)
+                    if data.count(0) == len(data):
+                        holes += len(data)      # leave a hole in the file
+                    else:
+                        out.seek(lba * block)
+                        out.write(data)
+                        written += len(data)
+                    lba += blocks
+                    _progress(lba * block, total, "export")
+                    # A crash costs at most 32 MiB of re-reading.
+                    if lba - persisted >= blocks_per_chunk * 32:
+                        with open(state, "w") as handle:
+                            handle.write(str(lba * block))
+                        persisted = lba
+                out.flush()
+                os.fsync(out.fileno())
+        except BotError as exc:
+            with open(state, "w") as handle:
+                handle.write(str(lba * block))
+            raise BotError("%s (saved progress at %s; re-run the same command"
+                           " to resume)" % (exc, human(lba * block))) from exc
+        os.unlink(state)
         if sys.stderr.isatty():
             sys.stderr.write("\n")
         print("[+] %s: %s (%s data, %s holes)"
@@ -796,7 +845,7 @@ def import_image(fd: int, path: str, full: bool) -> int:
                 if len(expect) < blocks * block:
                     expect += b"\x00" * (blocks * block - len(expect))
                 try:
-                    current = bot.read10(offset // block, blocks, block)
+                    current = bot.read10_retry(offset // block, blocks, block)
                 except BotError as exc:
                     raise BotError("read failed at byte %d of %d: %s"
                                    % (offset, size, exc)) from exc
@@ -841,7 +890,7 @@ def import_image(fd: int, path: str, full: bool) -> int:
                 back = b""
                 for attempt in (1, 2):
                     try:
-                        back = bot.read10(offset // block, length // block, block)
+                        back = bot.read10_retry(offset // block, length // block, block)
                         break
                     except BotError as exc:
                         if attempt == 2:
