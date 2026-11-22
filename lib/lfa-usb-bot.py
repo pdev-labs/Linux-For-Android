@@ -89,6 +89,7 @@ USBDEVFS_CLAIMINTERFACE = _ioc(2, ord("U"), 15, 4)
 USBDEVFS_RELEASEINTERFACE = _ioc(2, ord("U"), 16, 4)
 USBDEVFS_CLEAR_HALT = _ioc(2, ord("U"), 21, 4)
 USBDEVFS_RESET = _ioc(0, ord("U"), 20, 0)
+USBDEVFS_CONNECT = _ioc(0, ord("U"), 23, 0)
 # _IOR, not _IOWR: the kernel header defines it with _IOC_READ, and a
 # direction mismatch makes usbfs reject the request with ENOTTY before it
 # ever looks at the permission or the driver name.
@@ -648,16 +649,33 @@ def restore_android(fd: int) -> None:
     if android_has_card():
         print("[*] Android has the card mounted again")
         return
+
+    def wait(seconds: float) -> bool:
+        deadline = time.time() + seconds
+        while time.time() < deadline:
+            if android_has_card():
+                return True
+            time.sleep(0.25)
+        return android_has_card()
+
+    # 1. Ask the driver core to bind the now-unclaimed interface again.
+    try:
+        fcntl.ioctl(fd, USBDEVFS_CONNECT)
+    except OSError:
+        pass
+    if wait(5.0):
+        print("[+] usb-storage rebound; /mnt/card works again")
+        return
+    # 2. Re-enumerate the device, which makes the kernel probe its drivers.
     try:
         fcntl.ioctl(fd, USBDEVFS_RESET)
     except OSError:
         pass
-    time.sleep(1.0)
-    if android_has_card():
+    if wait(5.0):
         print("[+] card is mounted again; /mnt/card works")
-    else:
-        print("[*] Android has not remounted the card; replug the reader to"
-              " use /mnt/card again")
+        return
+    print("[*] Android has not remounted the card; replug the reader to"
+          " use /mnt/card again")
 
 
 # --------------------------------------------------------------------------
@@ -672,10 +690,25 @@ def _chunk_geometry(block: int) -> Tuple[int, int]:
     return blocks, blocks * block
 
 
+_progress_last = {"pct": -1}
+
+
 def _progress(done: int, total: int, label: str) -> None:
     pct = min(100, int(done * 100 / max(total, 1)))
-    sys.stderr.write("\r[%s] %3d%% %s of %s" % (label, pct, human(done), human(total)))
-    sys.stderr.flush()
+    line = "[%s] %3d%% %s of %s" % (label, pct, human(done), human(total))
+    if sys.stderr.isatty():
+        sys.stderr.write("\r" + line)
+        sys.stderr.flush()
+        return
+    # Piped output: one line per 10%, so logs and CI stay readable.
+    if pct >= _progress_last["pct"] + 10 or pct == 100:
+        _progress_last["pct"] = pct
+        sys.stderr.write(line + "\n")
+        sys.stderr.flush()
+
+
+def _progress_reset() -> None:
+    _progress_last["pct"] = -1
 
 
 def export_image(fd: int, path: str) -> int:
@@ -687,6 +720,7 @@ def export_image(fd: int, path: str) -> int:
         block = cap["block_size"] or 512
         blocks_per_chunk, chunk_size = _chunk_geometry(block)
         total = cap["blocks"] * block
+        _progress_reset()
         holes = 0
         written = 0
         lba = 0
@@ -705,7 +739,8 @@ def export_image(fd: int, path: str) -> int:
                 _progress(lba * block, total, "export")
             out.flush()
             os.fsync(out.fileno())
-        sys.stderr.write("\n")
+        if sys.stderr.isatty():
+            sys.stderr.write("\n")
         print("[+] %s: %s (%s data, %s holes)"
               % (path, human(total), human(written), human(holes)))
         print("[*] work on it with fdisk/sfdisk/mkfs/dd, then: lfa usb bot"
@@ -733,6 +768,7 @@ def import_image(fd: int, path: str, full: bool) -> int:
             print("[!] image is larger than the card (%s > %s)"
                   % (human(size), human(total)), file=sys.stderr)
             return 2
+        _progress_reset()
         changed: List[Tuple[int, int]] = []
         changed_bytes = 0
         offset = 0
@@ -750,7 +786,8 @@ def import_image(fd: int, path: str, full: bool) -> int:
                     changed_bytes += len(expect)
                 offset += want
                 _progress(offset, size, "import")
-        sys.stderr.write("\n")
+        if sys.stderr.isatty():
+            sys.stderr.write("\n")
         bot.sync_cache()
         print("[+] wrote %s in %d chunk(s)" % (human(changed_bytes), len(changed)))
         if not changed:
