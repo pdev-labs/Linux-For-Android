@@ -88,7 +88,10 @@ USBDEVFS_BULK = _ioc(3, ord("U"), 2, ctypes.sizeof(BulkTransfer))
 USBDEVFS_CLAIMINTERFACE = _ioc(2, ord("U"), 15, 4)
 USBDEVFS_RELEASEINTERFACE = _ioc(2, ord("U"), 16, 4)
 USBDEVFS_CLEAR_HALT = _ioc(2, ord("U"), 21, 4)
-USBDEVFS_DISCONNECT_CLAIM = _ioc(3, ord("U"), 27, ctypes.sizeof(DisconnectClaim))
+# _IOR, not _IOWR: the kernel header defines it with _IOC_READ, and a
+# direction mismatch makes usbfs reject the request with ENOTTY before it
+# ever looks at the permission or the driver name.
+USBDEVFS_DISCONNECT_CLAIM = _ioc(2, ord("U"), 27, ctypes.sizeof(DisconnectClaim))
 
 GET_DESCRIPTOR = 0x06
 DT_DEVICE = 1
@@ -712,6 +715,15 @@ def selftest() -> int:
     assert mbr["partitions"][0]["start_lba"] == 2048
 
     assert human(1024) == "1.0K" and human(1536) == "1.5K"
+
+    # The ioctl encodings must match <linux/usbdevice_fs.h>; a wrong
+    # direction bit is indistinguishable from "unsupported" at runtime.
+    assert USBDEVFS_CONTROL == 0xC0185500
+    assert USBDEVFS_BULK == 0xC0185502
+    assert USBDEVFS_CLAIMINTERFACE == 0x8004550F
+    assert USBDEVFS_RELEASEINTERFACE == 0x80045510
+    assert USBDEVFS_CLEAR_HALT == 0x80045515
+    assert USBDEVFS_DISCONNECT_CLAIM == 0x8108551B
     print("selftest: ok")
     return 0
 
@@ -776,6 +788,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         return probe(fd, args.json)
     except BotError as exc:
         print("[!] %s" % exc, file=sys.stderr)
+        if "ENOTTY" in str(exc):
+            print("    ENOTTY means the kernel does not know that ioctl at all;"
+                  " this is an LFA bug, not a permission problem.", file=sys.stderr)
         print("    Android may refuse the driver detach on this device.", file=sys.stderr)
         print("    If it does, the card's files are still available via"
               " 'lfa usb storage'.", file=sys.stderr)
