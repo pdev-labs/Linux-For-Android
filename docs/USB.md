@@ -439,6 +439,27 @@ targets), `dd`, `fsck`, `debugfs`, byte patching. What does not:
 `losetup`, `mount -o loop`, and installers that insist on `S_ISBLK`
 (Ventoy2Disk). The kernel is still missing; only the storage moved.
 
+### Checking an existing Ventoy card
+
+`lfa usb bot --probe` reads each partition's boot sector, so the report
+names the filesystem and the volume label:
+
+```
+#1 type 0x07 start 2048      size 7.4G bootable FAT32 "NO NAME"
+#2 type 0xef start 15540224  size 32.0M FAT16 "VTOYEFI"
+This card already has Ventoy: put ISOs on the data partition (/mnt/card).
+```
+
+`VTOYEFI` is the 32 MB partition Ventoy creates; when it is present the card
+is already bootable and nothing needs flashing. Watch the data partition's
+filesystem: **FAT32 cannot hold an ISO larger than 4 GiB**, so a card with a
+FAT32 data partition needs small ISOs, or a reinstall with Ventoy's default
+exFAT (a PC job, since the installer wants a block device).
+
+A Bulk-Only session unbinds `usb-storage`, and the driver core only looks
+again when the device re-enumerates. LFA asks for a USB reset afterwards and
+reports whether Android remounted the card; if it did not, replug the reader.
+
 ### Ventoy without raw writes
 
 Copying ISOs onto an existing Ventoy card works without root, because the

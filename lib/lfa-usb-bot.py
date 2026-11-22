@@ -88,6 +88,7 @@ USBDEVFS_BULK = _ioc(3, ord("U"), 2, ctypes.sizeof(BulkTransfer))
 USBDEVFS_CLAIMINTERFACE = _ioc(2, ord("U"), 15, 4)
 USBDEVFS_RELEASEINTERFACE = _ioc(2, ord("U"), 16, 4)
 USBDEVFS_CLEAR_HALT = _ioc(2, ord("U"), 21, 4)
+USBDEVFS_RESET = _ioc(0, ord("U"), 20, 0)
 # _IOR, not _IOWR: the kernel header defines it with _IOC_READ, and a
 # direction mismatch makes usbfs reject the request with ENOTTY before it
 # ever looks at the permission or the driver name.
@@ -232,6 +233,9 @@ def claim_interface(fd: int, interface: int, verbose: bool = True) -> str:
     """Claim, detaching Android's kernel driver if it holds the interface."""
     try:
         fcntl.ioctl(fd, USBDEVFS_CLAIMINTERFACE, struct.pack("I", interface))
+        if verbose:
+            print("[*] interface %d was already free (Android had released it)"
+                  % interface)
         return "free"
     except OSError as exc:
         first = _errno_name(exc)
@@ -540,8 +544,7 @@ def probe(fd: int, as_json: bool) -> int:
             fcntl.ioctl(fd, USBDEVFS_RELEASEINTERFACE, struct.pack("I", bot.interface))
         except OSError:
             pass
-    print("[*] Android usually remounts the card on its own; replug the"
-          " reader if it does not")
+    restore_android(fd)
     return 0
 
 
@@ -613,9 +616,48 @@ def write_image(fd: int, path: str, verify: bool) -> int:
             fcntl.ioctl(fd, USBDEVFS_RELEASEINTERFACE, struct.pack("I", bot.interface))
         except OSError:
             pass
-    print("[*] Android usually remounts the card on its own; replug the"
-          " reader if it does not")
+    restore_android(fd)
     return 0
+
+
+def android_has_card() -> bool:
+    """Is a removable volume mounted under /storage right now?"""
+    try:
+        with open("/proc/mounts", "r") as handle:
+            for line in handle:
+                fields = line.split()
+                if len(fields) < 2:
+                    continue
+                target = fields[1]
+                if target.startswith("/storage/") and not target.startswith(
+                        "/storage/emulated"):
+                    return True
+    except OSError:
+        return False
+    return False
+
+
+def restore_android(fd: int) -> None:
+    """Nudge the kernel to re-probe usb-storage so Android remounts the card.
+
+    Releasing the interface is not enough: the driver was unbound, and the
+    driver core only looks again when the device re-enumerates. A USB reset
+    is the closest thing to a replug an app can ask for. If it is refused,
+    say so instead of pretending the card is back.
+    """
+    if android_has_card():
+        print("[*] Android has the card mounted again")
+        return
+    try:
+        fcntl.ioctl(fd, USBDEVFS_RESET)
+    except OSError:
+        pass
+    time.sleep(1.0)
+    if android_has_card():
+        print("[+] card is mounted again; /mnt/card works")
+    else:
+        print("[*] Android has not remounted the card; replug the reader to"
+              " use /mnt/card again")
 
 
 # --------------------------------------------------------------------------
@@ -673,8 +715,7 @@ def export_image(fd: int, path: str) -> int:
             fcntl.ioctl(fd, USBDEVFS_RELEASEINTERFACE, struct.pack("I", bot.interface))
         except OSError:
             pass
-    print("[*] Android usually remounts the card on its own; replug the"
-          " reader if it does not")
+    restore_android(fd)
     return 0
 
 
@@ -714,8 +755,7 @@ def import_image(fd: int, path: str, full: bool) -> int:
         print("[+] wrote %s in %d chunk(s)" % (human(changed_bytes), len(changed)))
         if not changed:
             print("[*] card already matched the image; nothing to verify")
-            print("[*] Android usually remounts the card on its own; replug the"
-          " reader if it does not")
+            restore_android(fd)
             return 0
         print("[*] verifying the chunks that changed")
         with open(path, "rb") as src:
@@ -735,8 +775,7 @@ def import_image(fd: int, path: str, full: bool) -> int:
             fcntl.ioctl(fd, USBDEVFS_RELEASEINTERFACE, struct.pack("I", bot.interface))
         except OSError:
             pass
-    print("[*] Android usually remounts the card on its own; replug the"
-          " reader if it does not")
+    restore_android(fd)
     return 0
 
 
