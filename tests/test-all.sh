@@ -157,6 +157,7 @@ fresh_env() { # reset HOME/PREFIX, keep stubs
     export HOME="$T/home" PREFIX="$T/prefix" \
         PATH="$T/fakebin${REAL_PREFIX:+:$REAL_PREFIX/bin}:/usr/bin:/bin" TERM=""
     export LFA_KEEP_SETUP_SCRIPT=1   # inspect the generated guest script
+    export LFA_NO_ANDROID_NOTIFY=1   # tests must not post real Android notices
     # Never read the *host* /sys/bus/usb/devices: a real device at 001/002
     # would shadow the fake scan cache and make the USB checks host-dependent.
     export LFA_USB_SYSFS="$T/usb-sysfs-host"
@@ -455,8 +456,9 @@ fresh_env
 mkdir -p "$T/prefix/var/lib/proot-distro/installed-rootfs/demoinst/etc" "$T/prefix/var/lib/proot-distro/installed-rootfs/demoinst/var" "$T/home/storage/downloads"
 printf 'DISTRO="debian"\nDE="none"\nSERVER="none"\nUPDATE_CMD="apt-get update"\n' > "$T/prefix/var/lib/proot-distro/installed-rootfs/demoinst/etc/termux-linux-manager.conf"
 touch "$T/home/demoinst-backup.tar.gz" "$T/home/storage/downloads/shared.tar.gz"
-printf '%s\n' 3 2 '' 13 | bash "$REPO/install_linux.sh" > "$T/k2.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: run k2 exit $rc"; }
+printf '%s\n' 3 2 '' 13 | env PATH="$T/updatebin:$PATH" LFA_NO_ANDROID_NOTIFY=0 bash "$REPO/install_linux.sh" > "$T/k2.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: run k2 exit $rc"; }
 check "K update" 'Update complete!' "$T/k2.log"
+check "K update android notice" 'Update complete!' "$HOME/notification.log"
 printf '%s\n' 3 4 '' 13 | bash "$REPO/install_linux.sh" > "$T/k4.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: run k4 exit $rc"; }
 check "K dashboard" 'SYSTEM DASHBOARD' "$T/k4.log"
 printf '%s\n' 3 5 '' 13 | bash "$REPO/install_linux.sh" > "$T/k5.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: run k5 exit $rc"; }
@@ -1251,10 +1253,10 @@ FAKENOTIFY
 chmod +x "$T/updatebin/curl" "$T/updatebin/termux-notification"
 rm -f "$HOME/.config/linux-for-android/update-check" \
       "$HOME/.config/linux-for-android/update-notified" "$HOME/notification.log"
-PATH="$T/updatebin:$PATH" "$LFA" check-update > "$T/y1-update.log" 2>&1
+PATH="$T/updatebin:$PATH" LFA_NO_ANDROID_NOTIFY=0 "$LFA" check-update > "$T/y1-update.log" 2>&1
 check "Y1 update notice" 'v9.9.9' "$T/y1-update.log"
 check "Y1 update android" 'v9.9.9' "$HOME/notification.log"
-PATH="$T/updatebin:$PATH" "$LFA" check-update > "$T/y1-update2.log" 2>&1
+PATH="$T/updatebin:$PATH" LFA_NO_ANDROID_NOTIFY=0 "$LFA" check-update > "$T/y1-update2.log" 2>&1
 [ "$(wc -l < "$HOME/notification.log")" = "1" ] && pass=$((pass+1)) \
     || { fail=$((fail+1)); echo "FAIL: Y1 update notification repeated"; }
 # A release older than the running version is not an update.
@@ -1264,7 +1266,7 @@ printf '{"tag_name": "v0.0.1"}\n'
 FAKECURL
 rm -f "$HOME/.config/linux-for-android/update-check" \
       "$HOME/.config/linux-for-android/update-notified" "$HOME/notification.log"
-PATH="$T/updatebin:$PATH" "$LFA" check-update > "$T/y1-update-old.log" 2>&1
+PATH="$T/updatebin:$PATH" LFA_NO_ANDROID_NOTIFY=0 "$LFA" check-update > "$T/y1-update-old.log" 2>&1
 check_absent "Y1 no older update" 'v0.0.1' "$T/y1-update-old.log"
 [ ! -e "$HOME/notification.log" ] && pass=$((pass+1)) \
     || { fail=$((fail+1)); echo "FAIL: Y1 older update notified Android"; }
@@ -1274,7 +1276,7 @@ printf '{"tag_name": "v1.7.1"}\n'
 FAKECURL
 rm -f "$HOME/.config/linux-for-android/update-check" \
       "$HOME/.config/linux-for-android/update-notified" "$HOME/notification.log"
-PATH="$T/updatebin:$PATH" "$LFA" check-update > "$T/y1-update-same.log" 2>&1
+PATH="$T/updatebin:$PATH" LFA_NO_ANDROID_NOTIFY=0 "$LFA" check-update > "$T/y1-update-same.log" 2>&1
 check "Y1 update current" 'latest release' "$T/y1-update-same.log"
 # A failed check must not claim the user is current.
 cat > "$T/updatebin/curl" <<'FAKECURL'
@@ -1283,10 +1285,10 @@ exit 1
 FAKECURL
 rm -f "$HOME/.config/linux-for-android/update-check" \
       "$HOME/.config/linux-for-android/update-notified"
-PATH="$T/updatebin:$PATH" "$LFA" check-update > "$T/y1-update-fail.log" 2>&1
+PATH="$T/updatebin:$PATH" LFA_NO_ANDROID_NOTIFY=0 "$LFA" check-update > "$T/y1-update-fail.log" 2>&1
 check "Y1 update check failed" 'Could not check' "$T/y1-update-fail.log"
 # The opt-out must silence both paths.
-PATH="$T/updatebin:$PATH" LFA_NO_UPDATE_CHECK=1 "$LFA" check-update > "$T/y1-update-off.log" 2>&1
+PATH="$T/updatebin:$PATH" LFA_NO_ANDROID_NOTIFY=0 LFA_NO_UPDATE_CHECK=1 "$LFA" check-update > "$T/y1-update-off.log" 2>&1
 check_absent "Y1 update check opt-out" 'newer release' "$T/y1-update-off.log"
 check "Y1 notice text generated" 'start-linux now opens the advanced menu' "$T/prefix/bin/start-linux"
 check "Y1 notice bypass env" 'LFA_NO_NOTICE' "$T/prefix/bin/start-linux"

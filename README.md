@@ -133,7 +133,7 @@ hardware, not simulated. Full details, root causes, and evidence are in
 | Alpine 3.18 (Android 5) | Yes | Yes | legacy VNC desktop, panel works; X11 and Both hidden | v1.7.1 |
 | Ubuntu GNOME 46 (experimental) | Yes | Yes | shell and apps run; session services missing | v1.7.0 |
 
-> The test suite runs `880` checks with 0 failures. The same suite runs on the
+> The test suite runs `881` checks with 0 failures. The same suite runs on the
 > devices (`tests/device-matrix.sh`). The table is as of v1.7.1. Ubuntu was
 > re-verified on v1.7.1, and Alpine 3.18 was re-verified on Android 5 on
 > 2026-11-04; the other rows were last verified on v1.7.0. A row is
@@ -367,10 +367,10 @@ as experimental only.
   killed, so a recycled PID cannot hit an unrelated process.
 - A failure anywhere in a pipeline fails the step. This caught two real bugs
   in the dashboard.
-- A cached, bounded check tells you when a newer release exists, in the
-  terminal and as an Android notification through Termux:API.
-  `LFA_NO_UPDATE_CHECK=1` disables the check; `LFA_NO_ANDROID_NOTIFY=1` keeps
-  the notice terminal-only.
+- LFA's success, warning, error, and update notices also post an Android
+  notification through Termux:API. The release check is cached and bounded;
+  `LFA_NO_UPDATE_CHECK=1` disables the check and `LFA_NO_ANDROID_NOTIFY=1`
+  keeps every notice terminal-only.
 
 ### Automation and management
 
@@ -1564,7 +1564,7 @@ plus `script` from util-linux for the pty test, which is skipped if absent:
 
 ```bash
 chmod +x tests/test-all.sh
-./tests/test-all.sh   # expect: PASS=880 FAIL=0
+./tests/test-all.sh   # expect: PASS=881 FAIL=0
 ```
 
 The suite is deliberately stubbed. It cannot prove a desktop actually appears.

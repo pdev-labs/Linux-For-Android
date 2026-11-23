@@ -15,12 +15,14 @@ tag names, define the order. See the table at the bottom.
 
 ### Added
 
-- Update notices now reach Android. The cached release check posts a
+- LFA notices now reach Android. `ui_ok`, `ui_warn`, and `ui_err` post a
   `termux-notification` through Termux:API as well as printing the terminal
-  notice, and `lfa check-update` forces a fresh check. The comparison is
-  version-aware, so a development build is not told to downgrade to an older
-  release, and a failed refresh falls back to the last cached version.
-  `LFA_NO_ANDROID_NOTIFY=1` keeps the notice terminal-only; Android still
+  line, so install, update, backup, restore, repair, import, and error
+  notices show up on the phone. The cached release check does the same, and
+  `lfa check-update` forces a fresh check. The comparison is version-aware,
+  so a development build is not told to downgrade to an older release, and a
+  failed refresh falls back to the last cached version.
+  `LFA_NO_ANDROID_NOTIFY=1` keeps every notice terminal-only; Android still
   needs the Notifications permission for Termux:API.
 - Short commands and options. `lfa i`, `ls`, `sh`, `sw`, `as`, `upg`, `fx`,
   `doc`, `bk`, `rs`, `rm`, `cx`, `ai`, `diag`, `ver`, and `desktop` work

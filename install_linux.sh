@@ -81,9 +81,23 @@ ui_banner() {
     ui_rule
 }
 
-ui_ok()   { printf '  %s✓%s %s\n' "$C_BGREEN" "$C_RESET" "$*"; }
-ui_warn() { printf '  %s!%s %s\n' "$C_YELLOW" "$C_RESET" "$*"; }
-ui_err()  { printf '  %s✗%s %s\n' "$C_BRED" "$C_RESET" "$*"; }
+# Success, warning and error notices also go to Android through Termux:API.
+# The helper is defined later in the file; the guard keeps early calls safe.
+ui_ok() {
+    printf '  %s✓%s %s\n' "$C_BGREEN" "$C_RESET" "$*"
+    command -v lfa_notify_android >/dev/null 2>&1 && \
+        lfa_notify_android "Linux for Android" "$*" "lfa-ok" || true
+}
+ui_warn() {
+    printf '  %s!%s %s\n' "$C_YELLOW" "$C_RESET" "$*"
+    command -v lfa_notify_android >/dev/null 2>&1 && \
+        lfa_notify_android "Linux for Android warning" "$*" "lfa-warn" || true
+}
+ui_err() {
+    printf '  %s✗%s %s\n' "$C_BRED" "$C_RESET" "$*"
+    command -v lfa_notify_android >/dev/null 2>&1 && \
+        lfa_notify_android "Linux for Android error" "$*" "lfa-error" || true
+}
 
 # ui_select <title> <default-key> <key|label|description>...
 # Result: UI_SELECTED (the key). Returns 1 on 'q' (back/abort).
@@ -2099,9 +2113,9 @@ HELP
             echo "  Termux:API app:     $([ "$_app" = 1 ] && echo installed || echo not detected)"
             echo "  bridge directory:   $_bridge"
             if command -v termux-notification >/dev/null 2>&1; then
-                echo "  update notices:     Android via termux-notification"
+                echo "  LFA notices:        Android via termux-notification"
             else
-                echo "  update notices:     terminal only (termux-api missing)"
+                echo "  LFA notices:        terminal only (termux-api missing)"
             fi
             echo ""
             printf '  %-16s %-8s %s\n' "CAPABILITY" "STATE" "SOURCE"
@@ -2128,7 +2142,7 @@ HELP
             cat <<'HELP'
 Grant these in Android Settings > Apps > Termux:API > Permissions:
   - Location (for lfa android enable location)
-  - Notifications (for guest notifications and LFA update notices)
+  - Notifications (for guest notifications and LFA notices)
   - Camera / Microphone only if you use those bridges
 Termux itself also needs the matching Android permissions.
 HELP
@@ -6625,9 +6639,9 @@ repair_linux() {
     echo "========================================="
     local _rc=0
     if run_guest_repair; then
-        echo "Repair complete!"
+        ui_ok "Repair complete!"
     else
-        echo "[!] Doctor hit an error - review the output above."
+        ui_err "Doctor hit an error - review the output above."
         _rc=1
     fi
     echo "========================================="
@@ -7469,7 +7483,7 @@ start_ssh() {
     if [ -z "$IP" ]; then IP=$(ifconfig 2>/dev/null | grep 'inet ' | grep -v '127.0.0.1' | awk '{print $2}' | head -n 1 || true); fi
     if [ -z "$IP" ]; then IP="YOUR_PHONE_IP"; fi
     echo "========================================="
-    echo "SSH Server is running!"
+    ui_ok "SSH Server is running!"
     echo "To connect from your PC, run this command in your PC's terminal:"
     echo ""
     echo "   ssh $(whoami)@$IP -p 8022"
@@ -7554,7 +7568,7 @@ import_distro() {
             if ui_confirm "Import $IMPORT_FILE? This overwrites that instance" n; then
                 proot-distro restore ~/storage/downloads/$IMPORT_FILE
                 echo "========================================="
-                echo "Import complete! You can now use start-linux to boot it."
+                ui_ok "Import complete! You can now use start-linux to boot it."
                 echo "========================================="
             fi
         else
@@ -7563,7 +7577,7 @@ import_distro() {
             if ui_confirm "Overwrite the current $INSTANCE_NAME installation?" n; then
                 proot-distro restore "$INSTANCE_NAME" --input ~/storage/downloads/$IMPORT_FILE
                 echo "========================================="
-                echo "Import complete! You can now use start-linux to boot your friend's setup."
+                ui_ok "Import complete! You can now use start-linux to boot your friend's setup."
                 echo "========================================="
             fi
         fi
