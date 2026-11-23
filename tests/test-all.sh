@@ -100,6 +100,10 @@ cat > "$T/fakebin/sshd" <<'EOF'
 echo "STUB-SSHD started"
 exit 0
 EOF
+cat > "$T/fakebin/termux-notification" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >> "$HOME/notification.log"
+EOF
 cat > "$T/fakebin/termux-battery-status" <<'EOF'
 #!/bin/bash
 printf '{"health":"GOOD","percentage":77,"plugged":"PLUGGED_AC","status":"CHARGING","temperature":30.0}\n'
@@ -456,7 +460,7 @@ fresh_env
 mkdir -p "$T/prefix/var/lib/proot-distro/installed-rootfs/demoinst/etc" "$T/prefix/var/lib/proot-distro/installed-rootfs/demoinst/var" "$T/home/storage/downloads"
 printf 'DISTRO="debian"\nDE="none"\nSERVER="none"\nUPDATE_CMD="apt-get update"\n' > "$T/prefix/var/lib/proot-distro/installed-rootfs/demoinst/etc/termux-linux-manager.conf"
 touch "$T/home/demoinst-backup.tar.gz" "$T/home/storage/downloads/shared.tar.gz"
-printf '%s\n' 3 2 '' 13 | env PATH="$T/updatebin:$PATH" LFA_NO_ANDROID_NOTIFY=0 bash "$REPO/install_linux.sh" > "$T/k2.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: run k2 exit $rc"; }
+printf '%s\n' 3 2 '' 13 | env LFA_NO_ANDROID_NOTIFY=0 bash "$REPO/install_linux.sh" > "$T/k2.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: run k2 exit $rc"; }
 check "K update" 'Update complete!' "$T/k2.log"
 check "K update android notice" 'Update complete!' "$HOME/notification.log"
 printf '%s\n' 3 4 '' 13 | bash "$REPO/install_linux.sh" > "$T/k4.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: run k4 exit $rc"; }
