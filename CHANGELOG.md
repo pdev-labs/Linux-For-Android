@@ -15,17 +15,24 @@ tag names, define the order. See the table at the bottom.
 
 ### Added
 
-+- Short commands and options. `lfa i`, `ls`, `sh`, `sw`, `as`, `upg`, `fx`,
-+  `doc`, `bk`, `rs`, `rm`, `cx`, `ai`, `diag`, `ver`, and `desktop` work
-+  alongside the long names, and `lfa usb` accepts `ls`, `l`, `rf`, `sc`, `w`,
-+  `en`, `dis`, `at`, `t`, `x`, `fl`, `bt`, and `blk`. Options gained short
-+  forms too: `-D` desktop, `-u` user, `-H` hostname, `-t` timezone, `-s`
-+  software, `-r/-k/-f` for `switch`, `-x/-v/-r` for `start`, and `-j`, `-d`,
-+  `-b`, `-C`, `-n`, `-c`, `-v`, `-y`, `-f` on the USB commands. A short name
-+  exists only where it cannot be confused with another command in the same
-+  group; `status`, `stop`, `usb`, `storage`, and `android` stay spelled out,
-+  and every long form still works.
-+- `lfa usb storage` lists the storage cards Android mounts for apps
+- Update notices now reach Android. The cached release check posts a
+  `termux-notification` through Termux:API as well as printing the terminal
+  notice, and `lfa check-update` forces a fresh check. The comparison is
+  version-aware, so a development build is not told to downgrade to an older
+  release, and a failed refresh falls back to the last cached version.
+  `LFA_NO_ANDROID_NOTIFY=1` keeps the notice terminal-only; Android still
+  needs the Notifications permission for Termux:API.
+- Short commands and options. `lfa i`, `ls`, `sh`, `sw`, `as`, `upg`, `fx`,
+  `doc`, `bk`, `rs`, `rm`, `cx`, `ai`, `diag`, `ver`, and `desktop` work
+  alongside the long names, and `lfa usb` accepts `ls`, `l`, `rf`, `sc`, `w`,
+  `en`, `dis`, `at`, `t`, `x`, `fl`, `bt`, and `blk`. Options gained short
+  forms too: `-D` desktop, `-u` user, `-H` hostname, `-t` timezone, `-s`
+  software, `-r/-k/-f` for `switch`, `-x/-v/-r` for `start`, and `-j`, `-d`,
+  `-b`, `-C`, `-n`, `-c`, `-v`, `-y`, `-f` on the USB commands. A short name
+  exists only where it cannot be confused with another command in the same
+  group; `status`, `stop`, `usb`, `storage`, and `android` stay spelled out,
+  and every long form still works.
+- `lfa usb storage` lists the storage cards Android mounts for apps
   (`/storage/<VOLUME-ID>`), with filesystem, size, free space and a real
   read/write probe. Sessions started by LFA bind the first card at
   `/media/<VOLUME-ID>` and the largest card at `/mnt/card`, avoiding the

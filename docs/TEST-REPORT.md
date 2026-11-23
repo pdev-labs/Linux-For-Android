@@ -1,6 +1,6 @@
 # Test report for v1.7.1
 
-> Current development suite: `PASS=872 FAIL=0`.
+> Current development suite: `PASS=880 FAIL=0`.
 
 ## USB bridge, 2026-11-18
 
@@ -41,6 +41,18 @@ when the udev hotplug monitor cannot be created in an Android guest, and
 usbutils reads `bMaxPacketSize0`, `bcdDevice`, `bmAttributes`, `maxchild`
 and the lane counts straight from sysfs. `lsusb -t` stays empty because the
 tree has no host-controller root hub.
+
+## Update notifications, 2026-11-22
+
+| Check | Result |
+|---|---|
+| Host suite (`./tests/test-all.sh`) | `PASS=880 FAIL=0` |
+| Newer release | terminal notice plus one `termux-notification` call with `--id lfa-update` |
+| Same version | no second Android notification |
+| Older release | no notice |
+| Opt-out | `LFA_NO_UPDATE_CHECK=1` silences the check; `LFA_NO_ANDROID_NOTIFY=1` keeps the terminal notice |
+| Delivery failure | a failed or timed-out `termux-notification` prints a hint and does not slow later `lfa status` calls |
+| Real Android delivery | **not verified in this session**; `termux-notification` timed out, so the terminal notice is the fallback until Termux:API responds |
 
 ## Android storage, 2026-11-06
 

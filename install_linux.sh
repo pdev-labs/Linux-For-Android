@@ -1249,16 +1249,38 @@ Usage: ./install_linux.sh [options]
 HELP
 }
 
-# One cheap, cached check against the GitHub API. Never blocks: 3s timeout,
-# result cached for a day, silent on any failure, disabled in tests/CI and
-# by LFA_NO_UPDATE_CHECK=1.
-lfa_check_update() {
+# Compare dotted release versions. Returns 0 when $1 is newer than $2.
+lfa_version_gt() {
+    local _a="${1:-}" _b="${2:-}"
+    [ -n "$_a" ] && [ -n "$_b" ] || return 1
+    [ "$_a" = "$_b" ] && return 1
+    [ "$(printf '%s\n%s\n' "$_a" "$_b" | sort -V 2>/dev/null | tail -n1)" = "$_a" ]
+}
+
+# One cheap, cached check against the GitHub API. Bounded: 3s for the fetch
+# and 5s for the Android notification, result cached for a day, silent on
+# any failure. The notice goes to the terminal and, when Termux:API is
+# present, to an Android notification. LFA_NO_UPDATE_CHECK=1 disables the
+# check; LFA_NO_ANDROID_NOTIFY=1 keeps the terminal notice only.
+lfa_check_update() {  # [--force] [--always] [--report]
+    local _force=0 _always=0 _report=0 _arg
+    for _arg in "$@"; do
+        case "$_arg" in
+            --force) _force=1 ;;
+            --always) _always=1 ;;
+            --report) _report=1 ;;
+        esac
+    done
     [ "${LFA_NO_UPDATE_CHECK:-0}" = "1" ] && return 0
-    [ "${UI_TTY:-0}" = "1" ] || return 0
-    local cache="$HOME/.config/linux-for-android/update-check" latest=""
-    mkdir -p "$(dirname "$cache")" 2>/dev/null || true
-    if [ -s "$cache" ] && [ -n "$(find "$cache" -mtime -1 2>/dev/null)" ]; then
-        latest="$(cat "$cache" 2>/dev/null)" || latest=""
+    [ "${UI_TTY:-0}" = "1" ] || [ "$_always" = "1" ] || return 0
+    local _dir="$HOME/.config/linux-for-android"
+    local _cache="$_dir/update-check" _notified_file="$_dir/update-notified"
+    local latest="" _notified="" _checked=0
+    mkdir -p "$_dir" 2>/dev/null || true
+    if [ "$_force" = "0" ] && [ -s "$_cache" ] && [ -n "$(find "$_cache" -mtime -1 2>/dev/null)" ]; then
+        latest="$(cat "$_cache" 2>/dev/null)" || latest=""
+        case "$latest" in ''|*[!0-9.]*) latest="" ;; esac
+        [ -n "$latest" ] && _checked=1
     elif command -v curl >/dev/null 2>&1; then
         # The check is advisory: a timeout (curl 28), DNS failure, or a
         # missing release must not abort the installer through `set -e`.
@@ -1267,13 +1289,49 @@ lfa_check_update() {
             | sed -n 's/.*"tag_name": *"v\([^"]*\)".*/\1/p' | head -n1)" || latest=""
         case "$latest" in ''|*[!0-9.]*) latest="" ;; esac
         if [ -n "$latest" ]; then
-            printf '%s' "$latest" > "$cache" 2>/dev/null || true
+            printf '%s' "$latest" > "$_cache" 2>/dev/null || true
+            _checked=1
+        elif [ -s "$_cache" ]; then
+            # A failed refresh should not hide a version the last check found.
+            latest="$(cat "$_cache" 2>/dev/null)" || latest=""
+            case "$latest" in ''|*[!0-9.]*) latest="" ;; esac
+            [ -n "$latest" ] && _checked=1
         fi
     fi
-    if [ -n "$latest" ] && [ "$latest" != "$LFA_VERSION" ]; then
+    if lfa_version_gt "$latest" "$LFA_VERSION"; then
+        local _hint
+        if [ -d "$LFA_DIR/.git" ]; then
+            _hint="git -C \"$LFA_DIR\" pull --ff-only"
+        else
+            _hint="download the latest release and re-run install_linux.sh"
+        fi
         echo ""
         echo "[*] A newer release is available: v$latest (you are on v$LFA_VERSION)."
-        echo "    Update with: git -C \"$LFA_DIR\" pull --ff-only"
+        echo "    Update: $_hint"
+        [ -s "$_notified_file" ] && _notified="$(cat "$_notified_file" 2>/dev/null || true)"
+        if [ "$_notified" != "$latest" ]; then
+            local _nrc=0
+            lfa_notify_android "Linux for Android update" \
+                "v$latest is available. You are on v$LFA_VERSION." "lfa-update" || _nrc=$?
+            if [ "$_nrc" = "1" ]; then
+                echo "[!] Could not post the Android notification." >&2
+                echo "    Check Termux:API and its Notifications permission." >&2
+                # Record the failed attempt: a dead Termux:API must not add a
+                # timeout to every later `lfa status`.
+                printf '%s' "$latest" > "$_notified_file" 2>/dev/null || true
+            elif [ "$_nrc" = "0" ]; then
+                printf '%s' "$latest" > "$_notified_file" 2>/dev/null || true
+            fi
+            # Return 2 means Termux:API is absent or notifications are off.
+            # Leave the marker alone so installing the app or re-enabling
+            # notifications delivers the current release notice later.
+        fi
+    elif [ "$_report" = "1" ]; then
+        if [ "$_checked" = "1" ]; then
+            echo "[*] You are on the latest release (v$LFA_VERSION)."
+        else
+            echo "[!] Could not check for updates. GitHub was unreachable." >&2
+        fi
     fi
     return 0
 }
@@ -1377,6 +1435,7 @@ Usage: lfa <command> [options]
   diagnostics (diag)       write a support bundle
   notice                   show, hide, or query the start-linux notice
   version (ver)            print the version
+  check-update             ask GitHub for a newer release and notify Android
   help (-h)                show this help
 
 Short commands exist only where they cannot be confused with another one:
@@ -1965,6 +2024,18 @@ lfa_android_timeout() {  # $1 = seconds, rest = command
     fi
 }
 
+# LFA-originated notifications go to the terminal and, when Termux:API is
+# available, to Android as well. This is separate from the guest bridge,
+# which queues notifications for `lfa android pump`.
+lfa_notify_android() {  # $1 title, $2 body, [$3 id]
+    local _title="${1:-Linux for Android}" _body="${2:-}" _id="${3:-lfa}"
+    [ "${LFA_NO_ANDROID_NOTIFY:-0}" = "1" ] && return 2
+    command -v termux-notification >/dev/null 2>&1 || return 2
+    lfa_android_timeout 5 termux-notification \
+        --id "$_id" --title "$_title" --content "$_body" \
+        >/dev/null 2>&1
+}
+
 # The Termux:API app can be asleep when the first broadcast arrives. One
 # short probe plus one longer retry separates "waking up" from "unavailable"
 # without letting a dead app hang the CLI.
@@ -2027,6 +2098,11 @@ HELP
             echo "  termux-api package: $([ "$_pkg" = 1 ] && echo installed || echo missing)"
             echo "  Termux:API app:     $([ "$_app" = 1 ] && echo installed || echo not detected)"
             echo "  bridge directory:   $_bridge"
+            if command -v termux-notification >/dev/null 2>&1; then
+                echo "  update notices:     Android via termux-notification"
+            else
+                echo "  update notices:     terminal only (termux-api missing)"
+            fi
             echo ""
             printf '  %-16s %-8s %s\n' "CAPABILITY" "STATE" "SOURCE"
             for _cap in battery location clipboard notifications; do
@@ -2052,7 +2128,7 @@ HELP
             cat <<'HELP'
 Grant these in Android Settings > Apps > Termux:API > Permissions:
   - Location (for lfa android enable location)
-  - Notifications (for lfa android enable notifications)
+  - Notifications (for guest notifications and LFA update notices)
   - Camera / Microphone only if you use those bridges
 Termux itself also needs the matching Android permissions.
 HELP
@@ -5997,6 +6073,7 @@ lfa_cli() {
     case "$_cmd" in
         help|-h|--help) lfa_cli_usage ;;
         version|-V|--version) echo "Linux for Android Manager $LFA_VERSION" ;;
+        check-update) lfa_check_update --force --always --report ;;
         list)
             local _json=0 _n _first _i
             case "${1:-}" in -j|--json) _json=1 ;; esac
@@ -6040,6 +6117,7 @@ lfa_cli() {
                     [ "$_json" = "1" ] && echo "[]" || echo "No distributions installed."
                 fi
             fi
+            [ "$_json" = "1" ] || lfa_check_update
             ;;
         start)
             local -a _a=(--desktop)

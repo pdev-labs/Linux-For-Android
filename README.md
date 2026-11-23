@@ -133,7 +133,7 @@ hardware, not simulated. Full details, root causes, and evidence are in
 | Alpine 3.18 (Android 5) | Yes | Yes | legacy VNC desktop, panel works; X11 and Both hidden | v1.7.1 |
 | Ubuntu GNOME 46 (experimental) | Yes | Yes | shell and apps run; session services missing | v1.7.0 |
 
-> The test suite runs `872` checks with 0 failures. The same suite runs on the
+> The test suite runs `880` checks with 0 failures. The same suite runs on the
 > devices (`tests/device-matrix.sh`). The table is as of v1.7.1. Ubuntu was
 > re-verified on v1.7.1, and Alpine 3.18 was re-verified on Android 5 on
 > 2026-11-04; the other rows were last verified on v1.7.0. A row is
@@ -367,8 +367,10 @@ as experimental only.
   killed, so a recycled PID cannot hit an unrelated process.
 - A failure anywhere in a pipeline fails the step. This caught two real bugs
   in the dashboard.
-- A cached, 3-second, non-blocking check tells you when a newer release exists.
-  `LFA_NO_UPDATE_CHECK=1` disables it.
+- A cached, bounded check tells you when a newer release exists, in the
+  terminal and as an Android notification through Termux:API.
+  `LFA_NO_UPDATE_CHECK=1` disables the check; `LFA_NO_ANDROID_NOTIFY=1` keeps
+  the notice terminal-only.
 
 ### Automation and management
 
@@ -461,7 +463,7 @@ is accepted.
 | --- | --- |
 | `lfa install` (`i`, `in`) | install without menus; accepts `-d/--distro`, `-D/--desktop`, `-b/--backend`, `-a/--autostart`, `-u/--user`, `-H/--hostname`, `-t/--timezone`, `-s/--software`, and `-i` |
 | `lfa list` (`ls`, `l`) | list installed distributions (`-j/--json` for scripts) |
-| `lfa status` | show desktop, backend, autostart, and running state (`-j/--json`) |
+| `lfa status` | show desktop, backend, autostart, and running state (`-j/--json`); also checks for a newer manager release |
 | `lfa start` (`desktop`) | start the desktop; `-x/--x11` or `-v/--vnc` forces a backend, `-r/--restart` replaces a running session |
 | `lfa shell` (`sh`) | open a terminal; `--root` or `-u/--user` picks the account |
 | `lfa stop` | stop a desktop; `--all` stops every instance |
@@ -482,6 +484,7 @@ is accepted.
 | `lfa diagnostics` (`diag`) | write a redacted support bundle |
 | `lfa notice` | `on`, `off`, or `status` for the `start-linux` change notice |
 | `lfa version` (`ver`) / `lfa help` | version and command list |
+| `lfa check-update` | ask GitHub for a newer manager release; prints it and posts an Android notification through Termux:API |
 
 Short commands exist only where they cannot be confused with another one:
 `status`, `stop`, `usb`, `storage`, and `android` stay spelled out. The long
@@ -1561,7 +1564,7 @@ plus `script` from util-linux for the pty test, which is skipped if absent:
 
 ```bash
 chmod +x tests/test-all.sh
-./tests/test-all.sh   # expect: PASS=872 FAIL=0
+./tests/test-all.sh   # expect: PASS=880 FAIL=0
 ```
 
 The suite is deliberately stubbed. It cannot prove a desktop actually appears.

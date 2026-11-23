@@ -1237,6 +1237,57 @@ check "Y1 usb status stays long" 'Unknown usb command: st' "$T/y1-alias-usbst.lo
 "$LFA" desktop --bogus > "$T/y1-alias-desktop.log" 2>&1; rc=$?
 [ "$rc" = "2" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y1 desktop alias exit $rc"; }
 check "Y1 desktop alias" 'Unknown option: --bogus' "$T/y1-alias-desktop.log"
+
+# Update notices go to the terminal and to Android through Termux:API.
+mkdir -p "$T/updatebin"
+cat > "$T/updatebin/curl" <<'FAKECURL'
+#!/bin/sh
+printf '{"tag_name": "v9.9.9"}\n'
+FAKECURL
+cat > "$T/updatebin/termux-notification" <<'FAKENOTIFY'
+#!/bin/sh
+printf '%s\n' "$*" >> "$HOME/notification.log"
+FAKENOTIFY
+chmod +x "$T/updatebin/curl" "$T/updatebin/termux-notification"
+rm -f "$HOME/.config/linux-for-android/update-check" \
+      "$HOME/.config/linux-for-android/update-notified" "$HOME/notification.log"
+PATH="$T/updatebin:$PATH" "$LFA" check-update > "$T/y1-update.log" 2>&1
+check "Y1 update notice" 'v9.9.9' "$T/y1-update.log"
+check "Y1 update android" 'v9.9.9' "$HOME/notification.log"
+PATH="$T/updatebin:$PATH" "$LFA" check-update > "$T/y1-update2.log" 2>&1
+[ "$(wc -l < "$HOME/notification.log")" = "1" ] && pass=$((pass+1)) \
+    || { fail=$((fail+1)); echo "FAIL: Y1 update notification repeated"; }
+# A release older than the running version is not an update.
+cat > "$T/updatebin/curl" <<'FAKECURL'
+#!/bin/sh
+printf '{"tag_name": "v0.0.1"}\n'
+FAKECURL
+rm -f "$HOME/.config/linux-for-android/update-check" \
+      "$HOME/.config/linux-for-android/update-notified" "$HOME/notification.log"
+PATH="$T/updatebin:$PATH" "$LFA" check-update > "$T/y1-update-old.log" 2>&1
+check_absent "Y1 no older update" 'v0.0.1' "$T/y1-update-old.log"
+[ ! -e "$HOME/notification.log" ] && pass=$((pass+1)) \
+    || { fail=$((fail+1)); echo "FAIL: Y1 older update notified Android"; }
+cat > "$T/updatebin/curl" <<'FAKECURL'
+#!/bin/sh
+printf '{"tag_name": "v1.7.1"}\n'
+FAKECURL
+rm -f "$HOME/.config/linux-for-android/update-check" \
+      "$HOME/.config/linux-for-android/update-notified" "$HOME/notification.log"
+PATH="$T/updatebin:$PATH" "$LFA" check-update > "$T/y1-update-same.log" 2>&1
+check "Y1 update current" 'latest release' "$T/y1-update-same.log"
+# A failed check must not claim the user is current.
+cat > "$T/updatebin/curl" <<'FAKECURL'
+#!/bin/sh
+exit 1
+FAKECURL
+rm -f "$HOME/.config/linux-for-android/update-check" \
+      "$HOME/.config/linux-for-android/update-notified"
+PATH="$T/updatebin:$PATH" "$LFA" check-update > "$T/y1-update-fail.log" 2>&1
+check "Y1 update check failed" 'Could not check' "$T/y1-update-fail.log"
+# The opt-out must silence both paths.
+PATH="$T/updatebin:$PATH" LFA_NO_UPDATE_CHECK=1 "$LFA" check-update > "$T/y1-update-off.log" 2>&1
+check_absent "Y1 update check opt-out" 'newer release' "$T/y1-update-off.log"
 check "Y1 notice text generated" 'start-linux now opens the advanced menu' "$T/prefix/bin/start-linux"
 check "Y1 notice bypass env" 'LFA_NO_NOTICE' "$T/prefix/bin/start-linux"
 check "Y1 linux wrapper desktop" '--desktop' "$T/prefix/bin/linux"

@@ -7,7 +7,7 @@ Status values:
 
 | Status | Meaning |
 |---|---|
-| `done` | code changed, suite green (`PASS=872 FAIL=0`), lint clean |
+| `done` | code changed, suite green (`PASS=880 FAIL=0`), lint clean |
 | `partial` | the main risk is addressed; a documented remainder is listed |
 | `deferred` | deliberately not fixed in this pass, with the reason recorded |
 | `device` | also exercised on the Vivo V2437 |
@@ -53,7 +53,7 @@ Lint: `shellcheck -S warning` clean, `bash -n` clean, CI workflow added.
 | Android 5/6 refusal | `done` | explicit explanation, `--remove-old` warning, VNC restore command |
 | `start-linux` notice | `done` | stderr, interactive classic runs only; `lfa notice`, `--no-notice`, `LFA_NO_NOTICE` |
 | Boot script ownership | `done` | switching a non-autostart instance no longer hijacks another instance's boot script |
-| Host suite | `done` | `PASS=872 FAIL=0`; Y1-Y11 cover CLI, switch, removal, guard, `-i`, legacy, SDK 24/25, compat/android, matrix, AppImage, USB bridge (attach/tty/flash), and the short commands |
+| Host suite | `done` | `PASS=880 FAIL=0`; Y1-Y11 cover CLI, switch, removal, guard, `-i`, legacy, SDK 24/25, compat/android, matrix, AppImage, USB bridge (attach/tty/flash), short commands, and update notices |
 | Device verification | `done` | Vivo V2437 (SDK 36): VNC `PASS=14`, Both switch `PASS=22`, X11 `PASS=14`, VirGL fallback, shims, bridge, `--software`; Oppo SDK 22 pending (off network) |
 
 ## Android CI and compatibility layers (2026-11-05)
@@ -94,6 +94,16 @@ Lint: `shellcheck -S warning` clean, `bash -n` clean, CI workflow added.
 | Options | `done` | `-D`, `-u`, `-H`, `-t`, `-s`, `-a` for install; `-r`, `-k`, `-f` for switch; `-x`, `-v`, `-r` for start; `-j`, `-d`, `-b`, `-C`, `-n`, `-c`, `-v`, `-y`, `-f` for USB |
 | Refusal of ambiguous names | `done` | `lfa s` and `lfa usb st` fail with `Unknown ... command` instead of guessing |
 | Tests and docs | `done` | table-driven checks compare each short form with its long form; `lfa desktop` is exercised; README, `docs/USB.md`, and the help screens show both forms |
+
+## Update notifications (2026-11-22)
+
+| Item | Status | Notes |
+|---|---|---|
+| Terminal notice | `done` | `lfa status` and the installer menu use the 24 h cache; `lfa check-update` forces a fresh check |
+| Android notice | `done` | `termux-notification --id lfa-update`; the terminal notice stays when Termux:API is missing; `LFA_NO_ANDROID_NOTIFY=1` keeps it terminal-only |
+| Version comparison | `done` | `sort -V`; an older release is not announced to a development build |
+| Failure handling | `done` | a failed notification prints a hint and records the attempt, so a dead Termux:API does not add a timeout to every later status |
+| Real device | `pending` | Termux:API calls timed out in this session; verify on a phone with the app awake |
 
 ## Security
 
@@ -140,7 +150,7 @@ Lint: `shellcheck -S warning` clean, `bash -n` clean, CI workflow added.
 | 28 | `show_menu` recursion | `deferred` | Works and is test-covered; converting to a dispatch loop touches every action |
 | 29 | Version and count drift in docs | `done` | The suite fails when `README.md` does not state the real `PASS=` count |
 | 30 | No CLI flags | `done` | `--help --version --list --doctor --yes --debug`; help and version work outside Termux |
-| 31 | No update check | `done` | Cached 24 h, 3 s timeout, TTY-only, `LFA_NO_UPDATE_CHECK=1` to disable |
+| 31 | No update check | `done` | Cached 24 h, 3 s timeout, TTY-only, version-aware comparison; terminal notice plus `termux-notification` on Android; `LFA_NO_UPDATE_CHECK=1` disables it, `LFA_NO_ANDROID_NOTIFY=1` keeps it terminal-only |
 | 32 | Duplicated uid0 build | `done` | One guest-side `lib/uid0-build.sh` used by install and menu 12 |
 | 33 | No CHANGELOG | `done` | `CHANGELOG.md` with the version-order note |
 | 34 | Deep distro branching | `partial` | Image selection is overridable and recorded; package-name branching remains |

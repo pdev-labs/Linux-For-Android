@@ -155,6 +155,10 @@ expectations and may lie about a service; `lfa android` exposes real Android
 data and never claims to be a kernel device. The guest sees bridge files as
 `/tmp/...` because proot runs with `--shared-tmp`.
 
+LFA's own update notice calls `termux-notification` directly, so a newer
+release reaches Android even when no guest session is running. The guest
+bridge queues notifications for `lfa android pump` instead.
+
 Neither layer may fake a kernel facility. Docker, Podman, Flatpak, TUN/TAP,
 iptables, CUDA, ROCm, KVM, and modules are listed as unsupported by
 `lfa compat list` and explained by `lfa compat explain`.
