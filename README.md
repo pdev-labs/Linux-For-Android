@@ -133,7 +133,7 @@ hardware, not simulated. Full details, root causes, and evidence are in
 | Alpine 3.18 (Android 5) | Yes | Yes | legacy VNC desktop, panel works; X11 and Both hidden | v1.7.1 |
 | Ubuntu GNOME 46 (experimental) | Yes | Yes | shell and apps run; session services missing | v1.7.0 |
 
-> The test suite runs `881` checks with 0 failures. The same suite runs on the
+> The test suite runs `917` checks with 0 failures. The same suite runs on the
 > devices (`tests/device-matrix.sh`). The table is as of v1.7.1. Ubuntu was
 > re-verified on v1.7.1, and Alpine 3.18 was re-verified on Android 5 on
 > 2026-11-04; the other rows were last verified on v1.7.0. A row is
@@ -461,7 +461,7 @@ is accepted.
 
 | Command | What it does |
 | --- | --- |
-| `lfa install` (`i`, `in`) | install without menus; accepts `-d/--distro`, `-D/--desktop`, `-b/--backend`, `-a/--autostart`, `-u/--user`, `-H/--hostname`, `-t/--timezone`, `-s/--software`, and `-i` |
+| `lfa install` (`i`, `in`) | install without menus; accepts `-d/--distro`, `--iso`, `--rootfs`, `-D/--desktop`, `-b/--backend`, `-a/--autostart`, `-u/--user`, `-H/--hostname`, `-t/--timezone`, `-s/--software`, and `-i` |
 | `lfa list` (`ls`, `l`) | list installed distributions (`-j/--json` for scripts) |
 | `lfa status` | show desktop, backend, autostart, and running state (`-j/--json`); also checks for a newer manager release |
 | `lfa start` (`desktop`) | start the desktop; `-x/--x11` or `-v/--vnc` forces a backend, `-r/--restart` replaces a running session |
@@ -494,6 +494,8 @@ Examples:
 
 ```bash
 lfa install --distro ubuntu --desktop xfce4 --backend both -i ubuntu
+lfa install --rootfs ~/storage/downloads/debian-rootfs.tar.gz -i debian-custom
+lfa install --iso ~/storage/downloads/alpine-live-arm64.iso -i alpine-live
 lfa start -i ubuntu --vnc
 lfa shell -i ubuntu --user
 lfa switch x11 -i ubuntu --remove-old
@@ -710,9 +712,56 @@ different instance name in guided setup. Each instance has its own rootfs. The
 chosen image is recorded as `IMAGE="..."` in
 `/etc/termux-linux-manager.conf` inside the guest.
 
-Arbitrary rootfs tarballs are not supported by the installer. `proot-distro`
-can install a custom rootfs through a plugin, but the manager will not offer it
-in the menu, and its launchers assume one of the eight supported distros.
+### Custom ISO and rootfs images
+
+The installer can also unpack a userland you provide. This is the same proot
+container model as the supported distros, not a virtual machine: the image
+must match the phone's CPU, and the ISO itself is never booted.
+
+| Source | What happens |
+| --- | --- |
+| Rootfs tarball (`.tar`, `.tar.gz`, `.tar.xz`, `.tar.bz2`, `.tar.zst`) | Extracted directly; a single top-level directory is flattened. |
+| Extracted rootfs directory | Copied into the instance. |
+| Live ISO or raw image (`.iso`, `.img`, `.zip`) | `7z` unpacks the image, LFA finds the live squashfs (or the ext4 inside Fedora's `squashfs.img`) and extracts that root filesystem. `7zip` is installed automatically when missing. |
+
+Choose **Custom Linux ISO / rootfs** in guided setup (option 9), or use the
+CLI:
+
+```bash
+lfa install --rootfs ~/storage/downloads/debian-rootfs.tar.gz -i debian-custom
+lfa install --iso ~/storage/downloads/alpine-live-arm64.iso -i alpine-live
+lfa install --iso ~/storage/downloads/debian-live-arm64.iso -i debian-live \
+    --desktop xfce4 --backend vnc
+```
+
+`--iso` and `--rootfs` imply `--distro custom`; do not combine them with
+another `--distro`. On the CLI, a custom install defaults to `--desktop none`,
+because LFA only knows how to drive a desktop for the families it recognises.
+
+LFA reads `/etc/os-release` after extraction and maps the image to Debian,
+Ubuntu, Kali, Fedora, openSUSE, Void, Arch, or Alpine. A recognised family
+gets the normal desktop/software setup and the same launchers as a distro
+installed from proot-distro. If the package manager is unknown, the instance
+is installed terminal-only and LFA prints the command to open a root shell;
+install a desktop inside the guest with its own package manager if you want
+one.
+
+Things that will not work:
+
+- **A different CPU.** proot does not emulate, so an `x86_64` ISO cannot run
+  on an arm64 phone. Use an arm64 image (most desktop ISOs are amd64-only).
+- **Installer-only ISOs.** Images without a live squashfs/root filesystem
+  (for example Ubuntu Server) have nothing for LFA to extract. Use the
+  distro's rootfs tarball or cloud image instead.
+- **Booting, kernels, and block devices.** There is no kernel, initramfs,
+  systemd, loop mount, or block layer under proot. Live-ISO extraction gives
+  you the filesystem, not the boot experience.
+- **OCI/Docker archives.** These need `proot-distro` v5's own installer.
+  Export a plain rootfs instead: `docker export NAME -o rootfs.tar`.
+
+The chosen source and detected identity are recorded as `CUSTOM_SOURCE`,
+`CUSTOM_NAME`, and `CUSTOM_ID` in
+`/etc/termux-linux-manager.conf` inside the guest.
 
 ### Testing an older version
 
@@ -1564,7 +1613,7 @@ plus `script` from util-linux for the pty test, which is skipped if absent:
 
 ```bash
 chmod +x tests/test-all.sh
-./tests/test-all.sh   # expect: PASS=881 FAIL=0
+./tests/test-all.sh   # expect: PASS=917 FAIL=0
 ```
 
 The suite is deliberately stubbed. It cannot prove a desktop actually appears.

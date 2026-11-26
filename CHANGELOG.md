@@ -15,6 +15,15 @@ tag names, define the order. See the table at the bottom.
 
 ### Added
 
+- Custom Linux userlands. Guided setup gained option 9, and `lfa install`
+  gained `--iso PATH` and `--rootfs PATH`, so a rootfs tarball, an extracted
+  directory, or a live ISO can run under proot next to the eight built-in
+  distros. LFA checks the CPU architecture, extracts a live squashfs (or the
+  ext4 inside Fedora's `squashfs.img`), reads `/etc/os-release`, and maps the
+  image to a package-manager family so the normal desktop/software setup can
+  run. Unknown families install terminal-only instead of calling a package
+  manager that does not exist. The ISO is never booted, proot cannot emulate
+  another CPU, and installer-only images still need a rootfs tarball.
 - LFA notices now reach Android. `ui_ok`, `ui_warn`, and `ui_err` post a
   `termux-notification` through Termux:API as well as printing the terminal
   line, so install, update, backup, restore, repair, import, and error

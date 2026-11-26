@@ -219,7 +219,7 @@ check "B install done" 'Installation complete!' "$T/b.log"
 
 echo "===== C: guided debian CLI, custom user, validation loops ====="
 fresh_env
-printf '%s\n' 2 9 2 4 99 'x y' '' '' 'Bad Name!' 'dev' '' 's3cret' '' 'oppo-test' 5 2 'y' '' 'n' 'n' '' '' '13' \
+printf '%s\n' 2 10 2 4 99 'x y' '' '' 'Bad Name!' 'dev' '' 's3cret' '' 'oppo-test' 5 2 'y' '' 'n' 'n' '' '' '13' \
 | bash "$REPO/install_linux.sh" > "$T/c.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: run c exit $rc"; }
 S=$(setup_sh_of)
 check "C user" 'useradd -m -s /bin/bash dev' "$S"
@@ -2251,6 +2251,131 @@ check "Y11b README link" 'docs/USB.md' "$REPO/README.md"
 check "Y11b README command" 'lfa usb' "$REPO/README.md"
 check "Y11b docs index" 'USB.md' "$REPO/docs/README.md"
 check "Y11b incompatible points to guide" 'USB.md' "$REPO/docs/INCOMPATIBLE.md"
+
+echo "===== Y12: custom rootfs tarball (known family) ====="
+fresh_env
+mkdir -p "$T/custom-deb/bin" "$T/custom-deb/etc"
+printf '#!/bin/sh\n' > "$T/custom-deb/bin/sh"
+chmod +x "$T/custom-deb/bin/sh"
+printf 'ID=debian\nPRETTY_NAME="Test Debian"\n' > "$T/custom-deb/etc/os-release"
+tar -czf "$T/custom-deb.tar.gz" -C "$T/custom-deb" .
+timeout 90 bash "$REPO/install_linux.sh" --cli install \
+    --rootfs "$T/custom-deb.tar.gz" -i customdeb --desktop none --user user \
+    > "$T/y12.log" 2>&1; rc=$?
+[ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y12 custom rootfs exit $rc"; }
+check "Y12 completes" 'Installation complete!' "$T/y12.log"
+check "Y12 detected name" 'Test Debian' "$T/y12.log"
+CROOT="$T/prefix/var/lib/proot-distro/containers/customdeb/rootfs"
+[ -d "$CROOT" ] || CROOT="$T/prefix/var/lib/proot-distro/installed-rootfs/customdeb"
+[ -x "$CROOT/bin/sh" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y12 rootfs not extracted"; }
+check "Y12 conf family" 'DISTRO="debian"' "$CROOT/etc/termux-linux-manager.conf"
+check "Y12 conf name" 'CUSTOM_NAME="Test Debian"' "$CROOT/etc/termux-linux-manager.conf"
+check "Y12 conf id" 'CUSTOM_ID="debian"' "$CROOT/etc/termux-linux-manager.conf"
+check "Y12 conf source" 'CUSTOM_SOURCE="' "$CROOT/etc/termux-linux-manager.conf"
+check_absent "Y12 no proot-distro install" 'install' "$T/home/pd-calls.log"
+check "Y12 guest setup" 'apt-get install' "$(setup_sh_of)"
+
+echo "===== Y12b: custom rootfs, unknown package manager ====="
+fresh_env
+mkdir -p "$T/custom-unk/bin" "$T/custom-unk/etc"
+printf '#!/bin/sh\n' > "$T/custom-unk/bin/sh"
+chmod +x "$T/custom-unk/bin/sh"
+printf 'ID=customos\nPRETTY_NAME="Test Custom"\n' > "$T/custom-unk/etc/os-release"
+tar -czf "$T/custom-unk.tar.gz" -C "$T/custom-unk" .
+timeout 90 bash "$REPO/install_linux.sh" --cli install \
+    --rootfs "$T/custom-unk.tar.gz" -i customunk --desktop none --user user \
+    > "$T/y12b.log" 2>&1; rc=$?
+[ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y12b unknown rootfs exit $rc"; }
+check "Y12b unknown notice" 'does not know this userland' "$T/y12b.log"
+check "Y12b skipped setup" 'Skipping guest setup' "$T/y12b.log"
+check "Y12b shell hint" 'lfa shell -i customunk --root' "$T/y12b.log"
+CROOT="$T/prefix/var/lib/proot-distro/containers/customunk/rootfs"
+[ -d "$CROOT" ] || CROOT="$T/prefix/var/lib/proot-distro/installed-rootfs/customunk"
+check "Y12b conf family" 'DISTRO="custom"' "$CROOT/etc/termux-linux-manager.conf"
+check "Y12b conf id" 'CUSTOM_ID="customos"' "$CROOT/etc/termux-linux-manager.conf"
+check "Y12b conf name" 'CUSTOM_NAME="Test Custom"' "$CROOT/etc/termux-linux-manager.conf"
+YS=$(setup_sh_of)
+if [ -z "$YS" ] || [ ! -s "$YS" ]; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: Y12b generated a guest setup script"; fi
+
+echo "===== Y12c: custom live ISO (squashfs extraction) ====="
+fresh_env
+mkdir -p "$T/iso-root/bin" "$T/iso-root/etc"
+printf '#!/bin/sh\n' > "$T/iso-root/bin/sh"
+chmod +x "$T/iso-root/bin/sh"
+printf 'ID=alpine\nPRETTY_NAME="Test Alpine"\n' > "$T/iso-root/etc/os-release"
+: > "$T/fake.iso"
+cat > "$T/fakebin/7z" <<EOF
+#!/bin/bash
+out=""
+for a in "\$@"; do case "\$a" in -o*) out="\${a#-o}" ;; esac; done
+[ -n "\$out" ] || exit 1
+mkdir -p "\$out"
+case "\${@: -1}" in
+    *.iso) mkdir -p "\$out/live"; : > "\$out/live/filesystem.squashfs" ;;
+    *.squashfs) cp -a "$T/iso-root/." "\$out/" ;;
+    *) exit 1 ;;
+esac
+EOF
+chmod +x "$T/fakebin/7z"
+timeout 90 bash "$REPO/install_linux.sh" --cli install \
+    --iso "$T/fake.iso" -i customiso --desktop none --user user \
+    > "$T/y12c.log" 2>&1; rc=$?
+rm -f "$T/fakebin/7z"
+[ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y12c custom ISO exit $rc"; }
+check "Y12c unpacks image" 'Unpacking fake.iso' "$T/y12c.log"
+check "Y12c finds squashfs" 'Found filesystem.squashfs' "$T/y12c.log"
+check "Y12c detected name" 'Test Alpine' "$T/y12c.log"
+CROOT="$T/prefix/var/lib/proot-distro/containers/customiso/rootfs"
+[ -d "$CROOT" ] || CROOT="$T/prefix/var/lib/proot-distro/installed-rootfs/customiso"
+check "Y12c conf family" 'DISTRO="alpine"' "$CROOT/etc/termux-linux-manager.conf"
+
+echo "===== Y12d: custom rootfs with the wrong CPU architecture ====="
+fresh_env
+mkdir -p "$T/custom-bad/bin" "$T/custom-bad/etc"
+case "$(uname -m)" in
+    aarch64|arm64) printf '\x7fELF\x02\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x3e\x00' > "$T/custom-bad/bin/sh" ;;
+    *) printf '\x7fELF\x02\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\xb7\x00' > "$T/custom-bad/bin/sh" ;;
+esac
+printf 'ID=debian\nPRETTY_NAME="Wrong Arch"\n' > "$T/custom-bad/etc/os-release"
+tar -czf "$T/custom-bad.tar.gz" -C "$T/custom-bad" .
+timeout 90 bash "$REPO/install_linux.sh" --cli install \
+    --rootfs "$T/custom-bad.tar.gz" -i custombad --desktop none \
+    > "$T/y12d.log" 2>&1; rc=$?
+[ "$rc" != "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y12d wrong arch was accepted"; }
+check "Y12d refuses" 'proot does not emulate another CPU' "$T/y12d.log"
+[ ! -e "$T/prefix/var/lib/proot-distro/containers/custombad" ] && \
+[ ! -e "$T/prefix/var/lib/proot-distro/installed-rootfs/custombad" ] && \
+pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y12d left a partial rootfs"; }
+
+echo "===== Y12e: custom source validation ====="
+fresh_env
+timeout 30 bash "$REPO/install_linux.sh" --cli install --distro custom -i nosrc \
+    > "$T/y12e1.log" 2>&1; rc=$?
+[ "$rc" = "2" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y12e missing source exit $rc"; }
+check "Y12e missing source hint" 'needs --iso PATH or --rootfs PATH' "$T/y12e1.log"
+timeout 30 bash "$REPO/install_linux.sh" --cli install --rootfs "$T/does-not-exist.tar.gz" -i nosrc \
+    > "$T/y12e2.log" 2>&1; rc=$?
+[ "$rc" != "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y12e bad path was accepted"; }
+check "Y12e bad path message" 'Not found' "$T/y12e2.log"
+
+echo "===== Y12f: guided custom rootfs, unknown family ====="
+fresh_env
+mkdir -p "$T/guided/bin" "$T/guided/etc"
+printf '#!/bin/sh\n' > "$T/guided/bin/sh"
+chmod +x "$T/guided/bin/sh"
+printf 'ID=customos\nPRETTY_NAME="Guided Custom"\n' > "$T/guided/etc/os-release"
+tar -czf "$T/guided.tar.gz" -C "$T/guided" .
+printf '%s\n' 2 9 "$T/guided.tar.gz" '' '' '' '' '' '' 1 n n n y '' 13 13 \
+    | timeout 90 bash "$REPO/install_linux.sh" > "$T/y12f.log" 2>&1; rc=$?
+[ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y12f guided custom exit $rc"; }
+check "Y12f summary userland" 'Guided Custom' "$T/y12f.log"
+check "Y12f skipped setup" 'Skipping guest setup' "$T/y12f.log"
+CROOT="$T/prefix/var/lib/proot-distro/containers/customos/rootfs"
+[ -d "$CROOT" ] || CROOT="$T/prefix/var/lib/proot-distro/installed-rootfs/customos"
+check "Y12f conf family" 'DISTRO="custom"' "$CROOT/etc/termux-linux-manager.conf"
+check "Y12f conf name" 'CUSTOM_NAME="Guided Custom"' "$CROOT/etc/termux-linux-manager.conf"
+[ -z "$(find "$T/prefix/var/lib/proot-distro" -maxdepth 1 -name '.lfa-custom-*' 2>/dev/null)" ] \
+    && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y12f left a staging directory"; }
 
 echo ""
 echo "===== Z: documentation links ====="

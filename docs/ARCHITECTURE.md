@@ -63,6 +63,15 @@ saved config ─┘        │
                        └─ 7. verify core components, then "Installation complete"
 ```
 
+A custom source replaces step 2. Guided setup unpacks the chosen ISO, tarball,
+or directory into a private staging tree before the desktop/software menus so
+it can read `/etc/os-release` and pick the package-manager family. The stage
+is moved into the proot-distro container layout once the instance name is
+known; `install_linux()` reuses it instead of unpacking twice. If the family is
+unknown, the desktop/software menus and the guest setup script are skipped and
+the instance is terminal-only. The EXIT trap removes a stage that never
+reaches an installed instance.
+
 Step 3 is the unusual one. Instead of a long chain of `proot-distro login
 ... -- cmd` calls (each paying proot startup and losing environment), the
 installer writes one guest bash script and runs it once. It is fast and can
