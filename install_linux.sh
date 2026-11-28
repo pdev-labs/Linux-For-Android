@@ -34,8 +34,23 @@ CLI_INSTANCE="${CLI_INSTANCE:-}"
 # failed install (a stray copy used to survive forever).
 # ------------------------------------------------------------
 LFA_TMP_ARTIFACTS=()
+LFA_TMP_DIRS=()
 lfa_track_tmp() { LFA_TMP_ARTIFACTS+=("$1"); }
+lfa_track_tmpdir() { LFA_TMP_DIRS+=("$1"); }
 lfa_cleanup() {
+    # A staged custom userland is a directory, not a file. Only remove it
+    # while it still lives under the manager's private staging prefix; once
+    # install_linux moves it into place the variable is cleared.
+    case "${LFA_CUSTOM_STAGE:-}" in
+        "$PREFIX"/var/lib/proot-distro/.lfa-custom-*)
+            rm -rf "$LFA_CUSTOM_STAGE" 2>/dev/null || true ;;
+    esac
+    local _d
+    for _d in ${LFA_TMP_DIRS[@]+"${LFA_TMP_DIRS[@]}"}; do
+        case "$_d" in
+            "$PREFIX"/tmp/lfa-custom-*) rm -rf "$_d" 2>/dev/null || true ;;
+        esac
+    done
     [ "${LFA_KEEP_SETUP_SCRIPT:-0}" = "1" ] && return 0
     local _f
     for _f in ${LFA_TMP_ARTIFACTS[@]+"${LFA_TMP_ARTIFACTS[@]}"}; do
@@ -910,6 +925,7 @@ SERVER="$SERVER"
 RESOLUTION="$RESOLUTION"
 COLOR_MODE="$COLOR_MODE"
 APP_CHOICES="$APP_CHOICES"
+CUSTOM_SOURCE="$(lfa_custom_conf_escape "${LFA_CUSTOM_SOURCE:-}")"
 INSTANCE_NAME="$INSTANCE_NAME"
 SETUP_USER="$SETUP_USER"
 SETUP_USER_B64="$SETUP_USER_B64"
@@ -921,6 +937,8 @@ NEED_VIRGL="$NEED_VIRGL"
 AUTOSTART_SERVER="$AUTOSTART_SERVER"
 DO_AUTOSTART="$DO_AUTOSTART"
 DO_STORAGE="$DO_STORAGE"
+STORAGE_ANDROID="${STORAGE_ANDROID:-1}"
+STORAGE_EXTERNAL="${STORAGE_EXTERNAL:-1}"
 DO_SSH="$DO_SSH"
 DO_WIDGET="$DO_WIDGET"
 EOF
@@ -932,6 +950,9 @@ setup_summary() {
     printf '\n  %sSetup Summary%s\n' "$C_BOLD$C_WHITE" "$C_RESET"
     ui_rule
     printf '  %s%-13s%s %s\n' "$C_GRAY" "Distribution" "$C_RESET" "$DISTRO"
+    if [ "${LFA_CUSTOM:-0}" = "1" ] && [ -n "${LFA_CUSTOM_NAME:-}" ]; then
+        printf '  %s%-13s%s %s\n' "$C_GRAY" "Userland" "$C_RESET" "$LFA_CUSTOM_NAME"
+    fi
     printf '  %s%-13s%s %s\n' "$C_GRAY" "Desktop" "$C_RESET" "$DE"
     [ "$DE" != "none" ] && printf '  %s%-13s%s %s\n' "$C_GRAY" "Wallpaper" "$C_RESET" "$COLOR_MODE"
     printf '  %s%-13s%s %s\n' "$C_GRAY" "Server" "$C_RESET" "$SERVER"
@@ -946,7 +967,8 @@ setup_summary() {
     printf '  %s%-13s%s %s\n' "$C_GRAY" "HW accel" "$C_RESET" "$([ "$NEED_VIRGL" = "1" ] && echo on || echo off)"
     printf '  %s%-13s%s %s\n' "$C_GRAY" "Prompt style" "$C_RESET" "$PSTYLE"
     printf '  %s%-13s%s %s\n' "$C_GRAY" "Autostart" "$C_RESET" "$([ "$DO_AUTOSTART" = "1" ] && echo "yes (${AUTOSTART_SERVER:-$SERVER})" || echo no)"
-    printf '  %s%-13s%s %s\n' "$C_GRAY" "Storage perm" "$C_RESET" "$([ "$DO_STORAGE" = "1" ] && echo yes || echo no)"
+    printf '  %s%-13s%s %s\n' "$C_GRAY" "Android stg" "$C_RESET" "$([ "${STORAGE_ANDROID:-1}" = "1" ] && echo yes || echo no)"
+    printf '  %s%-13s%s %s\n' "$C_GRAY" "External stg" "$C_RESET" "$([ "${STORAGE_EXTERNAL:-1}" = "1" ] && echo yes || echo no)"
     printf '  %s%-13s%s %s\n' "$C_GRAY" "SSH server" "$C_RESET" "$([ "$DO_SSH" = "1" ] && echo yes || echo no)"
     printf '  %s%-13s%s %s\n' "$C_GRAY" "Widget hint" "$C_RESET" "$([ "$DO_WIDGET" = "1" ] && echo yes || echo no)"
     ui_rule
@@ -970,6 +992,8 @@ setup_quick() {
     if [ "$IS_LEGACY" = "1" ]; then NEED_VIRGL=0; else NEED_VIRGL=1; fi
     AUTOSTART_SERVER="$SERVER"
     DO_AUTOSTART=0
+    STORAGE_ANDROID=1
+    STORAGE_EXTERNAL=1
     DO_STORAGE=1
     DO_SSH=0
     DO_WIDGET=0
@@ -996,7 +1020,8 @@ setup_guided() {
             "5|OpenSUSE|Zypper · enterprise" \
             "6|Void Linux|XBPS · lightweight, rolling" \
             "7|Arch Linux|Pacman · rolling (may be unstable on ARM64)" \
-            "8|Alpine Linux|APK · musl · best for Android 5/6 + low RAM"; then
+            "8|Alpine Linux|APK · musl · best for Android 5/6 + low RAM" \
+            "9|Custom Linux ISO / rootfs|extract any proot-compatible userland"; then
             show_menu
             return
         fi
@@ -1012,8 +1037,36 @@ setup_guided() {
             6) DISTRO="void"; break ;;
             7) DISTRO="archlinux"; break ;;
             8) DISTRO="alpine"; break ;;
+            9) DISTRO="custom"; break ;;
         esac
     done
+    if [ "$DISTRO" = "custom" ]; then
+        if [ -z "${LFA_CUSTOM_SOURCE:-}" ]; then
+            if ! lfa_custom_ask_source; then
+                show_menu
+                return
+            fi
+        fi
+        if ! lfa_custom_stage_source; then
+            ui_pause
+            show_menu
+            return 1
+        fi
+        if [ "$LFA_CUSTOM_FAMILY" = "unknown" ]; then
+            LFA_CUSTOM_UNKNOWN=1
+        fi
+    fi
+    if [ "${LFA_CUSTOM_UNKNOWN:-0}" = "1" ]; then
+        # No package manager LFA can drive: keep the questions that still
+        # apply (name, user, passwords, timezone, SSH) and skip the rest.
+        DE="none"; SERVER="none"; COLOR_MODE="light"
+        RESOLUTION="1280x720"; NEED_VIRGL=0; AUTOSTART_SERVER="none"
+        APP_CHOICES=""
+        echo ""
+        echo "[!] LFA does not know this userland's package manager."
+        echo "    It installs as a terminal-only system. Add a desktop inside"
+        echo "    the guest with its own package manager if you want one."
+    else
     # 2. Desktop
     local _de _dedef
     if [ "$IS_LEGACY" = "1" ] || [ "$(setup_ram_mb)" -le 2048 ]; then _de="None (CLI only)"; _dedef=4; else _de="XFCE4"; _dedef=1; fi
@@ -1021,7 +1074,7 @@ setup_guided() {
         show_menu
         return
     fi
-    if [ "$DISTRO" = "alpine" ] && [ "$DE" = "lxde" ]; then
+    if { [ "$DISTRO" = "alpine" ] || [ "${LFA_CUSTOM_FAMILY:-}" = "alpine" ]; } && [ "$DE" = "lxde" ]; then
         echo "[*] LXDE is not packaged for Alpine -> using XFCE4 instead."
         DE="xfce4"
     fi
@@ -1101,6 +1154,7 @@ setup_guided() {
         return
     fi
     APP_CHOICES="$UI_MULTI"
+    fi
     # 5. Instance name
     echo ""
     while true; do
@@ -1161,7 +1215,8 @@ setup_guided() {
         2) PSTYLE="informative" ;;
     esac
     # 12-14. Autostart / storage / SSH / widget
-    if ui_confirm "Autostart at boot via Termux:Boot? (needs the Termux:Boot app)" n; then
+    if [ "${LFA_CUSTOM_UNKNOWN:-0}" != "1" ] && \
+       ui_confirm "Autostart at boot via Termux:Boot? (needs the Termux:Boot app)" n; then
         DO_AUTOSTART=1
         if [ "$SERVER" = "both" ]; then
             if ! ui_select "Autostart backend" "1" \
@@ -1183,7 +1238,21 @@ setup_guided() {
         DO_AUTOSTART=0
         AUTOSTART_SERVER="none"
     fi
-    if ui_confirm "Request Android storage access now? (Downloads/Documents)" y; then DO_STORAGE=1; else DO_STORAGE=0; fi
+    if ! ui_select "Storage inside Linux (Android and external are separate)" "1" \
+        "1|Both|Android shared storage + SD cards/USB drives" \
+        "2|Android only|shared storage, no external devices" \
+        "3|External only|SD cards/USB drives, no Android shared storage" \
+        "4|None|no host storage inside Linux"; then
+        show_menu
+        return
+    fi
+    case "$UI_SELECTED" in
+        2) STORAGE_ANDROID=1; STORAGE_EXTERNAL=0 ;;
+        3) STORAGE_ANDROID=0; STORAGE_EXTERNAL=1 ;;
+        4) STORAGE_ANDROID=0; STORAGE_EXTERNAL=0 ;;
+        *) STORAGE_ANDROID=1; STORAGE_EXTERNAL=1 ;;
+    esac
+    if [ "$STORAGE_ANDROID" = "1" ] || [ "$STORAGE_EXTERNAL" = "1" ]; then DO_STORAGE=1; else DO_STORAGE=0; fi
     if ui_confirm "Start an SSH server after install? (port 8022)" n; then DO_SSH=1; else DO_SSH=0; fi
     if ui_confirm "Show Termux:Widget shortcut instructions?" n; then DO_WIDGET=1; else DO_WIDGET=0; fi
     # Summary + save + go
@@ -1191,6 +1260,10 @@ setup_guided() {
     UI_NO_CLEAR=1
     if ! ui_confirm "Proceed with installation?" y; then
         echo "Setup cancelled."
+        case "${LFA_CUSTOM_STAGE:-}" in
+            "$PREFIX"/var/lib/proot-distro/.lfa-custom-*)
+                rm -rf "$LFA_CUSTOM_STAGE"; LFA_CUSTOM_STAGE="" ;;
+        esac
         show_menu
         return
     fi
@@ -1215,8 +1288,15 @@ setup_load_saved() {
     : "${SETUP_USER_B64:=cm9vdA==}" "${SETUP_ROOT_B64:=cm9vdA==}"
     : "${TIMEZONE:=UTC}" "${HOSTNAME:=localhost}" "${PSTYLE:=minimal}"
     : "${NEED_VIRGL:=1}" "${DO_AUTOSTART:=0}" "${DO_STORAGE:=1}"
+    if [ "${DO_STORAGE:-1}" = "0" ]; then
+        : "${STORAGE_ANDROID:=0}" "${STORAGE_EXTERNAL:=0}"
+    else
+        : "${STORAGE_ANDROID:=1}" "${STORAGE_EXTERNAL:=1}"
+    fi
     : "${DO_SSH:=0}" "${DO_WIDGET:=0}"
-    : "${AUTOSTART_SERVER:=}"
+    : "${AUTOSTART_SERVER:=}" "${CUSTOM_SOURCE:=}"
+    LFA_CUSTOM_SOURCE="$CUSTOM_SOURCE"
+    if [ "${DISTRO:-}" = "custom" ]; then LFA_CUSTOM=1; fi
     if [ -z "$AUTOSTART_SERVER" ]; then
         case "$SERVER" in
             both) AUTOSTART_SERVER="vnc" ;;
@@ -1461,7 +1541,13 @@ Global short option:
 
 Install options:
   -d, --distro NAME       ubuntu, debian, kali, fedora, opensuse,
-                          void, archlinux, alpine
+                          void, archlinux, alpine, custom
+      --iso PATH          custom live ISO (its root filesystem is extracted)
+      --rootfs PATH       custom rootfs tarball or extracted directory
+      --android-storage on|off
+                          expose Android shared storage in the guest (default on)
+      --external-storage on|off
+                          expose SD cards/USB drives in the guest (default on)
   -D, --desktop NAME      xfce4, lxde, mate, gnome, none
   -b, --backend NAME      x11, vnc, both, none
   -a, --autostart NAME    x11, vnc, none
@@ -1484,6 +1570,8 @@ Compatibility options:
 
 Examples:
   lfa install --distro ubuntu --desktop xfce4 --backend both -i ubuntu
+  lfa install --iso ~/storage/downloads/debian-live-arm64.iso -i debian-live
+  lfa install --rootfs ~/storage/downloads/alpine-rootfs.tar.gz -i alpine-custom
   lfa start -i ubuntu --vnc
   lfa shell -i ubuntu --user
   lfa switch x11 -i ubuntu --remove-old
@@ -5133,14 +5221,14 @@ lfa_instance_session_running() {  # $1 = instance
 }
 
 lfa_cli_status_one() {  # $1 = instance, $2 = json
-    local _inst="$1" _json="${2:-0}" _conf _d _de _srv _auto _pid _run="none"
+    local _inst="$1" _json="${2:-0}" _conf _d _de _srv _auto _pid _run="none" _cname=""
     _conf="$(pd_conf "$_inst" 2>/dev/null)"
     _d=""; _de=""; _srv="none"; _auto="none"
     if [ -f "$_conf" ]; then
         # shellcheck disable=SC1090
-        { IFS= read -r _d; IFS= read -r _de; IFS= read -r _srv; IFS= read -r _auto; } < <(
+        { IFS= read -r _d; IFS= read -r _de; IFS= read -r _srv; IFS= read -r _auto; IFS= read -r _cname; } < <(
             . "$_conf" 2>/dev/null
-            printf '%s\n%s\n%s\n%s\n' "${DISTRO:-}" "${DE:-none}" "${SERVER:-none}" "${AUTOSTART_SERVER:-none}"
+            printf '%s\n%s\n%s\n%s\n%s\n' "${DISTRO:-}" "${DE:-none}" "${SERVER:-none}" "${AUTOSTART_SERVER:-none}" "${CUSTOM_NAME:-}"
         )
     fi
     if [ -f "$PREFIX/tmp/lfa-vnc-$_inst.pid" ]; then
@@ -5158,6 +5246,7 @@ lfa_cli_status_one() {  # $1 = instance, $2 = json
     else
         echo "instance:  $_inst"
         echo "distro:    ${_d:-unknown}"
+        [ -n "$_cname" ] && echo "userland:  $_cname"
         echo "desktop:   ${_de:-none}"
         echo "backend:   ${_srv:-none}"
         echo "autostart: ${_auto:-none}"
@@ -5573,6 +5662,11 @@ Usage: lfa storage <command> [options]
   fix | fx                 repair links, bookmarks, and the storage group
   exec | x FILE [args...]  run a file from shared storage without chmod
   open | o                 show where shared storage is and how to open it
+  android enable|disable|status
+                           expose Android shared storage in the guest
+  external enable|disable|status
+                           expose SD cards/USB drives in the guest
+                           (on/off are accepted as aliases)
   data status              check adb access to Android/data and Android/obb
                            (short: d st)
   data list                list packages under Android/data and Android/obb
@@ -5646,17 +5740,24 @@ lfa_storage_status() {
     require_proot_distro || return 1
     [ -n "$_inst" ] && CLI_INSTANCE="$_inst"
     select_installed_instance || return 1
-    local _id="$INSTANCE_NAME" _user _out
+    local _id="$INSTANCE_NAME" _user _out _android _external _st_args=()
     _user="$(lfa_appimage_user "$_id")"
     echo "instance: $_id"
+    # shellcheck disable=SC1090  # instance config, path resolved at runtime
+    _android="$( . "$(pd_conf "$_id")" 2>/dev/null; printf '%s' "${STORAGE_ANDROID:-1}" )"
+    # shellcheck disable=SC1090
+    _external="$( . "$(pd_conf "$_id")" 2>/dev/null; printf '%s' "${STORAGE_EXTERNAL:-1}" )"
+    echo "android storage: $([ "$_android" = "1" ] && echo on || echo off)"
+    echo "external storage: $([ "$_external" = "1" ] && echo on || echo off)"
     if [ -d "$HOME/storage" ]; then
         echo "termux storage: present"
         echo "shared target:  $(readlink -f "$HOME/storage/shared" 2>/dev/null || echo unknown)"
     else
         echo "termux storage: missing (run: lfa storage fix -i $_id)"
     fi
+    mapfile -t _st_args < <(lfa_storage_args "$_id")
     # shellcheck disable=SC2046  # flag list, not one argument
-    _out="$(proot-distro login $(pd_login_flags) "$_id" --user "$_user" --shared-tmp -- bash -c '
+    _out="$(proot-distro login $(pd_login_flags) "${_st_args[@]}" "$_id" --user "$_user" --shared-tmp -- bash -c '
         printf "guest gid: %s\n" "$(id -g)"
         printf "storage:   "
         ls -ld /storage/emulated/0 2>&1
@@ -5899,6 +6000,57 @@ lfa_storage_data() {
     esac
 }
 
+lfa_storage_policy() {  # $1 = android|external, $2 = enable|disable|status, then -i NAME
+    local _what="$1" _mode="${2:-status}" _inst="" _conf _cur _val
+    [ $# -gt 0 ] && shift || true
+    [ $# -gt 0 ] && shift || true
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            -i|--instance) _inst="${2:-}"; shift 2 ;;
+            *) echo "Unknown option: $1" >&2; return 2 ;;
+        esac
+    done
+    case "$_what" in
+        android|external) ;;
+        *) echo "Unknown storage policy: $_what" >&2; return 2 ;;
+    esac
+    require_proot_distro || return 1
+    [ -n "$_inst" ] && CLI_INSTANCE="$_inst"
+    select_installed_instance || return 1
+    [ -n "${INSTANCE_NAME:-}" ] || return 1
+    _conf="$(pd_conf "$INSTANCE_NAME" 2>/dev/null)"
+    [ -f "$_conf" ] || { echo "No config for $INSTANCE_NAME." >&2; return 1; }
+    if [ "$_what" = "android" ]; then
+        # shellcheck disable=SC1090  # instance config, path resolved at runtime
+        _cur="$( . "$_conf" 2>/dev/null; printf '%s' "${STORAGE_ANDROID:-1}" )"
+    else
+        # shellcheck disable=SC1090
+        _cur="$( . "$_conf" 2>/dev/null; printf '%s' "${STORAGE_EXTERNAL:-1}" )"
+    fi
+    case "$_mode" in
+        status|st)
+            echo "$_what storage: $([ "$_cur" = "1" ] && echo on || echo off)"
+            return 0 ;;
+        on|enable|1|yes) _val=1 ;;
+        off|disable|0|no) _val=0 ;;
+        *) echo "Usage: lfa storage $_what enable|disable|status [-i NAME]" >&2; return 2 ;;
+    esac
+    if [ "$_what" = "android" ]; then
+        if grep -q '^STORAGE_ANDROID=' "$_conf" 2>/dev/null; then
+            sed -i "s/^STORAGE_ANDROID=.*/STORAGE_ANDROID=\"$_val\"/" "$_conf"
+        else
+            printf 'STORAGE_ANDROID="%s"\n' "$_val" >> "$_conf"
+        fi
+    else
+        if grep -q '^STORAGE_EXTERNAL=' "$_conf" 2>/dev/null; then
+            sed -i "s/^STORAGE_EXTERNAL=.*/STORAGE_EXTERNAL=\"$_val\"/" "$_conf"
+        else
+            printf 'STORAGE_EXTERNAL="%s"\n' "$_val" >> "$_conf"
+        fi
+    fi
+    echo "$_what storage: $([ "$_val" = "1" ] && echo on || echo off) (new sessions)"
+}
+
 lfa_cli_storage() {
     local _sub="${1:-status}"
     [ $# -gt 0 ] && shift || true
@@ -5915,6 +6067,8 @@ lfa_cli_storage() {
         exec) lfa_storage_exec "$@" ;;
         open) lfa_storage_open "$@" ;;
         data) lfa_storage_data "$@" ;;
+        android|and) lfa_storage_policy android "$@" ;;
+        external|ext) lfa_storage_policy external "$@" ;;
         help|-h|--help) lfa_storage_usage ;;
         *) echo "Unknown storage command: $_sub" >&2; lfa_storage_usage >&2; return 2 ;;
     esac
@@ -5965,9 +6119,17 @@ lfa_software_choices() {  # $1 = comma-separated names -> space-separated menu n
 
 lfa_cli_install() {
     local _distro="" _de="" _backend="" _inst="" _auto="" _user="user" _tz="" _host="localhost" _software=""
+    local _source="" _storage_android="1" _storage_external="1"
     while [ $# -gt 0 ]; do
         case "$1" in
             --distro|-d) _distro="${2:-}"; shift 2 ;;
+            --android-storage) _storage_android="${2:-}"; shift 2 ;;
+            --external-storage) _storage_external="${2:-}"; shift 2 ;;
+            --no-android-storage) _storage_android="off"; shift ;;
+            --no-external-storage) _storage_external="off"; shift ;;
+            --iso|--rootfs|--rootfs-tar)
+                [ $# -ge 2 ] || { echo "[!] $1 needs a path." >&2; return 2; }
+                _source="$2"; shift 2 ;;
             --desktop|-D) _de="${2:-}"; shift 2 ;;
             --backend|-b) _backend="${2:-}"; shift 2 ;;
             -i|--instance) _inst="${2:-}"; shift 2 ;;
@@ -5980,6 +6142,25 @@ lfa_cli_install() {
             *) echo "Unknown option: $1" >&2; return 2 ;;
         esac
     done
+    if [ -n "$_source" ] && [ -z "$_distro" ]; then _distro="custom"; fi
+    if [ "$_distro" = "custom" ] && [ -z "$_source" ]; then
+        echo "[!] A custom install needs --iso PATH or --rootfs PATH." >&2
+        return 2
+    fi
+    if [ "$_distro" != "custom" ] && [ -n "$_source" ]; then
+        echo "[!] --iso/--rootfs imply --distro custom; drop the other --distro." >&2
+        return 2
+    fi
+    case "$_storage_android" in
+        on|yes|1|true|enabled) _storage_android=1 ;;
+        off|no|0|false|disabled) _storage_android=0 ;;
+        *) echo "Invalid --android-storage value '$_storage_android': use on or off." >&2; return 2 ;;
+    esac
+    case "$_storage_external" in
+        on|yes|1|true|enabled) _storage_external=1 ;;
+        off|no|0|false|disabled) _storage_external=0 ;;
+        *) echo "Invalid --external-storage value '$_storage_external': use on or off." >&2; return 2 ;;
+    esac
     local _software_choices=""
     if [ -n "$_software" ]; then
         _software_choices="$(lfa_software_choices "$_software")" || return 2
@@ -6003,9 +6184,13 @@ lfa_cli_install() {
     if [ -z "$_distro" ]; then
         [ "$IS_LEGACY" = "1" ] && _distro="alpine" || _distro="debian"
     fi
-    case "$_distro" in ubuntu|debian|kali|fedora|opensuse|void|archlinux|alpine) ;; *) echo "Unknown distro: $_distro" >&2; return 2 ;; esac
+    case "$_distro" in ubuntu|debian|kali|fedora|opensuse|void|archlinux|alpine|custom) ;; *) echo "Unknown distro: $_distro" >&2; return 2 ;; esac
     if [ -z "$_de" ]; then
-        if [ "$IS_LEGACY" = "1" ] || [ "$(setup_ram_mb)" -le 2048 ]; then _de="none"; else _de="xfce4"; fi
+        if [ "$_distro" = "custom" ] || [ "$IS_LEGACY" = "1" ] || [ "$(setup_ram_mb)" -le 2048 ]; then
+            _de="none"
+        else
+            _de="xfce4"
+        fi
     fi
     case "$_de" in xfce|xfce4) _de="xfce4" ;; lxde|mate|gnome|none) ;; *) echo "Unknown desktop: $_de" >&2; return 2 ;; esac
     if [ "$_de" = "none" ] && [ -n "$_backend" ] && [ "$_backend" != "none" ]; then
@@ -6034,6 +6219,10 @@ lfa_cli_install() {
     fi
     _tz="${_tz:-$(setup_guess_timezone)}"
     DISTRO="$_distro"; DE="$_de"; SERVER="$_backend"
+    if [ "$_distro" = "custom" ]; then
+        LFA_CUSTOM=1
+        LFA_CUSTOM_SOURCE="$_source"
+    fi
     INSTANCE_NAME="$_inst"
     SETUP_USER="$_user"
     SETUP_USER_B64="$(b64enc "${LFA_USER_PASSWORD:-root}")"
@@ -6042,6 +6231,7 @@ lfa_cli_install() {
     RESOLUTION="${LFA_RESOLUTION:-1280x720}"
     APP_CHOICES="$_software_choices"
     NEED_VIRGL=1; [ "$IS_LEGACY" = "1" ] && NEED_VIRGL=0
+    [ "$_de" = "none" ] && NEED_VIRGL=0
     DO_AUTOSTART=0; AUTOSTART_SERVER="none"
     if [ -n "$_auto" ] && [ "$_auto" != "none" ]; then
         case "$_auto" in x11|vnc) ;; *) echo "Unknown autostart backend: $_auto" >&2; return 2 ;; esac
@@ -6053,7 +6243,11 @@ lfa_cli_install() {
         fi
         DO_AUTOSTART=1; AUTOSTART_SERVER="$_auto"
     fi
-    DO_STORAGE=0; DO_SSH=0; DO_WIDGET=0; SETUP_ANSWERED=1
+    STORAGE_ANDROID="$_storage_android"
+    STORAGE_EXTERNAL="$_storage_external"
+    DO_STORAGE=0
+    if [ "$STORAGE_ANDROID" = "1" ] || [ "$STORAGE_EXTERNAL" = "1" ]; then DO_STORAGE=1; fi
+    DO_SSH=0; DO_WIDGET=0; SETUP_ANSWERED=1
     setup_save
     LFA_NONINTERACTIVE=1 LFA_ASSUME_YES=1 install_linux
 }
@@ -6379,7 +6573,8 @@ select_os_flavor() {
         "5|OpenSUSE|Zypper" \
         "6|Void Linux|XBPS" \
         "7|Arch Linux|Pacman · may be unstable on ARM64" \
-        "8|Alpine Linux|APK · musl · best for Android 5/6"; then
+        "8|Alpine Linux|APK · musl · best for Android 5/6" \
+        "9|Custom Linux ISO / rootfs|extract any proot-compatible userland"; then
         return 1
     fi
     case "$UI_SELECTED" in
@@ -6391,6 +6586,7 @@ select_os_flavor() {
         6) DISTRO="void" ;;
         7) DISTRO="archlinux" ;;
         8) DISTRO="alpine" ;;
+        9) DISTRO="custom" ;;
     esac
 }
 
@@ -6444,6 +6640,522 @@ pd_instance_exists() {
     local base="$PREFIX/var/lib/proot-distro"
     [ -d "$base/containers/$inst/rootfs" ] && return 0
     [ -d "$base/installed-rootfs/$inst/var" ] || [ -d "$base/installed-rootfs/$inst/usr" ]
+}
+
+# Storage policy for a guest session. Both categories default to on, which
+# keeps proot-distro's normal /storage and /sdcard binds. When either one is
+# disabled the session becomes --isolated and LFA adds only the binds the
+# user kept, so the disabled category cannot leak through /storage.
+lfa_storage_args() {  # $1 = instance; prints proot-distro login arguments
+    local _inst="${1:-}" _conf="" _root="" _android=1 _external=1
+    local _shared="" _vol _id _spec _guest _ifs
+    if declare -F pd_conf >/dev/null 2>&1; then
+        _conf="$(pd_conf "$_inst" 2>/dev/null || true)"
+        _root="$(pd_rootfs "$_inst" 2>/dev/null || true)"
+    else
+        _conf="$(lfa_conf "$_inst" 2>/dev/null || true)"
+        _root="$(lfa_rootfs "$_inst" 2>/dev/null || true)"
+    fi
+    if [ -f "$_conf" ]; then
+        # shellcheck disable=SC1090
+        _android="$( . "$_conf" 2>/dev/null; printf '%s' "${STORAGE_ANDROID:-1}" )"
+        # shellcheck disable=SC1090
+        _external="$( . "$_conf" 2>/dev/null; printf '%s' "${STORAGE_EXTERNAL:-1}" )"
+    fi
+    case "$_android" in 0|no|off|false|disabled) _android=0 ;; *) _android=1 ;; esac
+    case "$_external" in 0|no|off|false|disabled) _external=0 ;; *) _external=1 ;; esac
+
+    _lfa_storage_emit() {  # $1 = host:guest
+        _guest="${1##*:}"
+        [ -n "$_root" ] && mkdir -p "$_root$_guest" 2>/dev/null || true
+        printf '%s\n' "--bind" "$1"
+    }
+
+    if [ "$_android" = "1" ] && [ "$_external" = "1" ]; then
+        # Default binds already expose both. USB auto mode may have added
+        # explicit card binds; keep them.
+        if [ -n "${LFA_STORAGE_BIND:-}" ]; then
+            _ifs="$IFS"; IFS=';'
+            for _spec in $LFA_STORAGE_BIND; do
+                [ -n "$_spec" ] && _lfa_storage_emit "$_spec"
+            done
+            IFS="$_ifs"
+        fi
+        return 0
+    fi
+
+    printf '%s\n' "--isolated"
+    if [ "$_android" = "1" ]; then
+        for _shared in /storage/self/primary /storage/emulated/0 /sdcard; do
+            [ -d "$_shared" ] && break
+            _shared=""
+        done
+        if [ -n "$_shared" ]; then
+            _lfa_storage_emit "$_shared:/sdcard"
+            _lfa_storage_emit "$_shared:/storage/emulated/0"
+        fi
+    fi
+    if [ "$_external" = "1" ]; then
+        if [ -n "${LFA_STORAGE_BIND:-}" ]; then
+            _ifs="$IFS"; IFS=';'
+            for _spec in $LFA_STORAGE_BIND; do
+                [ -n "$_spec" ] && _lfa_storage_emit "$_spec"
+            done
+            IFS="$_ifs"
+        else
+            for _vol in /storage/*; do
+                _id="${_vol##*/}"
+                case "$_id" in emulated|self|sdcard0) continue ;; esac
+                [ -d "$_vol" ] || continue
+                _lfa_storage_emit "$_vol:/media/$_id"
+            done
+        fi
+    fi
+}
+
+# ============================================================
+# Custom Linux userlands (ISO, rootfs tarball, directory)
+#
+# proot has no kernel, no loop devices and no real mounts, so an ISO
+# cannot be booted. What can run is its root filesystem: LFA extracts
+# the live squashfs and treats the result like any other container.
+# The userland must match the phone CPU and carry its own package
+# manager; LFA only automates the distros it recognises.
+# ============================================================
+LFA_CUSTOM=0
+LFA_CUSTOM_SOURCE=""
+LFA_CUSTOM_FAMILY=""
+LFA_CUSTOM_ID=""
+LFA_CUSTOM_NAME=""
+LFA_CUSTOM_ARCH=""
+LFA_CUSTOM_STAGE=""
+LFA_CUSTOM_UNKNOWN=0
+
+lfa_custom_conf_escape() {  # $1 = text for a double-quoted conf value
+    printf '%s' "${1:-}" | sed 's/[\\"$`]/\\&/g'
+}
+
+lfa_custom_expand_path() {  # $1 = user path; prints an absolute path
+    local _p="${1:-}" _tilde="~"
+    _p="${_p%\"}"; _p="${_p#\"}"
+    _p="${_p%\'}"; _p="${_p#\'}"
+    case "$_p" in
+        "$_tilde") _p="$HOME" ;;
+        "$_tilde"/*) _p="$HOME/${_p:2}" ;;
+    esac
+    case "$_p" in
+        /*) ;;
+        *) _p="$PWD/$_p" ;;
+    esac
+    printf '%s\n' "$_p"
+}
+
+lfa_custom_host_arch() {
+    case "$(uname -m)" in
+        aarch64|arm64|armv8b) printf 'aarch64\n' ;;
+        armv7l|armv7|armv6l|arm) printf 'arm\n' ;;
+        x86_64|amd64) printf 'x86_64\n' ;;
+        i386|i486|i586|i686) printf 'i386\n' ;;
+        *) uname -m ;;
+    esac
+}
+
+lfa_custom_has_sh() {  # $1 = rootfs
+    local _r="$1"
+    if [ -e "$_r/bin/sh" ] || [ -L "$_r/bin/sh" ]; then return 0; fi
+    if [ -e "$_r/usr/bin/sh" ] || [ -L "$_r/usr/bin/sh" ]; then return 0; fi
+    return 1
+}
+
+lfa_custom_check_arch() {  # $1 = rootfs
+    local _g _h
+    _g="$(lfa_usb_elf_arch "$1")"
+    _h="$(lfa_custom_host_arch)"
+    LFA_CUSTOM_ARCH="$_g"
+    if [ "$_g" = "unknown" ]; then
+        echo "[!] Could not read the userland architecture; continuing anyway."
+        return 0
+    fi
+    [ "$_g" = "$_h" ] && return 0
+    case "$_h:$_g" in
+        aarch64:arm|x86_64:i386)
+            echo "[!] This is a $_g userland on a $_h device. It can work, but"
+            echo "    the 32-bit runtime is not installed by default."
+            return 0 ;;
+    esac
+    echo "[!] This image is $_g, but this device is $_h."
+    echo "    proot does not emulate another CPU, so it cannot run here."
+    echo "    Use an $_h rootfs or ISO (on phones that is usually arm64)."
+    return 1
+}
+
+lfa_custom_read_osrelease() {  # $1 = rootfs; sets ID/NAME globals
+    local _root="$1" _rel="" _name
+    LFA_CUSTOM_ID=""
+    LFA_CUSTOM_NAME=""
+    for _rel in "$_root/etc/os-release" "$_root/usr/lib/os-release"; do
+        [ -r "$_rel" ] && break
+        _rel=""
+    done
+    [ -n "$_rel" ] || return 0
+    LFA_CUSTOM_ID="$(sed -n 's/^ID=//p' "$_rel" | head -n1 | tr -d "\"'")"
+    LFA_CUSTOM_NAME="$(sed -n 's/^PRETTY_NAME=//p' "$_rel" | head -n1 | tr -d "\"'")"
+    if [ -z "$LFA_CUSTOM_NAME" ]; then
+        _name="$(sed -n 's/^NAME=//p' "$_rel" | head -n1 | tr -d "\"'")"
+        LFA_CUSTOM_NAME="$_name"
+    fi
+}
+
+lfa_custom_family() {  # $1 = rootfs; prints a family LFA can drive
+    local _root="$1" _like="" _rel="" _tok
+    lfa_custom_read_osrelease "$_root"
+    for _rel in "$_root/etc/os-release" "$_root/usr/lib/os-release"; do
+        [ -r "$_rel" ] && break
+        _rel=""
+    done
+    if [ -n "$_rel" ]; then
+        _like="$(sed -n 's/^ID_LIKE=//p' "$_rel" | head -n1 | tr -d "\"'")"
+    fi
+    for _tok in $LFA_CUSTOM_ID $_like; do
+        case "$_tok" in
+            kali) printf 'kali\n'; return 0 ;;
+            ubuntu|linuxmint|pop|elementary|zorin|neon|kubuntu|xubuntu|lubuntu)
+                printf 'ubuntu\n'; return 0 ;;
+            debian|devuan|raspbian|mx|parrot)
+                printf 'debian\n'; return 0 ;;
+            fedora|rhel|centos|rocky|almalinux|nobara|bazzite|amzn)
+                printf 'fedora\n'; return 0 ;;
+            opensuse*|suse|sles|tumbleweed|leap)
+                printf 'opensuse\n'; return 0 ;;
+            void) printf 'void\n'; return 0 ;;
+            arch|archlinux|archarm|manjaro|endeavouros|garuda|artix|cachyos)
+                printf 'archlinux\n'; return 0 ;;
+            alpine|postmarketos)
+                printf 'alpine\n'; return 0 ;;
+        esac
+    done
+    printf 'unknown\n'
+}
+
+lfa_custom_type() {  # $1 = source; prints dir|tar|image|unknown
+    local _p="$1" _magic
+    if [ -d "$_p" ]; then printf 'dir\n'; return 0; fi
+    case "$_p" in
+        *.iso|*.ISO|*.img|*.IMG|*.zip|*.ZIP) printf 'image\n'; return 0 ;;
+        *.tar|*.tar.gz|*.tgz|*.tar.xz|*.txz|*.tar.bz2|*.tbz2|*.tar.zst|*.tzst)
+            printf 'tar\n'; return 0 ;;
+    esac
+    _magic="$(od -An -tx1 -N6 "$_p" 2>/dev/null | tr -d ' \n')"
+    case "$_magic" in
+        1f8b*|fd377a585a00*|425a68*|28b52ffd*|504b0304*)
+            printf 'tar\n'; return 0 ;;
+    esac
+    if [ "$(dd if="$_p" bs=1 skip=32769 count=5 2>/dev/null)" = "CD001" ]; then
+        printf 'image\n'; return 0
+    fi
+    printf 'unknown\n'
+}
+
+lfa_custom_is_oci() {  # $1 = tar; true for an OCI/docker archive
+    local _list _rc=1
+    _list="$(mktemp "$PREFIX/tmp/lfa-oci.XXXXXX")" || return 1
+    lfa_track_tmp "$_list"
+    if tar -tf "$1" > "$_list" 2>/dev/null; then
+        grep -qxE 'oci-layout|manifest\.json' "$_list" && _rc=0
+    fi
+    rm -f "$_list"
+    return $_rc
+}
+
+lfa_custom_ask_source() {
+    local _p
+    echo ""
+    echo "  Custom Linux userland (runs under proot)"
+    echo "  Point at a rootfs tarball, an extracted directory, or a live ISO."
+    echo "  For an ISO, LFA extracts the live root filesystem; proot cannot"
+    echo "  boot the ISO itself."
+    echo ""
+    echo "  Example: ~/storage/downloads/debian-rootfs.tar.gz"
+    echo ""
+    while :; do
+        if ! read -r -p "Path to ISO / rootfs archive / directory: " _p; then
+            echo ""
+            return 1
+        fi
+        if [ -z "$_p" ]; then
+            echo "[!] Enter a path (or press Ctrl-C to go back)."
+            continue
+        fi
+        _p="$(lfa_custom_expand_path "$_p")"
+        if [ ! -e "$_p" ]; then
+            echo "[!] Not found: $_p"
+            continue
+        fi
+        LFA_CUSTOM_SOURCE="$_p"
+        return 0
+    done
+}
+
+lfa_custom_legacy_layout() {
+    [ "${IS_LEGACY:-0}" = "1" ] && return 0
+    command -v proot-distro >/dev/null 2>&1 && pd_is_v4 && return 0
+    return 1
+}
+
+lfa_custom_rootfs_new() {  # $1 = instance; prints the directory to create
+    local _base="$PREFIX/var/lib/proot-distro"
+    if lfa_custom_legacy_layout; then
+        printf '%s' "$_base/installed-rootfs/$1"
+    elif [ -d "$_base/installed-rootfs" ] && [ ! -d "$_base/containers" ]; then
+        printf '%s' "$_base/installed-rootfs/$1"
+    else
+        printf '%s' "$_base/containers/$1/rootfs"
+    fi
+}
+
+lfa_custom_default_name() {
+    local _n="${LFA_CUSTOM_ID:-custom}"
+    _n="$(printf '%s' "$_n" | tr -c 'A-Za-z0-9_.-' '-' | sed 's/^-*//; s/-*$//')"
+    [ -n "$_n" ] || _n="custom"
+    printf '%s\n' "$_n"
+}
+
+lfa_custom_install_tool() {  # $1 = command, $2 = package
+    command -v "$1" >/dev/null 2>&1 && return 0
+    echo "[*] Installing $2 (needed to unpack this image)..."
+    pkg install -y "$2" >/dev/null 2>&1 || pkg install "$2" -y >/dev/null 2>&1 || true
+    command -v "$1" >/dev/null 2>&1
+}
+
+lfa_custom_flatten() {  # $1 = rootfs; lift a single top-level directory
+    local _root="$1" _entry
+    lfa_custom_has_sh "$_root" && return 0
+    local -a _entries=()
+    for _entry in "$_root"/*; do
+        [ -e "$_entry" ] || continue
+        _entries+=("$_entry")
+    done
+    [ "${#_entries[@]}" -eq 1 ] || return 1
+    [ -d "${_entries[0]}" ] || return 1
+    lfa_custom_has_sh "${_entries[0]}" || return 1
+    ( shopt -s dotglob; mv "${_entries[0]}"/* "$_root"/ ) || return 1
+    rmdir "${_entries[0]}" 2>/dev/null || true
+    return 0
+}
+
+lfa_custom_extract_tar() {  # $1 = archive, $2 = target
+    local _src="$1" _dst="$2" _list
+    # Refuse absolute or parent-relative members. A rootfs tarball has no
+    # reason to escape its destination, and the target is user-supplied.
+    if _list="$(tar -tf "$_src" 2>/dev/null)"; then
+        if printf '%s\n' "$_list" | grep -Eq '(^/|(^|/)\.\.(/|$))'; then
+            echo "[!] Refusing an archive with absolute or parent-relative paths."
+            return 1
+        fi
+    fi
+    if tar -xf "$_src" -C "$_dst" 2>/dev/null; then return 0; fi
+    case "$_src" in
+        *.tar.gz|*.tgz) tar -xzf "$_src" -C "$_dst" ;;
+        *.tar.xz|*.txz) tar -xJf "$_src" -C "$_dst" ;;
+        *.tar.bz2|*.tbz2) tar -xjf "$_src" -C "$_dst" ;;
+        *.tar.zst|*.tzst) tar --zstd -xf "$_src" -C "$_dst" ;;
+        *) return 1 ;;
+    esac
+}
+
+lfa_custom_extract_image() {  # $1 = ISO/raw image, $2 = target
+    local _img="$1" _dst="$2" _work="" _stage="" _cand _found=0
+    local -a _cands=()
+    local _log="$PREFIX/tmp/lfa-custom-extract.log"
+    lfa_track_tmp "$_log"
+    _work="$(mktemp -d "$PREFIX/tmp/lfa-custom-iso.XXXXXX")" || return 1
+    lfa_track_tmpdir "$_work"
+    _stage="$(mktemp -d "$PREFIX/tmp/lfa-custom-root.XXXXXX")" || {
+        rm -rf "$_work"; return 1
+    }
+    lfa_track_tmpdir "$_stage"
+    if ! lfa_custom_install_tool 7z 7zip; then
+        echo "[!] 7z is required to unpack this image."
+        echo "    Install it with: pkg install 7zip"
+        rm -rf "$_work" "$_stage"
+        return 1
+    fi
+    echo "[*] Unpacking $(basename "$_img") (this can take a while)..."
+    if ! 7z x -y -o"$_work" "$_img" >"$_log" 2>&1; then
+        echo "[!] Could not unpack this image."
+        tail -n 5 "$_log" 2>/dev/null || true
+        rm -rf "$_work" "$_stage"
+        return 1
+    fi
+    # A zipped rootfs often has one top-level directory; flatten it before
+    # deciding that this image has no root filesystem at all.
+    lfa_custom_flatten "$_work" || true
+    if lfa_custom_has_sh "$_work"; then
+        cp -a "$_work/." "$_dst/" || {
+            echo "[!] Could not copy the extracted root filesystem."
+            rm -rf "$_work" "$_stage"
+            return 1
+        }
+        rm -rf "$_work" "$_stage"
+        return 0
+    fi
+    while IFS= read -r _cand; do
+        [ -n "$_cand" ] && _cands+=("$_cand")
+    done < <(find "$_work" -type f \( \
+        -name 'filesystem.squashfs' -o -name 'rootfs.squashfs' -o \
+        -name 'airootfs.squashfs' -o -name '*.squashfs' -o \
+        -name 'squashfs.img' -o -name 'rootfs.img' -o -name '*.ext4' \) \
+        2>/dev/null | sort)
+    if [ "${#_cands[@]}" -eq 0 ]; then
+        echo "[!] No root filesystem was found in this image."
+        echo "    Live ISOs store one as squashfs; installer-only images do not."
+        echo "    Use a rootfs tarball for those."
+        rm -rf "$_work" "$_stage"
+        return 1
+    fi
+    for _cand in "${_cands[@]}"; do
+        echo "[*] Found $(basename "$_cand"); extracting..."
+        find "$_stage" -mindepth 1 -delete 2>/dev/null || true
+        # unsquashfs preserves ownership, modes and symlinks better than a
+        # generic archive unpacker. Fall back to 7z when it is missing or
+        # when the candidate is an ext4 image rather than squashfs.
+        if command -v unsquashfs >/dev/null 2>&1 && \
+           unsquashfs -f -d "$_stage" "$_cand" >"$_log" 2>&1; then
+            :
+        else
+            find "$_stage" -mindepth 1 -delete 2>/dev/null || true
+            if ! 7z x -y -o"$_stage" "$_cand" >"$_log" 2>&1; then
+                echo "[!] Could not unpack $(basename "$_cand")."
+                continue
+            fi
+        fi
+        lfa_custom_flatten "$_stage" || true
+        if ! lfa_custom_has_sh "$_stage"; then
+            # Fedora LiveOS keeps an ext4 root inside squashfs.img.
+            local _nested _nested_dir
+            _nested="$(find "$_stage" -maxdepth 2 -type f \( -name '*.img' -o -name '*.ext4' \) 2>/dev/null | head -n1)"
+            if [ -n "$_nested" ]; then
+                echo "[*] Unpacking the nested $(basename "$_nested")..."
+                _nested_dir="$(mktemp -d "$PREFIX/tmp/lfa-custom-root2.XXXXXX")" || continue
+                lfa_track_tmpdir "$_nested_dir"
+                if 7z x -y -o"$_nested_dir" "$_nested" >"$_log" 2>&1; then
+                    lfa_custom_flatten "$_nested_dir" || true
+                    if lfa_custom_has_sh "$_nested_dir"; then
+                        find "$_stage" -mindepth 1 -delete 2>/dev/null || true
+                        cp -a "$_nested_dir/." "$_stage/" || true
+                    fi
+                fi
+                rm -rf "$_nested_dir"
+            fi
+        fi
+        if lfa_custom_has_sh "$_stage"; then
+            cp -a "$_stage/." "$_dst/" || {
+                echo "[!] Could not copy the extracted root filesystem."
+                rm -rf "$_work" "$_stage"
+                return 1
+            }
+            _found=1
+            break
+        fi
+    done
+    rm -rf "$_work" "$_stage"
+    if [ "$_found" != "1" ]; then
+        echo "[!] This image does not contain a usable root filesystem."
+        echo "    Installer-only ISOs need a kernel and loop devices, which proot"
+        echo "    does not provide. Use the distro's rootfs/cloud image instead."
+        return 1
+    fi
+    return 0
+}
+
+lfa_custom_prepare() {  # $1 = source, $2 = target rootfs
+    local _src _dst _type
+    _src="$(lfa_custom_expand_path "${1:-}")"
+    _dst="${2:-}"
+    [ -n "$_dst" ] || return 1
+    LFA_CUSTOM_SOURCE="$_src"
+    LFA_CUSTOM_FAMILY="unknown"
+    LFA_CUSTOM_ID=""
+    LFA_CUSTOM_NAME=""
+    LFA_CUSTOM_ARCH=""
+    if [ ! -e "$_src" ]; then
+        echo "[!] Not found: $_src"
+        return 1
+    fi
+    if [ ! -r "$_src" ]; then
+        echo "[!] Cannot read: $_src"
+        return 1
+    fi
+    _type="$(lfa_custom_type "$_src")"
+    if [ "$_type" = "unknown" ] && [ -f "$_src" ] && lfa_custom_is_oci "$_src"; then
+        echo "[!] This is an OCI/Docker archive, which needs proot-distro v5:"
+        echo "      proot-distro install --name NAME \"$_src\""
+        echo "    Or export a plain rootfs tarball: docker export NAME -o rootfs.tar"
+        return 1
+    fi
+    case "$_type" in
+        dir)
+            echo "[*] Copying the root filesystem from $_src..."
+            cp -a "$_src/." "$_dst/" || {
+                echo "[!] Could not copy this directory."
+                return 1
+            }
+            ;;
+        tar)
+            echo "[*] Extracting $(basename "$_src")..."
+            if ! lfa_custom_extract_tar "$_src" "$_dst"; then
+                echo "[!] Could not extract this archive."
+                echo "    Supported: .tar, .tar.gz, .tar.xz, .tar.bz2, .tar.zst"
+                return 1
+            fi
+            lfa_custom_flatten "$_dst" || true
+            ;;
+        image)
+            lfa_custom_extract_image "$_src" "$_dst" || return 1
+            ;;
+        *)
+            echo "[!] Unsupported source: $_src"
+            echo "    Use a rootfs directory, a rootfs tarball, or a live ISO."
+            return 1
+            ;;
+    esac
+    if ! lfa_custom_has_sh "$_dst"; then
+        echo "[!] The extracted tree has no /bin/sh, so it is not a root filesystem."
+        echo "    For an ISO, LFA needs the live squashfs, not just the boot files."
+        return 1
+    fi
+    lfa_custom_check_arch "$_dst" || return 1
+    # Read os-release in this shell: a command substitution would run
+    # lfa_custom_family in a subshell and throw away the ID/NAME it sets.
+    lfa_custom_read_osrelease "$_dst"
+    LFA_CUSTOM_FAMILY="$(lfa_custom_family "$_dst")"
+    [ -n "$LFA_CUSTOM_ID" ] || LFA_CUSTOM_ID="custom"
+    [ -n "$LFA_CUSTOM_NAME" ] || LFA_CUSTOM_NAME="Custom Linux ($LFA_CUSTOM_FAMILY)"
+    echo "[*] Detected: $LFA_CUSTOM_NAME (${LFA_CUSTOM_FAMILY}, ${LFA_CUSTOM_ARCH:-unknown})"
+    return 0
+}
+
+lfa_custom_stage_source() {
+    # Extract the chosen userland into a private staging directory. The
+    # guided setup calls this before the desktop/software menus so the
+    # package family is known; install_linux reuses the same tree instead
+    # of unpacking a second time. The EXIT trap removes a stage that never
+    # reaches an installed instance.
+    [ -n "${LFA_CUSTOM_SOURCE:-}" ] || return 1
+    LFA_CUSTOM_STAGE="$PREFIX/var/lib/proot-distro/.lfa-custom-$$"
+    rm -rf "$LFA_CUSTOM_STAGE"
+    if ! mkdir -p "$LFA_CUSTOM_STAGE"; then
+        echo "[!] Could not create the staging directory."
+        LFA_CUSTOM_STAGE=""
+        return 1
+    fi
+    if ! lfa_custom_prepare "$LFA_CUSTOM_SOURCE" "$LFA_CUSTOM_STAGE"; then
+        rm -rf "$LFA_CUSTOM_STAGE"
+        LFA_CUSTOM_STAGE=""
+        return 1
+    fi
+    LFA_CUSTOM=1
+    return 0
 }
 
 select_installed_instance() {
@@ -7884,6 +8596,75 @@ lfa_instance_session_running() {  # $1 = instance
     done
     return 1
 }
+
+# Storage policy for a guest session. Both categories default to on, which
+# keeps proot-distro's normal /storage and /sdcard binds. When either one is
+# disabled the session becomes --isolated and LFA adds only the binds the
+# user kept, so the disabled category cannot leak through /storage.
+lfa_storage_args() {  # $1 = instance; prints proot-distro login arguments
+    local _inst="${1:-}" _conf="" _root="" _android=1 _external=1
+    local _shared="" _vol _id _spec _guest _ifs
+    if declare -F pd_conf >/dev/null 2>&1; then
+        _conf="$(pd_conf "$_inst" 2>/dev/null || true)"
+        _root="$(pd_rootfs "$_inst" 2>/dev/null || true)"
+    else
+        _conf="$(lfa_conf "$_inst" 2>/dev/null || true)"
+        _root="$(lfa_rootfs "$_inst" 2>/dev/null || true)"
+    fi
+    if [ -f "$_conf" ]; then
+        # shellcheck disable=SC1090
+        _android="$( . "$_conf" 2>/dev/null; printf '%s' "${STORAGE_ANDROID:-1}" )"
+        # shellcheck disable=SC1090
+        _external="$( . "$_conf" 2>/dev/null; printf '%s' "${STORAGE_EXTERNAL:-1}" )"
+    fi
+    case "$_android" in 0|no|off|false|disabled) _android=0 ;; *) _android=1 ;; esac
+    case "$_external" in 0|no|off|false|disabled) _external=0 ;; *) _external=1 ;; esac
+
+    _lfa_storage_emit() {  # $1 = host:guest
+        _guest="${1##*:}"
+        [ -n "$_root" ] && mkdir -p "$_root$_guest" 2>/dev/null || true
+        printf '%s\n' "--bind" "$1"
+    }
+
+    if [ "$_android" = "1" ] && [ "$_external" = "1" ]; then
+        if [ -n "${LFA_STORAGE_BIND:-}" ]; then
+            _ifs="$IFS"; IFS=';'
+            for _spec in $LFA_STORAGE_BIND; do
+                [ -n "$_spec" ] && _lfa_storage_emit "$_spec"
+            done
+            IFS="$_ifs"
+        fi
+        return 0
+    fi
+
+    printf '%s\n' "--isolated"
+    if [ "$_android" = "1" ]; then
+        for _shared in /storage/self/primary /storage/emulated/0 /sdcard; do
+            [ -d "$_shared" ] && break
+            _shared=""
+        done
+        if [ -n "$_shared" ]; then
+            _lfa_storage_emit "$_shared:/sdcard"
+            _lfa_storage_emit "$_shared:/storage/emulated/0"
+        fi
+    fi
+    if [ "$_external" = "1" ]; then
+        if [ -n "${LFA_STORAGE_BIND:-}" ]; then
+            _ifs="$IFS"; IFS=';'
+            for _spec in $LFA_STORAGE_BIND; do
+                [ -n "$_spec" ] && _lfa_storage_emit "$_spec"
+            done
+            IFS="$_ifs"
+        else
+            for _vol in /storage/*; do
+                _id="${_vol##*/}"
+                case "$_id" in emulated|self|sdcard0) continue ;; esac
+                [ -d "$_vol" ] || continue
+                _lfa_storage_emit "$_vol:/media/$_id"
+            done
+        fi
+    fi
+}
 EOF
     chmod +x "$PREFIX/bin/lfa-lib.sh"
     echo "[*] Generating Universal Quick-Launch Scripts..."
@@ -8042,10 +8823,11 @@ if [ -n "${LFA_USB_DEVBIND:-}" ]; then
     for _ub in $LFA_USB_DEVBIND; do [ -n "$_ub" ] && USB_BIND+=(--bind "$_ub"); done
     IFS="$_ub_ifs"; unset _ub_ifs _ub
 fi
-if [ -n "${LFA_STORAGE_BIND:-}" ]; then
-    _st_ifs="$IFS"; IFS=';'
-    for _st in $LFA_STORAGE_BIND; do [ -n "$_st" ] && USB_BIND+=(--bind "$_st"); done
-    IFS="$_st_ifs"; unset _st_ifs _st
+if declare -F lfa_storage_args >/dev/null 2>&1; then
+    _storage_args=()
+    mapfile -t _storage_args < <(lfa_storage_args "$DISTRO")
+    [ "${#_storage_args[@]}" -gt 0 ] && USB_BIND+=("${_storage_args[@]}")
+    unset _storage_args
 fi
 USB_WRAP=""
 if [ -n "${LFA_USB_PRELOAD:-}" ] && [ -n "${LFA_USB_MAP:-}" ]; then
@@ -8053,17 +8835,6 @@ if [ -n "${LFA_USB_PRELOAD:-}" ] && [ -n "${LFA_USB_MAP:-}" ]; then
 fi
 
 pd_login() {
-    if [ -n "${LFA_STORAGE_BIND:-}" ]; then
-        _st_rfs="$(lfa_rootfs "$DISTRO" 2>/dev/null || true)"
-        if [ -n "$_st_rfs" ]; then
-            _st_ifs="$IFS"; IFS=';'
-            for _st in $LFA_STORAGE_BIND; do
-                [ -n "$_st" ] && mkdir -p "$_st_rfs${_st##*:}" 2>/dev/null || true
-            done
-            IFS="$_st_ifs"; unset _st_ifs _st
-        fi
-        unset _st_rfs
-    fi
     proot-distro login "${USB_BIND[@]}" "$@"
 }
 
@@ -8548,11 +9319,6 @@ if [ -n "${LFA_USB_DEVBIND:-}" ]; then
     for _ub in $LFA_USB_DEVBIND; do [ -n "$_ub" ] && USB_BIND+=(--bind "$_ub"); done
     IFS="$_ub_ifs"; unset _ub_ifs _ub
 fi
-if [ -n "${LFA_STORAGE_BIND:-}" ]; then
-    _st_ifs="$IFS"; IFS=';'
-    for _st in $LFA_STORAGE_BIND; do [ -n "$_st" ] && USB_BIND+=(--bind "$_st"); done
-    IFS="$_st_ifs"; unset _st_ifs _st
-fi
 USB_WRAP=""
 if [ -n "${LFA_USB_PRELOAD:-}" ] && [ -n "${LFA_USB_MAP:-}" ]; then
     USB_WRAP="export LD_PRELOAD=$LFA_USB_PRELOAD; export LFA_USB_MAP=$LFA_USB_MAP; "
@@ -8637,16 +9403,11 @@ else
     echo "2) User terminal ('$TERM_USER' account)"
     read -p "Select [1-2, default 1]: " TERM_CHOICE
 fi
-if [ -n "${LFA_STORAGE_BIND:-}" ]; then
-    _st_rfs="$(lfa_rootfs "$DISTRO" 2>/dev/null || true)"
-    if [ -n "$_st_rfs" ]; then
-        _st_ifs="$IFS"; IFS=';'
-        for _st in $LFA_STORAGE_BIND; do
-            [ -n "$_st" ] && mkdir -p "$_st_rfs${_st##*:}" 2>/dev/null || true
-        done
-        IFS="$_st_ifs"; unset _st_ifs _st
-    fi
-    unset _st_rfs
+if declare -F lfa_storage_args >/dev/null 2>&1; then
+    _storage_args=()
+    mapfile -t _storage_args < <(lfa_storage_args "$DISTRO")
+    [ "${#_storage_args[@]}" -gt 0 ] && USB_BIND+=("${_storage_args[@]}")
+    unset _storage_args
 fi
 if [ "$TERM_CHOICE" == "2" ]; then
     if [ -n "$USB_WRAP" ]; then
@@ -8813,6 +9574,37 @@ install_linux() {
             return
         fi
     fi
+    # Custom userland: unpack it now so the family is known before the
+    # desktop and software menus. The final instance name is asked later,
+    # so the tree waits in a staging directory until then.
+    if [ "${LFA_CUSTOM:-0}" = "1" ] || [ "$DISTRO" = "custom" ]; then
+        LFA_CUSTOM=1
+        if [ -z "${LFA_CUSTOM_SOURCE:-}" ]; then
+            if ! lfa_custom_ask_source; then
+                show_menu
+                return
+            fi
+        fi
+        # Guided setup already unpacked the tree to learn the family. The
+        # CLI and classic menu arrive here with no stage and unpack now.
+        if [ -z "${LFA_CUSTOM_STAGE:-}" ]; then
+            if ! lfa_custom_stage_source; then
+                ui_pause
+                show_menu
+                return 1
+            fi
+        fi
+        DISTRO="$LFA_CUSTOM_FAMILY"
+        if [ "$DISTRO" = "unknown" ]; then
+            LFA_CUSTOM_UNKNOWN=1
+            DISTRO="custom"
+            DE="none"; SERVER="none"; AUTOSTART_SERVER="none"
+            echo ""
+            echo "[!] LFA does not know this userland's package manager."
+            echo "    It installs as a terminal-only system. Add a desktop inside"
+            echo "    the guest with its own package manager if you want one."
+        fi
+    fi
     # 32-bit ARM warning (Oppo A37fw and similar): some images lack armv7 builds
     if [ "$IS_32BIT_ARM" = "1" ]; then
         case "$DISTRO" in
@@ -8827,7 +9619,13 @@ install_linux() {
     # first guest command (verified live). Debian auto-switches to the
     # bullseye plug-in (glibc 2.31, verified); Alpine (musl) is proven OK.
     PD_ALIAS="$DISTRO"
-    if [ "$IS_LEGACY" = "1" ]; then
+    if [ "${LFA_CUSTOM:-0}" = "1" ]; then
+        PD_ALIAS=""
+        if [ "$IS_LEGACY" = "1" ]; then
+            echo "[!] Android 5/6 runs a 3.10 kernel; modern glibc userlands fail."
+            echo "    A musl rootfs (Alpine) is the safe choice on this device."
+        fi
+    elif [ "$IS_LEGACY" = "1" ]; then
         case "$DISTRO" in
             alpine) ;;
             debian)
@@ -8856,7 +9654,7 @@ install_linux() {
         esac
     fi
     
-    if [ "$SETUP_ANSWERED" != "1" ]; then
+    if [ "$SETUP_ANSWERED" != "1" ] && [ "${LFA_CUSTOM_UNKNOWN:-0}" != "1" ]; then
     DE="none"
     SERVER="none"
     AUTOSTART_SERVER=""
@@ -8923,7 +9721,7 @@ install_linux() {
     fi
 
     # SOFTWARE SELECTOR
-    if [ "$SETUP_ANSWERED" != "1" ]; then
+    if [ "$SETUP_ANSWERED" != "1" ] && [ "${LFA_CUSTOM_UNKNOWN:-0}" != "1" ]; then
     if ! ui_multi "Software Selector (optional)" \
         "1|Python|python3 + pip" \
         "2|Git|version control" \
@@ -8968,17 +9766,46 @@ install_linux() {
             14) INSTALL_VSCODE=1 ;;
         esac
     done
+    if [ "${LFA_CUSTOM_UNKNOWN:-0}" = "1" ]; then
+        INSTALL_PYTHON=0; INSTALL_GIT=0; INSTALL_NODEJS=0; INSTALL_CURL=0
+        INSTALL_WGET=0; INSTALL_IDE=0; INSTALL_FIREFOX=0; INSTALL_CHROMIUM=0
+        INSTALL_LIBREOFFICE=0; INSTALL_VLC=0; INSTALL_GIMP=0
+        INSTALL_HTOP=0; INSTALL_NEOFETCH=0; INSTALL_VSCODE=0
+        APP_CHOICES=""
+    fi
     
     echo ""
     if [ "$SETUP_ANSWERED" != "1" ]; then
     read -p "Enter a custom name for this installation (Leave blank for auto-generation): " INSTANCE_NAME
     fi
     if [ -z "$INSTANCE_NAME" ]; then
-        if pd_instance_exists "$DISTRO" || [ -f "$PREFIX/etc/proot-distro/$DISTRO.sh" ]; then
+        if [ "${LFA_CUSTOM:-0}" = "1" ]; then
+            INSTANCE_NAME="$(lfa_custom_default_name)"
+        elif pd_instance_exists "$DISTRO" || [ -f "$PREFIX/etc/proot-distro/$DISTRO.sh" ]; then
             INSTANCE_NAME="${DISTRO}-$(date +%M%S)"
         else
             INSTANCE_NAME="$DISTRO"
         fi
+    fi
+    if [ "${LFA_CUSTOM:-0}" = "1" ] && [ -n "${LFA_CUSTOM_STAGE:-}" ]; then
+        local _custom_final
+        _custom_final="$(lfa_custom_rootfs_new "$INSTANCE_NAME")"
+        if pd_instance_exists "$INSTANCE_NAME"; then
+            echo "[!] '$INSTANCE_NAME' already exists; using a timestamped name."
+            INSTANCE_NAME="${INSTANCE_NAME}-$(date +%M%S)"
+            _custom_final="$(lfa_custom_rootfs_new "$INSTANCE_NAME")"
+        fi
+        mkdir -p "$(dirname "$_custom_final")"
+        if ! mv "$LFA_CUSTOM_STAGE" "$_custom_final"; then
+            echo "[!] Could not move the userland into place."
+            rm -rf "$LFA_CUSTOM_STAGE"
+            LFA_CUSTOM_STAGE=""
+            ui_pause
+            show_menu
+            return 1
+        fi
+        LFA_CUSTOM_STAGE=""
+        echo "[*] Userland ready as '$INSTANCE_NAME'."
     fi
     
     echo ""
@@ -9017,6 +9844,9 @@ install_linux() {
         return
     fi
 
+    if [ "${LFA_CUSTOM:-0}" = "1" ]; then
+        echo "[*] Using the extracted custom userland (as $INSTANCE_NAME)..."
+    else
     echo "[*] Installing $DISTRO (as $INSTANCE_NAME)..."
     verify_proot_distro_plugin "$PD_ALIAS" || {
         ui_pause
@@ -9048,6 +9878,7 @@ install_linux() {
         proot-distro install --name "$INSTANCE_NAME" "$IMAGE"
     else
         proot-distro install --override-alias "$INSTANCE_NAME" "$PD_ALIAS" 2>/dev/null || proot-distro install "$PD_ALIAS"
+    fi
     fi
     
     ROOTFS="$(pd_rootfs "$INSTANCE_NAME")"
@@ -9242,6 +10073,13 @@ install_linux() {
             if [ "$INSTALL_NEOFETCH" == "1" ]; then SELECTED_PKGS="$SELECTED_PKGS fastfetch"; fi
             if [ "$INSTALL_VSCODE" == "1" ]; then echo "[!] VS Code has no Alpine build, skipping."; fi
             ;;
+        *)
+            # Custom userland whose package manager LFA does not know.
+            UPDATE_CMD="true"
+            INSTALL_CMD="true"
+            XFCE_PKG=""; LXDE_PKG=""; MATE_PKG=""; GNOME_PKG=""
+            VNC_PKG=""; LOADER_PKG=""; SUDO_PKG=""; SELECTED_PKGS=""
+            ;;
     esac
 
     # Save the configuration for dynamic boot!
@@ -9268,6 +10106,8 @@ install_linux() {
     echo "AUTOSTART_SERVER=\"$AUTOSTART_SERVER\"" >> "$ROOTFS/etc/termux-linux-manager.conf"
     echo "DO_AUTOSTART=\"${DO_AUTOSTART:-0}\"" >> "$ROOTFS/etc/termux-linux-manager.conf"
     echo "DO_SSH=\"${DO_SSH:-0}\"" >> "$ROOTFS/etc/termux-linux-manager.conf"
+    echo "STORAGE_ANDROID=\"${STORAGE_ANDROID:-1}\"" >> "$ROOTFS/etc/termux-linux-manager.conf"
+    echo "STORAGE_EXTERNAL=\"${STORAGE_EXTERNAL:-1}\"" >> "$ROOTFS/etc/termux-linux-manager.conf"
     if [ "$SERVER" = "both" ]; then
         rm -f "$HOME/.config/linux-for-android/last-server-$INSTANCE_NAME" 2>/dev/null || true
     fi
@@ -9279,12 +10119,21 @@ install_linux() {
     echo "HOSTNAME=\"${HOSTNAME:-localhost}\"" >> "$ROOTFS/etc/termux-linux-manager.conf"
     echo "NEED_VIRGL=\"${NEED_VIRGL:-1}\"" >> "$ROOTFS/etc/termux-linux-manager.conf"
     echo "PSTYLE=\"${PSTYLE:-minimal}\"" >> "$ROOTFS/etc/termux-linux-manager.conf"
+    if [ "${LFA_CUSTOM:-0}" = "1" ]; then
+        echo "CUSTOM_SOURCE=\"$(lfa_custom_conf_escape "${LFA_CUSTOM_SOURCE:-}")\"" >> "$ROOTFS/etc/termux-linux-manager.conf"
+        echo "CUSTOM_NAME=\"$(lfa_custom_conf_escape "${LFA_CUSTOM_NAME:-}")\"" >> "$ROOTFS/etc/termux-linux-manager.conf"
+        echo "CUSTOM_ID=\"$(lfa_custom_conf_escape "${LFA_CUSTOM_ID:-}")\"" >> "$ROOTFS/etc/termux-linux-manager.conf"
+    fi
     if [ -n "${IMAGE:-}" ]; then
         echo "IMAGE=\"$IMAGE\"" >> "$ROOTFS/etc/termux-linux-manager.conf"
     fi
     
     # (Removed broken universal wallpaper download)
     
+    if [ "${LFA_CUSTOM_UNKNOWN:-0}" = "1" ]; then
+        echo "[*] Skipping guest setup: no known package manager."
+        echo "    Open a root shell with: lfa shell -i $INSTANCE_NAME --root"
+    else
     cat << EOF > "$SETUP_SCRIPT"
 #!/bin/bash
 export DEBIAN_FRONTEND=noninteractive
@@ -9922,6 +10771,7 @@ EOF
         echo "========================================="
         ui_pause
         return 1
+    fi
     fi
     
     echo "[*] Setting up Home-Screen Widget Integration..."

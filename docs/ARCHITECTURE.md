@@ -63,6 +63,15 @@ saved config ─┘        │
                        └─ 7. verify core components, then "Installation complete"
 ```
 
+A custom source replaces step 2. Guided setup unpacks the chosen ISO, tarball,
+or directory into a private staging tree before the desktop/software menus so
+it can read `/etc/os-release` and pick the package-manager family. The stage
+is moved into the proot-distro container layout once the instance name is
+known; `install_linux()` reuses it instead of unpacking twice. If the family is
+unknown, the desktop/software menus and the guest setup script are skipped and
+the instance is terminal-only. The EXIT trap removes a stage that never
+reaches an installed instance.
+
 Step 3 is the unusual one. Instead of a long chain of `proot-distro login
 ... -- cmd` calls (each paying proot startup and losing environment), the
 installer writes one guest bash script and runs it once. It is fast and can
@@ -224,6 +233,14 @@ Android mounts it as `1023:1023` with mode `2770` and `noexec`. LFA gives the
 desktop user gid 1023 as its primary group, which makes the mode check pass.
 Without it Thunar draws `emblem-unreadable` on every folder even though the
 files are readable.
+
+Android storage and external storage are separate policies in the instance
+config. With both on, LFA leaves proot-distro's default binds alone. If either
+is off, `lfa_storage_args` adds `--isolated` and re-adds only the enabled
+category: `/sdcard` plus `/storage/emulated/0` for Android, or
+`/media/<VOLUME-ID>` for SD cards and USB drives. The same helper is used by
+`start-linux`, `terminal-linux`, and `lfa storage status`, so the policy
+applies to every normal guest session rather than only the desktop.
 
 `chmod` does not work there. The FUSE mount fixes the mode, so `chmod +x` is
 ignored even as root. `lfa storage exec` and the guest-side `lfa-run-file`

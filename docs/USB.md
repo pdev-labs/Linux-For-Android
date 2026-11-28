@@ -303,6 +303,12 @@ The card destinations deliberately avoid `/sdcard` and `/mnt/sdcard`:
 proot-distro v5 binds internal storage there already and warns when a
 destination is used twice.
 
+The card binds follow the instance's external-storage policy. If it is off
+(`lfa storage external disable -i NAME`), sessions start with `--isolated` and
+neither `/media/<VOLUME-ID>` nor `/mnt/card` is bound. `lfa storage android`
+controls internal storage separately, so a guest can keep `/sdcard` while
+hiding cards and drives.
+
 `lfa usb storage --json` prints the same data for scripts. If
 `/storage/<VOLUME-ID>` is readable but not writable, the mode column says
 `ro`; proot cannot enforce read-only binds, so LFA warns instead of
