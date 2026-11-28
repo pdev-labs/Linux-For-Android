@@ -937,6 +937,8 @@ NEED_VIRGL="$NEED_VIRGL"
 AUTOSTART_SERVER="$AUTOSTART_SERVER"
 DO_AUTOSTART="$DO_AUTOSTART"
 DO_STORAGE="$DO_STORAGE"
+STORAGE_ANDROID="${STORAGE_ANDROID:-1}"
+STORAGE_EXTERNAL="${STORAGE_EXTERNAL:-1}"
 DO_SSH="$DO_SSH"
 DO_WIDGET="$DO_WIDGET"
 EOF
@@ -965,7 +967,8 @@ setup_summary() {
     printf '  %s%-13s%s %s\n' "$C_GRAY" "HW accel" "$C_RESET" "$([ "$NEED_VIRGL" = "1" ] && echo on || echo off)"
     printf '  %s%-13s%s %s\n' "$C_GRAY" "Prompt style" "$C_RESET" "$PSTYLE"
     printf '  %s%-13s%s %s\n' "$C_GRAY" "Autostart" "$C_RESET" "$([ "$DO_AUTOSTART" = "1" ] && echo "yes (${AUTOSTART_SERVER:-$SERVER})" || echo no)"
-    printf '  %s%-13s%s %s\n' "$C_GRAY" "Storage perm" "$C_RESET" "$([ "$DO_STORAGE" = "1" ] && echo yes || echo no)"
+    printf '  %s%-13s%s %s\n' "$C_GRAY" "Android stg" "$C_RESET" "$([ "${STORAGE_ANDROID:-1}" = "1" ] && echo yes || echo no)"
+    printf '  %s%-13s%s %s\n' "$C_GRAY" "External stg" "$C_RESET" "$([ "${STORAGE_EXTERNAL:-1}" = "1" ] && echo yes || echo no)"
     printf '  %s%-13s%s %s\n' "$C_GRAY" "SSH server" "$C_RESET" "$([ "$DO_SSH" = "1" ] && echo yes || echo no)"
     printf '  %s%-13s%s %s\n' "$C_GRAY" "Widget hint" "$C_RESET" "$([ "$DO_WIDGET" = "1" ] && echo yes || echo no)"
     ui_rule
@@ -989,6 +992,8 @@ setup_quick() {
     if [ "$IS_LEGACY" = "1" ]; then NEED_VIRGL=0; else NEED_VIRGL=1; fi
     AUTOSTART_SERVER="$SERVER"
     DO_AUTOSTART=0
+    STORAGE_ANDROID=1
+    STORAGE_EXTERNAL=1
     DO_STORAGE=1
     DO_SSH=0
     DO_WIDGET=0
@@ -1233,7 +1238,21 @@ setup_guided() {
         DO_AUTOSTART=0
         AUTOSTART_SERVER="none"
     fi
-    if ui_confirm "Request Android storage access now? (Downloads/Documents)" y; then DO_STORAGE=1; else DO_STORAGE=0; fi
+    if ! ui_select "Storage inside Linux (Android and external are separate)" "1" \
+        "1|Both|Android shared storage + SD cards/USB drives" \
+        "2|Android only|shared storage, no external devices" \
+        "3|External only|SD cards/USB drives, no Android shared storage" \
+        "4|None|no host storage inside Linux"; then
+        show_menu
+        return
+    fi
+    case "$UI_SELECTED" in
+        2) STORAGE_ANDROID=1; STORAGE_EXTERNAL=0 ;;
+        3) STORAGE_ANDROID=0; STORAGE_EXTERNAL=1 ;;
+        4) STORAGE_ANDROID=0; STORAGE_EXTERNAL=0 ;;
+        *) STORAGE_ANDROID=1; STORAGE_EXTERNAL=1 ;;
+    esac
+    if [ "$STORAGE_ANDROID" = "1" ] || [ "$STORAGE_EXTERNAL" = "1" ]; then DO_STORAGE=1; else DO_STORAGE=0; fi
     if ui_confirm "Start an SSH server after install? (port 8022)" n; then DO_SSH=1; else DO_SSH=0; fi
     if ui_confirm "Show Termux:Widget shortcut instructions?" n; then DO_WIDGET=1; else DO_WIDGET=0; fi
     # Summary + save + go
@@ -1269,6 +1288,11 @@ setup_load_saved() {
     : "${SETUP_USER_B64:=cm9vdA==}" "${SETUP_ROOT_B64:=cm9vdA==}"
     : "${TIMEZONE:=UTC}" "${HOSTNAME:=localhost}" "${PSTYLE:=minimal}"
     : "${NEED_VIRGL:=1}" "${DO_AUTOSTART:=0}" "${DO_STORAGE:=1}"
+    if [ "${DO_STORAGE:-1}" = "0" ]; then
+        : "${STORAGE_ANDROID:=0}" "${STORAGE_EXTERNAL:=0}"
+    else
+        : "${STORAGE_ANDROID:=1}" "${STORAGE_EXTERNAL:=1}"
+    fi
     : "${DO_SSH:=0}" "${DO_WIDGET:=0}"
     : "${AUTOSTART_SERVER:=}" "${CUSTOM_SOURCE:=}"
     LFA_CUSTOM_SOURCE="$CUSTOM_SOURCE"
@@ -1520,6 +1544,10 @@ Install options:
                           void, archlinux, alpine, custom
       --iso PATH          custom live ISO (its root filesystem is extracted)
       --rootfs PATH       custom rootfs tarball or extracted directory
+      --android-storage on|off
+                          expose Android shared storage in the guest (default on)
+      --external-storage on|off
+                          expose SD cards/USB drives in the guest (default on)
   -D, --desktop NAME      xfce4, lxde, mate, gnome, none
   -b, --backend NAME      x11, vnc, both, none
   -a, --autostart NAME    x11, vnc, none
@@ -5634,6 +5662,8 @@ Usage: lfa storage <command> [options]
   fix | fx                 repair links, bookmarks, and the storage group
   exec | x FILE [args...]  run a file from shared storage without chmod
   open | o                 show where shared storage is and how to open it
+  android on|off|status    expose Android shared storage in the guest
+  external on|off|status   expose SD cards/USB drives in the guest
   data status              check adb access to Android/data and Android/obb
                            (short: d st)
   data list                list packages under Android/data and Android/obb
@@ -5707,17 +5737,24 @@ lfa_storage_status() {
     require_proot_distro || return 1
     [ -n "$_inst" ] && CLI_INSTANCE="$_inst"
     select_installed_instance || return 1
-    local _id="$INSTANCE_NAME" _user _out
+    local _id="$INSTANCE_NAME" _user _out _android _external _st_args=()
     _user="$(lfa_appimage_user "$_id")"
     echo "instance: $_id"
+    # shellcheck disable=SC1090  # instance config, path resolved at runtime
+    _android="$( . "$(pd_conf "$_id")" 2>/dev/null; printf '%s' "${STORAGE_ANDROID:-1}" )"
+    # shellcheck disable=SC1090
+    _external="$( . "$(pd_conf "$_id")" 2>/dev/null; printf '%s' "${STORAGE_EXTERNAL:-1}" )"
+    echo "android storage: $([ "$_android" = "1" ] && echo on || echo off)"
+    echo "external storage: $([ "$_external" = "1" ] && echo on || echo off)"
     if [ -d "$HOME/storage" ]; then
         echo "termux storage: present"
         echo "shared target:  $(readlink -f "$HOME/storage/shared" 2>/dev/null || echo unknown)"
     else
         echo "termux storage: missing (run: lfa storage fix -i $_id)"
     fi
+    mapfile -t _st_args < <(lfa_storage_args "$_id")
     # shellcheck disable=SC2046  # flag list, not one argument
-    _out="$(proot-distro login $(pd_login_flags) "$_id" --user "$_user" --shared-tmp -- bash -c '
+    _out="$(proot-distro login $(pd_login_flags) "${_st_args[@]}" "$_id" --user "$_user" --shared-tmp -- bash -c '
         printf "guest gid: %s\n" "$(id -g)"
         printf "storage:   "
         ls -ld /storage/emulated/0 2>&1
@@ -5960,6 +5997,57 @@ lfa_storage_data() {
     esac
 }
 
+lfa_storage_policy() {  # $1 = android|external, $2 = on|off|status, then -i NAME
+    local _what="$1" _mode="${2:-status}" _inst="" _conf _cur _val
+    [ $# -gt 0 ] && shift || true
+    [ $# -gt 0 ] && shift || true
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            -i|--instance) _inst="${2:-}"; shift 2 ;;
+            *) echo "Unknown option: $1" >&2; return 2 ;;
+        esac
+    done
+    case "$_what" in
+        android|external) ;;
+        *) echo "Unknown storage policy: $_what" >&2; return 2 ;;
+    esac
+    require_proot_distro || return 1
+    [ -n "$_inst" ] && CLI_INSTANCE="$_inst"
+    select_installed_instance || return 1
+    [ -n "${INSTANCE_NAME:-}" ] || return 1
+    _conf="$(pd_conf "$INSTANCE_NAME" 2>/dev/null)"
+    [ -f "$_conf" ] || { echo "No config for $INSTANCE_NAME." >&2; return 1; }
+    if [ "$_what" = "android" ]; then
+        # shellcheck disable=SC1090  # instance config, path resolved at runtime
+        _cur="$( . "$_conf" 2>/dev/null; printf '%s' "${STORAGE_ANDROID:-1}" )"
+    else
+        # shellcheck disable=SC1090
+        _cur="$( . "$_conf" 2>/dev/null; printf '%s' "${STORAGE_EXTERNAL:-1}" )"
+    fi
+    case "$_mode" in
+        status|st)
+            echo "$_what storage: $([ "$_cur" = "1" ] && echo on || echo off)"
+            return 0 ;;
+        on|enable|1|yes) _val=1 ;;
+        off|disable|0|no) _val=0 ;;
+        *) echo "Usage: lfa storage $_what on|off|status [-i NAME]" >&2; return 2 ;;
+    esac
+    if [ "$_what" = "android" ]; then
+        if grep -q '^STORAGE_ANDROID=' "$_conf" 2>/dev/null; then
+            sed -i "s/^STORAGE_ANDROID=.*/STORAGE_ANDROID=\"$_val\"/" "$_conf"
+        else
+            printf 'STORAGE_ANDROID="%s"\n' "$_val" >> "$_conf"
+        fi
+    else
+        if grep -q '^STORAGE_EXTERNAL=' "$_conf" 2>/dev/null; then
+            sed -i "s/^STORAGE_EXTERNAL=.*/STORAGE_EXTERNAL=\"$_val\"/" "$_conf"
+        else
+            printf 'STORAGE_EXTERNAL="%s"\n' "$_val" >> "$_conf"
+        fi
+    fi
+    echo "$_what storage: $([ "$_val" = "1" ] && echo on || echo off) (new sessions)"
+}
+
 lfa_cli_storage() {
     local _sub="${1:-status}"
     [ $# -gt 0 ] && shift || true
@@ -5976,6 +6064,8 @@ lfa_cli_storage() {
         exec) lfa_storage_exec "$@" ;;
         open) lfa_storage_open "$@" ;;
         data) lfa_storage_data "$@" ;;
+        android|and) lfa_storage_policy android "$@" ;;
+        external|ext) lfa_storage_policy external "$@" ;;
         help|-h|--help) lfa_storage_usage ;;
         *) echo "Unknown storage command: $_sub" >&2; lfa_storage_usage >&2; return 2 ;;
     esac
@@ -6026,10 +6116,14 @@ lfa_software_choices() {  # $1 = comma-separated names -> space-separated menu n
 
 lfa_cli_install() {
     local _distro="" _de="" _backend="" _inst="" _auto="" _user="user" _tz="" _host="localhost" _software=""
-    local _source=""
+    local _source="" _storage_android="1" _storage_external="1"
     while [ $# -gt 0 ]; do
         case "$1" in
             --distro|-d) _distro="${2:-}"; shift 2 ;;
+            --android-storage) _storage_android="${2:-}"; shift 2 ;;
+            --external-storage) _storage_external="${2:-}"; shift 2 ;;
+            --no-android-storage) _storage_android="off"; shift ;;
+            --no-external-storage) _storage_external="off"; shift ;;
             --iso|--rootfs|--rootfs-tar)
                 [ $# -ge 2 ] || { echo "[!] $1 needs a path." >&2; return 2; }
                 _source="$2"; shift 2 ;;
@@ -6054,6 +6148,16 @@ lfa_cli_install() {
         echo "[!] --iso/--rootfs imply --distro custom; drop the other --distro." >&2
         return 2
     fi
+    case "$_storage_android" in
+        on|yes|1|true|enabled) _storage_android=1 ;;
+        off|no|0|false|disabled) _storage_android=0 ;;
+        *) echo "Invalid --android-storage value '$_storage_android': use on or off." >&2; return 2 ;;
+    esac
+    case "$_storage_external" in
+        on|yes|1|true|enabled) _storage_external=1 ;;
+        off|no|0|false|disabled) _storage_external=0 ;;
+        *) echo "Invalid --external-storage value '$_storage_external': use on or off." >&2; return 2 ;;
+    esac
     local _software_choices=""
     if [ -n "$_software" ]; then
         _software_choices="$(lfa_software_choices "$_software")" || return 2
@@ -6136,7 +6240,11 @@ lfa_cli_install() {
         fi
         DO_AUTOSTART=1; AUTOSTART_SERVER="$_auto"
     fi
-    DO_STORAGE=0; DO_SSH=0; DO_WIDGET=0; SETUP_ANSWERED=1
+    STORAGE_ANDROID="$_storage_android"
+    STORAGE_EXTERNAL="$_storage_external"
+    DO_STORAGE=0
+    if [ "$STORAGE_ANDROID" = "1" ] || [ "$STORAGE_EXTERNAL" = "1" ]; then DO_STORAGE=1; fi
+    DO_SSH=0; DO_WIDGET=0; SETUP_ANSWERED=1
     setup_save
     LFA_NONINTERACTIVE=1 LFA_ASSUME_YES=1 install_linux
 }
@@ -6529,6 +6637,77 @@ pd_instance_exists() {
     local base="$PREFIX/var/lib/proot-distro"
     [ -d "$base/containers/$inst/rootfs" ] && return 0
     [ -d "$base/installed-rootfs/$inst/var" ] || [ -d "$base/installed-rootfs/$inst/usr" ]
+}
+
+# Storage policy for a guest session. Both categories default to on, which
+# keeps proot-distro's normal /storage and /sdcard binds. When either one is
+# disabled the session becomes --isolated and LFA adds only the binds the
+# user kept, so the disabled category cannot leak through /storage.
+lfa_storage_args() {  # $1 = instance; prints proot-distro login arguments
+    local _inst="${1:-}" _conf="" _root="" _android=1 _external=1
+    local _shared="" _vol _id _spec _guest _ifs
+    if declare -F pd_conf >/dev/null 2>&1; then
+        _conf="$(pd_conf "$_inst" 2>/dev/null || true)"
+        _root="$(pd_rootfs "$_inst" 2>/dev/null || true)"
+    else
+        _conf="$(lfa_conf "$_inst" 2>/dev/null || true)"
+        _root="$(lfa_rootfs "$_inst" 2>/dev/null || true)"
+    fi
+    if [ -f "$_conf" ]; then
+        # shellcheck disable=SC1090
+        _android="$( . "$_conf" 2>/dev/null; printf '%s' "${STORAGE_ANDROID:-1}" )"
+        # shellcheck disable=SC1090
+        _external="$( . "$_conf" 2>/dev/null; printf '%s' "${STORAGE_EXTERNAL:-1}" )"
+    fi
+    case "$_android" in 0|no|off|false|disabled) _android=0 ;; *) _android=1 ;; esac
+    case "$_external" in 0|no|off|false|disabled) _external=0 ;; *) _external=1 ;; esac
+
+    _lfa_storage_emit() {  # $1 = host:guest
+        _guest="${1##*:}"
+        [ -n "$_root" ] && mkdir -p "$_root$_guest" 2>/dev/null || true
+        printf '%s\n' "--bind" "$1"
+    }
+
+    if [ "$_android" = "1" ] && [ "$_external" = "1" ]; then
+        # Default binds already expose both. USB auto mode may have added
+        # explicit card binds; keep them.
+        if [ -n "${LFA_STORAGE_BIND:-}" ]; then
+            _ifs="$IFS"; IFS=';'
+            for _spec in $LFA_STORAGE_BIND; do
+                [ -n "$_spec" ] && _lfa_storage_emit "$_spec"
+            done
+            IFS="$_ifs"
+        fi
+        return 0
+    fi
+
+    printf '%s\n' "--isolated"
+    if [ "$_android" = "1" ]; then
+        for _shared in /storage/self/primary /storage/emulated/0 /sdcard; do
+            [ -d "$_shared" ] && break
+            _shared=""
+        done
+        if [ -n "$_shared" ]; then
+            _lfa_storage_emit "$_shared:/sdcard"
+            _lfa_storage_emit "$_shared:/storage/emulated/0"
+        fi
+    fi
+    if [ "$_external" = "1" ]; then
+        if [ -n "${LFA_STORAGE_BIND:-}" ]; then
+            _ifs="$IFS"; IFS=';'
+            for _spec in $LFA_STORAGE_BIND; do
+                [ -n "$_spec" ] && _lfa_storage_emit "$_spec"
+            done
+            IFS="$_ifs"
+        else
+            for _vol in /storage/*; do
+                _id="${_vol##*/}"
+                case "$_id" in emulated|self|sdcard0) continue ;; esac
+                [ -d "$_vol" ] || continue
+                _lfa_storage_emit "$_vol:/media/$_id"
+            done
+        fi
+    fi
 }
 
 # ============================================================
@@ -8414,6 +8593,75 @@ lfa_instance_session_running() {  # $1 = instance
     done
     return 1
 }
+
+# Storage policy for a guest session. Both categories default to on, which
+# keeps proot-distro's normal /storage and /sdcard binds. When either one is
+# disabled the session becomes --isolated and LFA adds only the binds the
+# user kept, so the disabled category cannot leak through /storage.
+lfa_storage_args() {  # $1 = instance; prints proot-distro login arguments
+    local _inst="${1:-}" _conf="" _root="" _android=1 _external=1
+    local _shared="" _vol _id _spec _guest _ifs
+    if declare -F pd_conf >/dev/null 2>&1; then
+        _conf="$(pd_conf "$_inst" 2>/dev/null || true)"
+        _root="$(pd_rootfs "$_inst" 2>/dev/null || true)"
+    else
+        _conf="$(lfa_conf "$_inst" 2>/dev/null || true)"
+        _root="$(lfa_rootfs "$_inst" 2>/dev/null || true)"
+    fi
+    if [ -f "$_conf" ]; then
+        # shellcheck disable=SC1090
+        _android="$( . "$_conf" 2>/dev/null; printf '%s' "${STORAGE_ANDROID:-1}" )"
+        # shellcheck disable=SC1090
+        _external="$( . "$_conf" 2>/dev/null; printf '%s' "${STORAGE_EXTERNAL:-1}" )"
+    fi
+    case "$_android" in 0|no|off|false|disabled) _android=0 ;; *) _android=1 ;; esac
+    case "$_external" in 0|no|off|false|disabled) _external=0 ;; *) _external=1 ;; esac
+
+    _lfa_storage_emit() {  # $1 = host:guest
+        _guest="${1##*:}"
+        [ -n "$_root" ] && mkdir -p "$_root$_guest" 2>/dev/null || true
+        printf '%s\n' "--bind" "$1"
+    }
+
+    if [ "$_android" = "1" ] && [ "$_external" = "1" ]; then
+        if [ -n "${LFA_STORAGE_BIND:-}" ]; then
+            _ifs="$IFS"; IFS=';'
+            for _spec in $LFA_STORAGE_BIND; do
+                [ -n "$_spec" ] && _lfa_storage_emit "$_spec"
+            done
+            IFS="$_ifs"
+        fi
+        return 0
+    fi
+
+    printf '%s\n' "--isolated"
+    if [ "$_android" = "1" ]; then
+        for _shared in /storage/self/primary /storage/emulated/0 /sdcard; do
+            [ -d "$_shared" ] && break
+            _shared=""
+        done
+        if [ -n "$_shared" ]; then
+            _lfa_storage_emit "$_shared:/sdcard"
+            _lfa_storage_emit "$_shared:/storage/emulated/0"
+        fi
+    fi
+    if [ "$_external" = "1" ]; then
+        if [ -n "${LFA_STORAGE_BIND:-}" ]; then
+            _ifs="$IFS"; IFS=';'
+            for _spec in $LFA_STORAGE_BIND; do
+                [ -n "$_spec" ] && _lfa_storage_emit "$_spec"
+            done
+            IFS="$_ifs"
+        else
+            for _vol in /storage/*; do
+                _id="${_vol##*/}"
+                case "$_id" in emulated|self|sdcard0) continue ;; esac
+                [ -d "$_vol" ] || continue
+                _lfa_storage_emit "$_vol:/media/$_id"
+            done
+        fi
+    fi
+}
 EOF
     chmod +x "$PREFIX/bin/lfa-lib.sh"
     echo "[*] Generating Universal Quick-Launch Scripts..."
@@ -8572,10 +8820,11 @@ if [ -n "${LFA_USB_DEVBIND:-}" ]; then
     for _ub in $LFA_USB_DEVBIND; do [ -n "$_ub" ] && USB_BIND+=(--bind "$_ub"); done
     IFS="$_ub_ifs"; unset _ub_ifs _ub
 fi
-if [ -n "${LFA_STORAGE_BIND:-}" ]; then
-    _st_ifs="$IFS"; IFS=';'
-    for _st in $LFA_STORAGE_BIND; do [ -n "$_st" ] && USB_BIND+=(--bind "$_st"); done
-    IFS="$_st_ifs"; unset _st_ifs _st
+if declare -F lfa_storage_args >/dev/null 2>&1; then
+    _storage_args=()
+    mapfile -t _storage_args < <(lfa_storage_args "$DISTRO")
+    [ "${#_storage_args[@]}" -gt 0 ] && USB_BIND+=("${_storage_args[@]}")
+    unset _storage_args
 fi
 USB_WRAP=""
 if [ -n "${LFA_USB_PRELOAD:-}" ] && [ -n "${LFA_USB_MAP:-}" ]; then
@@ -8583,17 +8832,6 @@ if [ -n "${LFA_USB_PRELOAD:-}" ] && [ -n "${LFA_USB_MAP:-}" ]; then
 fi
 
 pd_login() {
-    if [ -n "${LFA_STORAGE_BIND:-}" ]; then
-        _st_rfs="$(lfa_rootfs "$DISTRO" 2>/dev/null || true)"
-        if [ -n "$_st_rfs" ]; then
-            _st_ifs="$IFS"; IFS=';'
-            for _st in $LFA_STORAGE_BIND; do
-                [ -n "$_st" ] && mkdir -p "$_st_rfs${_st##*:}" 2>/dev/null || true
-            done
-            IFS="$_st_ifs"; unset _st_ifs _st
-        fi
-        unset _st_rfs
-    fi
     proot-distro login "${USB_BIND[@]}" "$@"
 }
 
@@ -9078,11 +9316,6 @@ if [ -n "${LFA_USB_DEVBIND:-}" ]; then
     for _ub in $LFA_USB_DEVBIND; do [ -n "$_ub" ] && USB_BIND+=(--bind "$_ub"); done
     IFS="$_ub_ifs"; unset _ub_ifs _ub
 fi
-if [ -n "${LFA_STORAGE_BIND:-}" ]; then
-    _st_ifs="$IFS"; IFS=';'
-    for _st in $LFA_STORAGE_BIND; do [ -n "$_st" ] && USB_BIND+=(--bind "$_st"); done
-    IFS="$_st_ifs"; unset _st_ifs _st
-fi
 USB_WRAP=""
 if [ -n "${LFA_USB_PRELOAD:-}" ] && [ -n "${LFA_USB_MAP:-}" ]; then
     USB_WRAP="export LD_PRELOAD=$LFA_USB_PRELOAD; export LFA_USB_MAP=$LFA_USB_MAP; "
@@ -9167,16 +9400,11 @@ else
     echo "2) User terminal ('$TERM_USER' account)"
     read -p "Select [1-2, default 1]: " TERM_CHOICE
 fi
-if [ -n "${LFA_STORAGE_BIND:-}" ]; then
-    _st_rfs="$(lfa_rootfs "$DISTRO" 2>/dev/null || true)"
-    if [ -n "$_st_rfs" ]; then
-        _st_ifs="$IFS"; IFS=';'
-        for _st in $LFA_STORAGE_BIND; do
-            [ -n "$_st" ] && mkdir -p "$_st_rfs${_st##*:}" 2>/dev/null || true
-        done
-        IFS="$_st_ifs"; unset _st_ifs _st
-    fi
-    unset _st_rfs
+if declare -F lfa_storage_args >/dev/null 2>&1; then
+    _storage_args=()
+    mapfile -t _storage_args < <(lfa_storage_args "$DISTRO")
+    [ "${#_storage_args[@]}" -gt 0 ] && USB_BIND+=("${_storage_args[@]}")
+    unset _storage_args
 fi
 if [ "$TERM_CHOICE" == "2" ]; then
     if [ -n "$USB_WRAP" ]; then
@@ -9875,6 +10103,8 @@ install_linux() {
     echo "AUTOSTART_SERVER=\"$AUTOSTART_SERVER\"" >> "$ROOTFS/etc/termux-linux-manager.conf"
     echo "DO_AUTOSTART=\"${DO_AUTOSTART:-0}\"" >> "$ROOTFS/etc/termux-linux-manager.conf"
     echo "DO_SSH=\"${DO_SSH:-0}\"" >> "$ROOTFS/etc/termux-linux-manager.conf"
+    echo "STORAGE_ANDROID=\"${STORAGE_ANDROID:-1}\"" >> "$ROOTFS/etc/termux-linux-manager.conf"
+    echo "STORAGE_EXTERNAL=\"${STORAGE_EXTERNAL:-1}\"" >> "$ROOTFS/etc/termux-linux-manager.conf"
     if [ "$SERVER" = "both" ]; then
         rm -f "$HOME/.config/linux-for-android/last-server-$INSTANCE_NAME" 2>/dev/null || true
     fi

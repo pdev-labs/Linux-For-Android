@@ -282,7 +282,7 @@ check "D wallpaper autostart" 'Exec=/usr/local/bin/lfa-set-wallpaper --autostart
 
 echo "===== D5: both backends (X11 + VNC) ====="
 fresh_env
-printf '%s\n' 2 1 1 1 3 1 1 '' '' '' '' '' UTC '' 1 n n n n y 13 \
+printf '%s\n' 2 1 1 1 3 1 1 '' '' '' '' '' UTC '' 1 n 4 n n y 13 \
 | bash "$REPO/install_linux.sh" > "$T/d5.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: run d5 exit $rc"; }
 S=$(setup_sh_of)
 check "D5 both saved" 'SERVER="both"' "$T/home/.config/linux-for-android/setup.conf"
@@ -306,7 +306,7 @@ check "D5 no default on first both start" 'Invalid selection.' "$T/d5nodefault.l
 
 echo "===== D6: both backends with X11 autostart ====="
 fresh_env
-printf '%s\n' 2 1 1 1 3 1 1 '' '' '' '' '' UTC '' 1 y 2 n n n y 13 \
+printf '%s\n' 2 1 1 1 3 1 1 '' '' '' '' '' UTC '' 1 y 2 4 n n y 13 \
 | bash "$REPO/install_linux.sh" > "$T/d6.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: run d6 exit $rc"; }
 check "D6 autostart x11 saved" 'AUTOSTART_SERVER="x11"' "$T/home/.config/linux-for-android/setup.conf"
 check "D6 boot starts launcher" 'start-linux" --instance "ubuntu" --server "x11"' "$T/home/.termux/boot/start-linux-services.sh"
@@ -314,7 +314,7 @@ bash -n "$T/home/.termux/boot/start-linux-services.sh" && pass=$((pass+1)) || { 
 
 echo "===== D7: GNOME with both backends keeps the warning ====="
 fresh_env
-printf '%s\n' 2 1 5 y 1 3 1 1 '' '' '' '' '' UTC '' 1 n n n n y 13 \
+printf '%s\n' 2 1 5 y 1 3 1 1 '' '' '' '' '' UTC '' 1 n 4 n n y 13 \
 | bash "$REPO/install_linux.sh" > "$T/d7.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: run d7 exit $rc"; }
 check "D7 both saved" 'SERVER="both"' "$T/home/.config/linux-for-android/setup.conf"
 check "D7 gnome both warning" 'Both keeps VNC available too' "$T/d7.log"
@@ -1011,7 +1011,7 @@ check "Q clean bye" 'Bye.' "$T/q.log"
 echo "===== R: proot-distro v5 image mode ====="
 fresh_env
 export PD_V5=1
-printf '%s\n' 2 8 4 '' v5alpine '' '' '' '' '' 1 n '' n n '' '' 13 \
+printf '%s\n' 2 8 4 '' v5alpine '' '' '' '' '' 1 n 4 n n '' '' 13 \
 | bash "$REPO/install_linux.sh" > "$T/r.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: run r exit $rc"; }
 check_absent "R no plugin rejection" "knows no 'alpine'" "$T/r.log"
 check "R image install" 'STUB-PD-INSTALL-OK: install --name v5alpine alpine:latest' "$T/r.log"
@@ -1029,7 +1029,7 @@ unset PD_V5
 
 echo "===== S: software menu, pip/npm, browsers, Antigravity ====="
 fresh_env
-printf '%s\n' 2 1 4 '1 2 3 6 7 8 9 10 11 12 13 14' softinst suser '' '' UTC softinst 1 n '' n n '' '' 13 \
+printf '%s\n' 2 1 4 '1 2 3 6 7 8 9 10 11 12 13 14' softinst suser '' '' UTC softinst 1 n 4 n n '' '' 13 \
 | bash "$REPO/install_linux.sh" > "$T/s.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: run s exit $rc"; }
 S=$(setup_sh_of)
 check "S python pip" 'python3 python3-pip' "$S"
@@ -1045,7 +1045,7 @@ check_absent "S antigravity placeholder" 'Terminal Edition' "$S"
 
 # On Debian/Kali, Firefox must use firefox-esr (no `firefox` package).
 fresh_env
-printf '%s\n' 2 2 4 '7 8' debsoft '' '' '' UTC debsoft 1 n '' n n '' '' 13 \
+printf '%s\n' 2 2 4 '7 8' debsoft '' '' '' UTC debsoft 1 n 4 n n '' '' 13 \
 | bash "$REPO/install_linux.sh" > "$T/s2.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: run s2 exit $rc"; }
 S=$(setup_sh_of)
 check "S debian firefox-esr" 'firefox-esr' "$S"
@@ -1053,7 +1053,7 @@ check "S debian firefox-esr" 'firefox-esr' "$S"
 echo "===== T: Void bootstrap via proot-distro run ====="
 fresh_env
 export PD_V5=1
-printf '%s\n' 2 6 4 '' voidinst vuser '' '' UTC voidinst 1 n '' n n '' '' 13 \
+printf '%s\n' 2 6 4 '' voidinst vuser '' '' UTC voidinst 1 n 4 n n '' '' 13 \
 | bash "$REPO/install_linux.sh" > "$T/t.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: run t exit $rc"; }
 check "T void bootstrap message" 'Bootstrapping Void base tools' "$T/t.log"
 check "T void uses run" 'STUB-PD-run-OK: run' "$T/t.log"
@@ -1066,7 +1066,7 @@ check "U drops termux" '/data/data/*' "$T/prefix/tmp/lfa-real-feel.sh"
 echo "===== V: VNC correctness (TigerVNC 1.15, keepalive) ====="
 fresh_env
 export PD_V5=1
-printf '%s\n' 2 2 2 2 2 2 1 '' vnctest vncuser 123 123 UTC vnctest 1 n '' n n '' '' 13 \
+printf '%s\n' 2 2 2 2 2 2 1 '' vnctest vncuser 123 123 UTC vnctest 1 n 4 n n '' '' 13 \
 | bash "$REPO/install_linux.sh" > "$T/v.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: run v exit $rc"; }
 VS=$(setup_sh_of)
 check "V both config dirs" 'mkdir -p /home/vncuser/.vnc /home/vncuser/.config/tigervnc' "$VS"
@@ -1098,7 +1098,7 @@ check "V lxde wallpaper" 'wallpaper=/usr/share/backgrounds/lfa-default.jpg' "$VR
 echo "===== W: Alpine fastfetch/neofetch alias ====="
 fresh_env
 export PD_V5=1
-printf '%s\n' 2 8 4 '13' alpineapp auser '' '' UTC alpineapp 1 n '' n n '' '' 13 \
+printf '%s\n' 2 8 4 '13' alpineapp auser '' '' UTC alpineapp 1 n 4 n n '' '' 13 \
 | bash "$REPO/install_linux.sh" > "$T/w.log" 2>&1; rc=$?; [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: run w exit $rc"; }
 WA=$(setup_sh_of)
 check "W alpine fastfetch" 'fastfetch' "$WA"
@@ -2106,8 +2106,8 @@ check "Y11 storage bind media" "$T/storage/CABC-1701:/media/CABC-1701" "$T/y11-s
 check "Y11 storage bind alias" "$T/storage/CABC-1701:/mnt/card" "$T/y11-storage-bind.log"
 check_absent "Y11 storage no internal bind" "$T/storage/emulated/0:/sdcard" "$T/y11-storage-bind.log"
 check_absent "Y11 storage no sdcard collision" ":/mnt/sdcard" "$T/y11-storage-bind.log"
-check "Y11 storage launcher binds" 'LFA_STORAGE_BIND' "$T/prefix/bin/terminal-linux"
-check "Y11 storage desktop binds" 'LFA_STORAGE_BIND' "$T/prefix/bin/start-linux"
+check "Y11 storage launcher binds" 'lfa_storage_args' "$T/prefix/bin/terminal-linux"
+check "Y11 storage desktop binds" 'lfa_storage_args' "$T/prefix/bin/start-linux"
 [ -d "$UROOT/mnt/card" ] && pass=$((pass+1)) \
     || { fail=$((fail+1)); echo "FAIL: Y11 storage did not create /mnt/card"; }
 [ -d "$UROOT/media/CABC-1701" ] && pass=$((pass+1)) \
@@ -2365,7 +2365,7 @@ printf '#!/bin/sh\n' > "$T/guided/bin/sh"
 chmod +x "$T/guided/bin/sh"
 printf 'ID=customos\nPRETTY_NAME="Guided Custom"\n' > "$T/guided/etc/os-release"
 tar -czf "$T/guided.tar.gz" -C "$T/guided" .
-printf '%s\n' 2 9 "$T/guided.tar.gz" '' '' '' '' '' '' 1 n n n y '' 13 13 \
+printf '%s\n' 2 9 "$T/guided.tar.gz" '' '' '' '' '' '' 1 4 n n y '' 13 13 \
     | timeout 90 bash "$REPO/install_linux.sh" > "$T/y12f.log" 2>&1; rc=$?
 [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y12f guided custom exit $rc"; }
 check "Y12f summary userland" 'Guided Custom' "$T/y12f.log"
@@ -2376,6 +2376,80 @@ check "Y12f conf family" 'DISTRO="custom"' "$CROOT/etc/termux-linux-manager.conf
 check "Y12f conf name" 'CUSTOM_NAME="Guided Custom"' "$CROOT/etc/termux-linux-manager.conf"
 [ -z "$(find "$T/prefix/var/lib/proot-distro" -maxdepth 1 -name '.lfa-custom-*' 2>/dev/null)" ] \
     && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y12f left a staging directory"; }
+
+echo "===== Y13: separate Android and external storage policies ====="
+fresh_env
+mkdir -p "$T/prefix/var/lib/proot-distro/installed-rootfs/stg/etc" "$T/prefix/var/lib/proot-distro/installed-rootfs/stg/var"
+SCONF="$T/prefix/var/lib/proot-distro/installed-rootfs/stg/etc/termux-linux-manager.conf"
+printf 'DISTRO="debian"\nDE="none"\nSERVER="none"\nSTORAGE_ANDROID="1"\nSTORAGE_EXTERNAL="1"\n' > "$SCONF"
+bash "$REPO/install_linux.sh" --cli storage android off -i stg > "$T/y13a.log" 2>&1; rc=$?
+[ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y13 android off exit $rc"; }
+check "Y13 android off conf" 'STORAGE_ANDROID="0"' "$SCONF"
+check "Y13 android off notice" 'android storage: off' "$T/y13a.log"
+bash "$REPO/install_linux.sh" --cli storage external off -i stg > "$T/y13b.log" 2>&1; rc=$?
+[ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y13 external off exit $rc"; }
+check "Y13 external off conf" 'STORAGE_EXTERNAL="0"' "$SCONF"
+check "Y13 external off notice" 'external storage: off' "$T/y13b.log"
+bash "$REPO/install_linux.sh" --cli storage android on -i stg > "$T/y13c.log" 2>&1; rc=$?
+[ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y13 android on exit $rc"; }
+check "Y13 android on conf" 'STORAGE_ANDROID="1"' "$SCONF"
+bash "$REPO/install_linux.sh" --cli storage status -i stg > "$T/y13s.log" 2>&1; rc=$?
+[ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y13 status exit $rc"; }
+check "Y13 status android" 'android storage: on' "$T/y13s.log"
+check "Y13 status external" 'external storage: off' "$T/y13s.log"
+
+echo "===== Y13b: guided storage policy menu ====="
+fresh_env
+printf '%s\n' 2 2 4 '' '' '' '' '' '' '' 1 n 4 n n '' '' 13 \
+    | timeout 90 bash "$REPO/install_linux.sh" > "$T/y13g.log" 2>&1; rc=$?
+[ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y13b guided none exit $rc"; }
+GCONF="$T/prefix/var/lib/proot-distro/installed-rootfs/debian/etc/termux-linux-manager.conf"
+check "Y13b android off" 'STORAGE_ANDROID="0"' "$GCONF"
+check "Y13b external off" 'STORAGE_EXTERNAL="0"' "$GCONF"
+check "Y13b summary android" 'Android stg' "$T/y13g.log"
+check "Y13b summary external" 'External stg' "$T/y13g.log"
+check_absent "Y13b no host permission request" 'Requesting Android Storage Permission' "$T/y13g.log"
+
+echo "===== Y13c: CLI storage flags and login arguments ====="
+fresh_env
+timeout 90 bash "$REPO/install_linux.sh" --cli install --distro debian \
+    --android-storage off --external-storage on -i stgcli --desktop none \
+    > "$T/y13cli.log" 2>&1; rc=$?
+[ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y13c CLI storage exit $rc"; }
+CCONF="$T/prefix/var/lib/proot-distro/installed-rootfs/stgcli/etc/termux-linux-manager.conf"
+check "Y13c CLI android off" 'STORAGE_ANDROID="0"' "$CCONF"
+check "Y13c CLI external on" 'STORAGE_EXTERNAL="1"' "$CCONF"
+check "Y13c start launcher uses policy" 'lfa_storage_args' "$T/prefix/bin/start-linux"
+check "Y13c terminal launcher uses policy" 'lfa_storage_args' "$T/prefix/bin/terminal-linux"
+check "Y13c lib knows isolation" '--isolated' "$T/prefix/bin/lfa-lib.sh"
+printf '%s\n' "$(LFA_STORAGE_BIND="/tmp/fake:/media/fake" \
+    bash -c '. "$1/bin/lfa-lib.sh"; lfa_storage_args "$2"' _ "$T/prefix" stgcli)" \
+    > "$T/y13args.log"
+check "Y13c external-only isolated" '--isolated' "$T/y13args.log"
+check "Y13c external-only bind" '/tmp/fake:/media/fake' "$T/y13args.log"
+[ -d "$T/prefix/var/lib/proot-distro/installed-rootfs/stgcli/media/fake" ] \
+    && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y13c guest mountpoint missing"; }
+sed -i 's/^STORAGE_ANDROID=.*/STORAGE_ANDROID="1"/' "$CCONF"
+printf '%s\n' "$(LFA_STORAGE_BIND="/tmp/fake:/media/fake" \
+    bash -c '. "$1/bin/lfa-lib.sh"; lfa_storage_args "$2"' _ "$T/prefix" stgcli)" \
+    > "$T/y13both.log"
+check_absent "Y13c both-on keeps defaults" '--isolated' "$T/y13both.log"
+check "Y13c both-on keeps card bind" '/tmp/fake:/media/fake' "$T/y13both.log"
+timeout 90 bash "$REPO/install_linux.sh" --cli install --distro debian \
+    --no-android-storage --no-external-storage -i stgcli2 --desktop none \
+    > "$T/y13cli2.log" 2>&1; rc=$?
+[ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y13c CLI none exit $rc"; }
+C2CONF="$T/prefix/var/lib/proot-distro/installed-rootfs/stgcli2/etc/termux-linux-manager.conf"
+check "Y13c CLI none android" 'STORAGE_ANDROID="0"' "$C2CONF"
+check "Y13c CLI none external" 'STORAGE_EXTERNAL="0"' "$C2CONF"
+printf '%s\n' "$(bash -c '. "$1/bin/lfa-lib.sh"; lfa_storage_args "$2"' _ "$T/prefix" stgcli2)" \
+    > "$T/y13none.log"
+check "Y13c none isolated" '--isolated' "$T/y13none.log"
+check_absent "Y13c none has no bind" '--bind' "$T/y13none.log"
+timeout 30 bash "$REPO/install_linux.sh" --cli install --distro debian \
+    --android-storage maybe -i stgbad --desktop none > "$T/y13bad.log" 2>&1; rc=$?
+[ "$rc" = "2" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y13c invalid storage value exit $rc"; }
+check "Y13c invalid storage message" 'use on or off' "$T/y13bad.log"
 
 echo ""
 echo "===== Z: documentation links ====="

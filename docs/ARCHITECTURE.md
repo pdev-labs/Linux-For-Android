@@ -234,6 +234,14 @@ desktop user gid 1023 as its primary group, which makes the mode check pass.
 Without it Thunar draws `emblem-unreadable` on every folder even though the
 files are readable.
 
+Android storage and external storage are separate policies in the instance
+config. With both on, LFA leaves proot-distro's default binds alone. If either
+is off, `lfa_storage_args` adds `--isolated` and re-adds only the enabled
+category: `/sdcard` plus `/storage/emulated/0` for Android, or
+`/media/<VOLUME-ID>` for SD cards and USB drives. The same helper is used by
+`start-linux`, `terminal-linux`, and `lfa storage status`, so the policy
+applies to every normal guest session rather than only the desktop.
+
 `chmod` does not work there. The FUSE mount fixes the mode, so `chmod +x` is
 ignored even as root. `lfa storage exec` and the guest-side `lfa-run-file`
 copy a file to `/tmp`, set the mode on the copy, and run it.

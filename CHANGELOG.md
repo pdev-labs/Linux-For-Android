@@ -15,6 +15,15 @@ tag names, define the order. See the table at the bottom.
 
 ### Added
 
+- Separate Android and external storage policies. Guided setup now offers
+  Both, Android only, External only, or None instead of one storage switch.
+  `lfa install` accepts `--android-storage on|off` and
+  `--external-storage on|off` (plus `--no-android-storage` and
+  `--no-external-storage`), and `lfa storage android|external on|off|status`
+  changes an existing instance without reinstalling. Disabling either
+  category starts the guest with proot-distro's `--isolated` mode and adds
+  back only the enabled binds, so the disabled tree is not reachable through
+  `/storage`.
 - Custom Linux userlands. Guided setup gained option 9, and `lfa install`
   gained `--iso PATH` and `--rootfs PATH`, so a rootfs tarball, an extracted
   directory, or a live ISO can run under proot next to the eight built-in
