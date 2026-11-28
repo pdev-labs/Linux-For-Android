@@ -212,7 +212,7 @@ logind. Neither exists inside proot. This option skips `gnome-session` and
 launches `gnome-shell --x11` directly inside a D-Bus session.
 
 The shell itself runs. The session services that `gnome-session` normally
-starts do not, which is where the breakage comes from.
+starts do not.
 
 Two proot-specific patches make it start:
 
@@ -303,7 +303,7 @@ as experimental only.
   replaced by snap stubs.
 - Google Antigravity IDE installs the official ARM64 build into
   `/opt/antigravity-ide` and launches it with the dbus and GPU flags it needs
-  inside proot. It is the real IDE, not a placeholder terminal edition.
+  inside proot. It is the full IDE.
 - The managed `/etc/lfa-chromium-flags` file lets the acceleration menu add or
   remove VirGL flags without overwriting the proot-safe Chromium wrapper.
 - The uninstaller shows the instance, distro and desktop, rootfs path, and
@@ -540,7 +540,7 @@ Android side: it exposes real framework data through files in `$PREFIX/tmp`
 disabled without losing hardware data, and the risky parts are easier to
 audit.
 
-Neither layer pretends to provide a kernel feature. Docker, Podman, Flatpak,
+Neither layer provides a kernel feature. Docker, Podman, Flatpak,
 TUN/TAP, iptables, CUDA, ROCm, KVM, and kernel modules remain unavailable.
 The full list, with reasons, is in
 [docs/INCOMPATIBLE.md](docs/INCOMPATIBLE.md).
@@ -585,8 +585,8 @@ are in [docs/USB.md](docs/USB.md).
 
 An AppImage normally mounts itself through FUSE. proot does not expose
 `/dev/fuse`, so a raw `./Foo.AppImage` fails with
-`fuse: failed to open /dev/fuse: Permission denied`. LFA does not pretend
-FUSE works; it runs the AppImage the way the runtime supports, by extracting:
+`fuse: failed to open /dev/fuse: Permission denied`. LFA extracts the AppImage
+instead:
 
 ```bash
 ./Foo.AppImage                    # works: the session exports APPIMAGE_EXTRACT_AND_RUN=1
@@ -637,7 +637,7 @@ guest group, write access, and the chmod result. The same helper is installed
 in the guest as `lfa-run-file`, and Thunar gets a **Run in Linux** entry in the
 right-click menu for files under shared storage.
 
-### Turning storage access off
+### Storage access policies
 
 Android shared storage and external devices are separate policies. Both are
 on by default. Guided setup asks once with four choices (Both, Android only,
@@ -652,19 +652,20 @@ lfa install --distro debian --no-android-storage --no-external-storage -i minima
 Change an existing install without reinstalling:
 
 ```bash
-lfa storage android off -i ubuntu
-lfa storage external off -i ubuntu
-lfa storage android status -i ubuntu
+lfa storage android disable -i ubuntu
+lfa storage external disable -i ubuntu
+lfa storage android enable -i ubuntu
+lfa storage external status -i ubuntu
 ```
+
+`on` and `off` are accepted as aliases for `enable` and `disable`.
 
 Changes apply to new desktop and terminal sessions. When either category is
 off, LFA starts the guest with proot-distro's `--isolated` mode and adds back
 only the binds you kept: Android shared storage at `/sdcard` and
 `/storage/emulated/0`, or external volumes at `/media/<VOLUME-ID>`. The
 disabled category is not reachable through `/storage`. Disabling both also
-hides the other Android and Termux host paths that `--isolated` skips, which
-is the intended trade-off for a guest that should not see the phone's
-storage.
+hides the other Android and Termux host paths that `--isolated` skips.
 
 ### Android/data and Android/obb
 
@@ -744,8 +745,8 @@ chosen image is recorded as `IMAGE="..."` in
 ### Custom ISO and rootfs images
 
 The installer can also unpack a userland you provide. This is the same proot
-container model as the supported distros, not a virtual machine: the image
-must match the phone's CPU, and the ISO itself is never booted.
+container model as the supported distros: the image must match the phone's
+CPU, and the ISO itself is never booted.
 
 | Source | What happens |
 | --- | --- |
@@ -784,7 +785,7 @@ Things that will not work:
   distro's rootfs tarball or cloud image instead.
 - **Booting, kernels, and block devices.** There is no kernel, initramfs,
   systemd, loop mount, or block layer under proot. Live-ISO extraction gives
-  you the filesystem, not the boot experience.
+  you the filesystem only.
 - **OCI/Docker archives.** These need `proot-distro` v5's own installer.
   Export a plain rootfs instead: `docker export NAME -o rootfs.tar`.
 
@@ -1054,9 +1055,8 @@ shortcut, which is created automatically.
   inside proot and is unnecessary because you already own every file.
 - Why no real sudo? Android app processes carry the `NO_NEW_PRIVS` flag, and
   proot cannot grant real root, so `sudo` and `su` can never work inside proot
-  on any device. You already own every file, so elevation is unnecessary. On
-  Alpine the manager is `apk`, not `apt`. Bare `apt` resolves to Termux's host
-  copy and fails to link.
+  on any device. On Alpine the manager is `apk`, not `apt`. Bare `apt` resolves
+  to Termux's host copy and fails to link.
 
 ### Stopping your Linux desktop
 
@@ -1319,7 +1319,7 @@ short list is:
   nodes (`lfa usb` provides userspace access instead)
 - Wayland compositors, simultaneous X11 + VNC, foreign-architecture binaries
 
-Full reasons, the “works with caveats” list, Android 5/6/7 differences, and
+Full reasons, the "works with caveats" list, Android 5/6/7 differences, and
 what Termux:API can actually expose are in
 [docs/INCOMPATIBLE.md](docs/INCOMPATIBLE.md).
 
@@ -1540,8 +1540,8 @@ If you need `ubuntu-desktop`, note that it is only a metapackage. Removing
 
 ### 14. `reboot` / `shutdown` say "System has not been booted with systemd" or "Failed to talk to init daemon"
 
-Cause: a proot guest is a container, not a VM. There is no PID 1, so there is
-nothing to reboot. Android owns the kernel.
+Cause: a proot guest is a container with no PID 1, so there is nothing to
+reboot. Android owns the kernel.
 
 Fix: leave the guest with `exit`, then from Termux use `stop-linux` to stop
 everything or `start-linux` to restart the desktop. From v1.5.8, `reboot`,
@@ -1617,7 +1617,7 @@ update-desktop-database /usr/share/applications 2>/dev/null || true
 ```
 
 Chromium needs `--no-sandbox --disable-dev-shm-usage`. The menu 12 wrapper adds
-both. This is a proot limitation, not a bug that can be fixed in the apps.
+both. The apps cannot fix this proot limitation.
 
 ## Contributing
 

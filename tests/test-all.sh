@@ -2382,17 +2382,17 @@ fresh_env
 mkdir -p "$T/prefix/var/lib/proot-distro/installed-rootfs/stg/etc" "$T/prefix/var/lib/proot-distro/installed-rootfs/stg/var"
 SCONF="$T/prefix/var/lib/proot-distro/installed-rootfs/stg/etc/termux-linux-manager.conf"
 printf 'DISTRO="debian"\nDE="none"\nSERVER="none"\nSTORAGE_ANDROID="1"\nSTORAGE_EXTERNAL="1"\n' > "$SCONF"
-bash "$REPO/install_linux.sh" --cli storage android off -i stg > "$T/y13a.log" 2>&1; rc=$?
-[ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y13 android off exit $rc"; }
-check "Y13 android off conf" 'STORAGE_ANDROID="0"' "$SCONF"
-check "Y13 android off notice" 'android storage: off' "$T/y13a.log"
-bash "$REPO/install_linux.sh" --cli storage external off -i stg > "$T/y13b.log" 2>&1; rc=$?
-[ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y13 external off exit $rc"; }
-check "Y13 external off conf" 'STORAGE_EXTERNAL="0"' "$SCONF"
-check "Y13 external off notice" 'external storage: off' "$T/y13b.log"
-bash "$REPO/install_linux.sh" --cli storage android on -i stg > "$T/y13c.log" 2>&1; rc=$?
-[ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y13 android on exit $rc"; }
-check "Y13 android on conf" 'STORAGE_ANDROID="1"' "$SCONF"
+bash "$REPO/install_linux.sh" --cli storage android disable -i stg > "$T/y13a.log" 2>&1; rc=$?
+[ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y13 android disable exit $rc"; }
+check "Y13 android disable conf" 'STORAGE_ANDROID="0"' "$SCONF"
+check "Y13 android disable notice" 'android storage: off' "$T/y13a.log"
+bash "$REPO/install_linux.sh" --cli storage external disable -i stg > "$T/y13b.log" 2>&1; rc=$?
+[ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y13 external disable exit $rc"; }
+check "Y13 external disable conf" 'STORAGE_EXTERNAL="0"' "$SCONF"
+check "Y13 external disable notice" 'external storage: off' "$T/y13b.log"
+bash "$REPO/install_linux.sh" --cli storage android enable -i stg > "$T/y13c.log" 2>&1; rc=$?
+[ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y13 android enable exit $rc"; }
+check "Y13 android enable conf" 'STORAGE_ANDROID="1"' "$SCONF"
 bash "$REPO/install_linux.sh" --cli storage status -i stg > "$T/y13s.log" 2>&1; rc=$?
 [ "$rc" = "0" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: Y13 status exit $rc"; }
 check "Y13 status android" 'android storage: on' "$T/y13s.log"

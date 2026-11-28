@@ -304,7 +304,7 @@ proot-distro v5 binds internal storage there already and warns when a
 destination is used twice.
 
 The card binds follow the instance's external-storage policy. If it is off
-(`lfa storage external off -i NAME`), sessions start with `--isolated` and
+(`lfa storage external disable -i NAME`), sessions start with `--isolated` and
 neither `/media/<VOLUME-ID>` nor `/mnt/card` is bound. `lfa storage android`
 controls internal storage separately, so a guest can keep `/sdcard` while
 hiding cards and drives.

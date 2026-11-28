@@ -5662,8 +5662,11 @@ Usage: lfa storage <command> [options]
   fix | fx                 repair links, bookmarks, and the storage group
   exec | x FILE [args...]  run a file from shared storage without chmod
   open | o                 show where shared storage is and how to open it
-  android on|off|status    expose Android shared storage in the guest
-  external on|off|status   expose SD cards/USB drives in the guest
+  android enable|disable|status
+                           expose Android shared storage in the guest
+  external enable|disable|status
+                           expose SD cards/USB drives in the guest
+                           (on/off are accepted as aliases)
   data status              check adb access to Android/data and Android/obb
                            (short: d st)
   data list                list packages under Android/data and Android/obb
@@ -5997,7 +6000,7 @@ lfa_storage_data() {
     esac
 }
 
-lfa_storage_policy() {  # $1 = android|external, $2 = on|off|status, then -i NAME
+lfa_storage_policy() {  # $1 = android|external, $2 = enable|disable|status, then -i NAME
     local _what="$1" _mode="${2:-status}" _inst="" _conf _cur _val
     [ $# -gt 0 ] && shift || true
     [ $# -gt 0 ] && shift || true
@@ -6030,7 +6033,7 @@ lfa_storage_policy() {  # $1 = android|external, $2 = on|off|status, then -i NAM
             return 0 ;;
         on|enable|1|yes) _val=1 ;;
         off|disable|0|no) _val=0 ;;
-        *) echo "Usage: lfa storage $_what on|off|status [-i NAME]" >&2; return 2 ;;
+        *) echo "Usage: lfa storage $_what enable|disable|status [-i NAME]" >&2; return 2 ;;
     esac
     if [ "$_what" = "android" ]; then
         if grep -q '^STORAGE_ANDROID=' "$_conf" 2>/dev/null; then
